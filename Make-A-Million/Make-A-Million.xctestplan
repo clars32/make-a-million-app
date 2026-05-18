@@ -1,0 +1,38 @@
+{
+  "configurations" : [
+    {
+      "id" : "79990FF0-6F66-42F2-9921-3A65B0C64244",
+      "name" : "Test Scheme Action",
+      "options" : {
+
+      }
+    }
+  ],
+  "defaultOptions" : {
+    "performanceAntipatternCheckerEnabled" : true,
+    "targetForVariableExpansion" : {
+      "containerPath" : "container:Make-A-Million.xcodeproj",
+      "identifier" : "4367CAF12FBBBFE10005A97E",
+      "name" : "Make-A-Million"
+    }
+  },
+  "testTargets" : [
+    {
+      "parallelizable" : true,
+      "target" : {
+        "containerPath" : "container:Make-A-Million.xcodeproj",
+        "identifier" : "4367CAFE2FBBBFE30005A97E",
+        "name" : "Make-A-MillionTests"
+      }
+    },
+    {
+      "parallelizable" : true,
+      "target" : {
+        "containerPath" : "container:Make-A-Million.xcodeproj",
+        "identifier" : "4367CB082FBBBFE30005A97E",
+        "name" : "Make-A-MillionUITests"
+      }
+    }
+  ],
+  "version" : 1
+}
