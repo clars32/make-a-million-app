@@ -10,8 +10,7 @@
 //
 //   • The bid SEQUENCE is PUBLIC (everyone at the table hears it) and is
 //     presented by GameView.bidHistoryPanel, riding the redacted PlayerView
-//     (view.bidHistory) exactly like completed tricks do. This file embeds
-//     only a compact recap of it inside the reveal, for self-containment.
+//     (view.bidHistory) exactly like completed tricks do.
 //
 //   • HandRevealPanel — every seat's DEALT hand, declarer, trump, contract
 //     result. This is HIDDEN information. It does NOT come from PlayerView;
@@ -37,56 +36,6 @@ private func seatShort(_ p: PlayerID) -> String {
 }
 private func seatName(_ p: PlayerID) -> String {
     ["South (You)", "West", "North", "East"][p.raw]
-}
-
-private extension BidAction {
-    var label: String {
-        switch self {
-        case .pass:            return "pass"
-        case .bid(let amount): return "$\(amount / 1000)k"
-        }
-    }
-}
-
-// MARK: - Bid list (private to the reveal; your GameView.bidHistoryPanel is
-// the primary, richer presentation used everywhere else — this is only the
-// compact recap embedded inside the debug reveal so it stays self-contained).
-
-private struct BidLogList: View {
-    let log: [BidRecord]
-
-    var body: some View {
-        if log.isEmpty {
-            EmptyView()
-        } else {
-            DisclosureGroup("Bidding recap (\(log.count))") {
-                VStack(alignment: .leading, spacing: 4) {
-                    ForEach(Array(log.enumerated()), id: \.offset) { i, rec in
-                        HStack(spacing: 8) {
-                            Text("\(i + 1).")
-                                .font(.caption2).foregroundStyle(.tertiary)
-                                .frame(width: 22, alignment: .leading)
-                            Text(seatName(rec.player))
-                                .font(.caption)
-                                .frame(width: 96, alignment: .leading)
-                            Text(rec.action.label)
-                                .font(.caption).bold()
-                                .foregroundStyle(rec.action.isPass
-                                                 ? AnyShapeStyle(.secondary)
-                                                 : AnyShapeStyle(.primary))
-                            Spacer()
-                        }
-                    }
-                }
-                .padding(.top, 4)
-            }
-            .font(.caption)
-        }
-    }
-}
-
-private extension BidAction {
-    var isPass: Bool { if case .pass = self { return true }; return false }
 }
 
 // MARK: - End-of-hand hand reveal (hidden info — debug only)
@@ -120,8 +69,6 @@ struct HandRevealPanel: View {
                         }
                     }
                 }
-
-                BidLogList(log: r.bidHistory)
             }
             .padding(10)
             .background(RoundedRectangle(cornerRadius: 8).fill(.quaternary.opacity(0.4)))

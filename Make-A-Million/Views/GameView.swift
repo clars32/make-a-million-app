@@ -1,5 +1,13 @@
 //
 //  GameView.swift
+//  Make-A-Million
+//
+//  Created by Carter Larsen on 5/19/26.
+//
+
+
+//
+//  GameView.swift
 //  Make-a-Million
 //
 //  POLISH PASS 1 — card-to-trick travel (matchedGeometry) + the continuity
@@ -39,7 +47,7 @@ import SwiftUI
 
 struct GameView: View {
     @StateObject private var session = GameSession()
-    @State private var dealSeed: UInt64 = 32
+    @State private var dealSeed: UInt64 = 64
 
     var body: some View {
         GameBody(session: session,

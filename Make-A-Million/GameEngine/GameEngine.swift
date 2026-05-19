@@ -84,6 +84,11 @@ struct GameState: Codable {
 
     // Cumulative match score by team. First to 1,000,000 wins.
     private(set) var matchScore: [Int: Int]
+    
+    /// Immutable snapshot of the deal for the end-of-hand debug reveal.
+    /// HIDDEN — must never be projected into PlayerView.
+    let dealtHands: [PlayerID: [Card]]
+    let dealtWidow: [Card]
 
     // MARK: Dealing
 
@@ -131,7 +136,9 @@ struct GameState: Codable {
             currentTrick: nil,
             completedTricks: [],
             capturedByTeam: [0: [], 1: []],
-            matchScore: carryScore
+            matchScore: carryScore,
+            dealtHands: hands,
+            dealtWidow: widow
         )
     }
 }
@@ -598,5 +605,36 @@ extension GameState {
             matchScore: matchScore,
             legalMoves: legalMoves(for: player)
         )
+    }
+}
+
+struct DebugReveal {
+    let dealtHands: [PlayerID: [Card]]
+    let dealtWidow: [Card]
+    let bidHistory: [BidRecord]
+    let declarer: PlayerID?
+    let trump: CardColor?
+    let contract: Int?
+    let bidTeamGross: Int
+    let otherGross: Int
+    let made: Bool
+}
+
+extension GameState {
+    /// Hidden-information reveal for tuning. nil until the hand is over, so
+    /// it cannot leak mid-hand. Deliberately NOT Codable and NOT part of the
+    /// PlayerView projection — agents never receive this.
+    func debugReveal() -> DebugReveal? {
+        guard phase == .handComplete else { return nil }
+        let g0 = (capturedByTeam[0] ?? []).reduce(0) { $0 + GameState.trickValue($1) }
+        let g1 = (capturedByTeam[1] ?? []).reduce(0) { $0 + GameState.trickValue($1) }
+        let bt = highBidder.map { Seats.team(of: $0) } ?? 0
+        let bidGross = bt == 0 ? g0 : g1
+        let othGross = bt == 0 ? g1 : g0
+        let made = highBid.map { bidGross >= $0 } ?? false
+        return DebugReveal(dealtHands: dealtHands, dealtWidow: dealtWidow,
+                           bidHistory: bidHistory, declarer: highBidder, trump: trump,
+                           contract: highBid, bidTeamGross: bidGross,
+                           otherGross: othGross, made: made)
     }
 }

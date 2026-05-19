@@ -1,5 +1,13 @@
 //
 //  GameSession.swift
+//  Make-A-Million
+//
+//  Created by Carter Larsen on 5/19/26.
+//
+
+
+//
+//  GameSession.swift
 //  Make-a-Million
 //
 //  Owns one HumanAgent + three MonteCarloAgents and runs a hand via
