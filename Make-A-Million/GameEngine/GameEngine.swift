@@ -28,6 +28,11 @@ struct PlayedCard: Codable, Hashable {
     let card: Card
 }
 
+struct BidRecord: Codable, Hashable {
+    let player: PlayerID
+    let action: BidAction
+}
+
 struct Trick: Codable, Hashable {
     let leader: PlayerID
     var plays: [PlayedCard] = []
@@ -64,6 +69,8 @@ struct GameState: Codable {
     private(set) var highBid: Int?
     private(set) var highBidder: PlayerID?
     private(set) var passed: Set<PlayerID>
+    /// Public bidding record in table order. Everyone hears every bid/pass.
+    private(set) var bidHistory: [BidRecord]
 
     // Hand setup
     private(set) var trump: CardColor?
@@ -118,6 +125,7 @@ struct GameState: Codable {
             highBid: nil,
             highBidder: nil,
             passed: [],
+            bidHistory: [],
             trump: nil,
             misdealEligible: anyShort,
             currentTrick: nil,
@@ -152,7 +160,14 @@ extension GameState {
 
         switch phase {
         case .bidding:
-            var moves: [Move] = [.bid(.pass)]
+            // Family rule: the opener may not pass until each of the other three
+            // has acted once. Because nobody can be skipped on the first round,
+            // that is exactly "the opener cannot pass on their first turn", and
+            // the opener's first turn is the unique state where no one has acted
+            // yet — highBid == nil and passed is empty.
+            let opener = Seats.next(dealer)
+            let openerMustOpen = (player == opener && highBid == nil && passed.isEmpty)
+            var moves: [Move] = openerMustOpen ? [] : [.bid(.pass)]
             // Opening bid is exactly the minimum; raises step by the
             // increment above the standing high bid. A finite ladder up to
             // the max a hand can be worth keeps AI branching finite.
@@ -326,7 +341,12 @@ extension GameState {
     private mutating func applyBid(_ action: BidAction, by player: PlayerID) throws {
         switch action {
         case .pass:
+            // The opener cannot pass on their first turn (see legalMoves).
+            if player == Seats.next(dealer), highBid == nil, passed.isEmpty {
+                throw MoveError.illegalBid
+            }
             passed.insert(player)
+            bidHistory.append(BidRecord(player: player, action: action))
         case .bid(let amount):
             if highBid == nil {
                 // Opening bid: at least the opening minimum, on the raise grid
@@ -343,6 +363,7 @@ extension GameState {
             }
             highBid = amount
             highBidder = player
+            bidHistory.append(BidRecord(player: player, action: action))
         }
 
         // Bidding ends when everyone except one has passed AND there is a bid.
@@ -521,6 +542,8 @@ struct PlayerView: Codable {
     let highBid: Int?
     let highBidder: PlayerID?
     let passed: [PlayerID]
+    let opener: PlayerID
+    let bidHistory: [BidRecord]
     let currentTrick: Trick?
     let completedTrickCount: Int
     /// Full public trick history, oldest first. Empty until the first trick
@@ -567,6 +590,8 @@ extension GameState {
             highBid: highBid,
             highBidder: highBidder,
             passed: Array(passed),
+            opener: Seats.next(dealer),
+            bidHistory: bidHistory,
             currentTrick: currentTrick,
             completedTrickCount: completedTricks.count,
             completedTricks: history,

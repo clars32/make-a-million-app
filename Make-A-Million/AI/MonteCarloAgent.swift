@@ -205,11 +205,12 @@ struct MonteCarloAgent: PlayerAgent {
         }
         let others = Set(Seats.all.filter { $0 != view.me })
         return GameState(
-            dealSeed: 0, dealer: PlayerID(0),
+            dealSeed: 0, dealer: PlayerID((view.opener.raw + Seats.count - 1) % Seats.count),
             hands: hands, widow: [],
             phase: .widowDiscard, toAct: view.me,
             highBid: Bidding.openingMinimum, highBidder: view.me,
             passed: others,
+            bidHistory: [BidRecord(player: view.me, action: .bid(Bidding.openingMinimum))],
             trump: nil, misdealEligible: false,
             currentTrick: nil, completedTricks: [],
             capturedByTeam: [0: [], 1: []],

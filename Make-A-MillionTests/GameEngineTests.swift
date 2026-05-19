@@ -61,6 +61,7 @@ final class GameEngineTests: XCTestCase {
     func testOpenerIsLeftOfDealer() {
         let g = GameState.newHand(dealer: PlayerID(0), seed: 1)
         XCTAssertEqual(g.view(for: PlayerID(1)).toAct, PlayerID(1))
+        XCTAssertEqual(g.view(for: PlayerID(0)).opener, PlayerID(1))
     }
 
     // MARK: Bidding machine
@@ -102,6 +103,19 @@ final class GameEngineTests: XCTestCase {
         XCTAssertEqual(v.highBidder, PlayerID(1))
         // Either misdeal decision or straight to widow discard.
         XCTAssertTrue(v.phase == .widowDiscard || v.phase == .misdealDecision)
+    }
+
+    func testBidHistoryKeepsTableOrder() throws {
+        var g = GameState.newHand(dealer: PlayerID(0), seed: 1)
+        g = try g.applying(.bid(.bid(175_000)), by: PlayerID(1))
+        g = try g.applying(.bid(.bid(185_000)), by: PlayerID(2))
+        g = try g.applying(.bid(.pass), by: PlayerID(3))
+
+        XCTAssertEqual(g.view(for: PlayerID(0)).bidHistory, [
+            BidRecord(player: PlayerID(1), action: .bid(175_000)),
+            BidRecord(player: PlayerID(2), action: .bid(185_000)),
+            BidRecord(player: PlayerID(3), action: .pass),
+        ])
     }
 
     // MARK: Trick resolution
@@ -238,6 +252,8 @@ final class GameEngineTests: XCTestCase {
             highBid: 175_000,
             highBidder: PlayerID(0),
             passed: [],
+            opener: PlayerID(0),
+            bidHistory: [BidRecord(player: PlayerID(0), action: .bid(175_000))],
             currentTrick: nil,
             completedTrickCount: 3,
             completedTricks: [

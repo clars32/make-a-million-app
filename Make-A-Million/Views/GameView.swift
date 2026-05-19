@@ -13,7 +13,7 @@ import SwiftUI
 
 struct GameView: View {
     @StateObject private var session = GameSession()
-    @State private var dealSeed: UInt64 = 1
+    @State private var dealSeed: UInt64 = 32
 
     var body: some View {
         GameBody(session: session,
@@ -65,6 +65,10 @@ private struct GameBody: View {
             scoreBar(view)
 
             statusLine(view)
+
+            if view.phase == .bidding || !view.bidHistory.isEmpty {
+                bidHistoryPanel(records: view.bidHistory, opener: view.opener)
+            }
 
             // What just happened: the last completed trick + who took it.
             if let last = view.lastTrick {
@@ -274,6 +278,9 @@ private struct GameBody: View {
             Text("Hand complete").font(.title2).bold()
             Text("\(teamAName): $\(a / 1000)k")
             Text("\(teamBName): $\(b / 1000)k").foregroundStyle(.secondary)
+            if !s.bidHistory.isEmpty {
+                bidHistoryPanel(records: s.bidHistory, opener: Seats.next(s.dealer))
+            }
             Button("Deal another") {
                 dealSeed &+= 1
                 session.reset()
@@ -281,6 +288,50 @@ private struct GameBody: View {
             }
             .buttonStyle(.borderedProminent)
         }
+    }
+
+    private func bidHistoryPanel(records: [BidRecord], opener: PlayerID) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                Text("Bid history").font(.caption).foregroundStyle(.secondary)
+                Text("Opener: \(seatName(opener))")
+                    .font(.caption2).bold()
+                    .foregroundStyle(.blue)
+                Spacer()
+            }
+            if records.isEmpty {
+                Text("Waiting for \(seatName(opener)) to open")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            } else {
+                FlowRow(spacing: 6) {
+                    ForEach(Array(records.enumerated()), id: \.offset) { _, record in
+                        HStack(spacing: 4) {
+                            Text(seatShort(record.player))
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                            if record.player == opener {
+                                Text("opens")
+                                    .font(.caption2)
+                                    .foregroundStyle(.blue)
+                            }
+                            Text(bidHistoryLabel(record.action))
+                                .font(.caption2).bold().monospacedDigit()
+                        }
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 5)
+                        .background(
+                            RoundedRectangle(cornerRadius: 6)
+                                .fill(bidHistoryTint(record, opener: opener).opacity(0.14)))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 6)
+                                .stroke(bidHistoryTint(record, opener: opener).opacity(0.45), lineWidth: 1))
+                    }
+                }
+            }
+        }
+        .padding(8)
+        .background(RoundedRectangle(cornerRadius: 8).fill(.quaternary.opacity(0.5)))
     }
 
     // MARK: Helpers
@@ -295,6 +346,21 @@ private struct GameBody: View {
     private func isPlayable(_ card: Card, in view: PlayerView) -> Bool {
         view.legalMoves.contains {
             if case .play(let c) = $0 { return c == card }; return false
+        }
+    }
+
+    private func bidHistoryLabel(_ action: BidAction) -> String {
+        switch action {
+        case .pass: return "Pass"
+        case .bid(let amount): return "$\(amount / 1000)k"
+        }
+    }
+
+    private func bidHistoryTint(_ record: BidRecord, opener: PlayerID) -> Color {
+        if record.player == opener { return .blue }
+        switch record.action {
+        case .pass: return .secondary
+        case .bid: return .blue
         }
     }
 
