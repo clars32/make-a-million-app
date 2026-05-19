@@ -25,6 +25,7 @@ final class Make_A_MillionUITests: XCTestCase {
     @MainActor
     func testExample() throws {
         // UI tests must launch the application that they test.
+        XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication()
         app.launch()
 
@@ -37,6 +38,7 @@ final class Make_A_MillionUITests: XCTestCase {
     func testLaunchPerformance() throws {
         // This measures how long it takes to launch your application.
         measure(metrics: [XCTApplicationLaunchMetric()]) {
+            XCUIDevice.shared.orientation = .portrait
             XCUIApplication().launch()
         }
     }

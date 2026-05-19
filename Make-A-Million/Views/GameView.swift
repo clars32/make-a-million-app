@@ -81,7 +81,7 @@ private struct GameBody: View {
             Text("Your hand (\(view.myHand.count))")
                 .font(.caption).foregroundStyle(.secondary)
             FlowRow(spacing: 6) {
-                ForEach(Array(view.myHand.enumerated()), id: \.offset) { _, card in
+                ForEach(Array(sortedHand(view.myHand).enumerated()), id: \.offset) { _, card in
                     cardChip(card, faded: !isPlayable(card, in: view))
                 }
             }
@@ -102,23 +102,35 @@ private struct GameBody: View {
     // MARK: Score bar (prominent, always visible)
 
     private func scoreBar(_ view: PlayerView) -> some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 1) {
-                Text(teamAName).font(.caption2).foregroundStyle(.secondary)
-                Text("$\(view.matchScore[0, default: 0] / 1000)k")
-                    .font(.title3).bold().monospacedDigit()
-            }
+        let live = view.liveHandScore
+        return HStack {
+            teamScoreColumn(teamAName,
+                            live: live[0, default: 0],
+                            match: view.matchScore[0, default: 0],
+                            alignment: .leading)
             Spacer()
             Text("vs").font(.caption2).foregroundStyle(.tertiary)
             Spacer()
-            VStack(alignment: .trailing, spacing: 1) {
-                Text(teamBName).font(.caption2).foregroundStyle(.secondary)
-                Text("$\(view.matchScore[1, default: 0] / 1000)k")
-                    .font(.title3).bold().monospacedDigit()
-            }
+            teamScoreColumn(teamBName,
+                            live: live[1, default: 0],
+                            match: view.matchScore[1, default: 0],
+                            alignment: .trailing)
         }
         .padding(10)
         .background(RoundedRectangle(cornerRadius: 8).fill(.quaternary))
+    }
+
+    private func teamScoreColumn(_ name: String,
+                                 live: Int,
+                                 match: Int,
+                                 alignment: HorizontalAlignment) -> some View {
+        VStack(alignment: alignment, spacing: 1) {
+            Text(name).font(.caption2).foregroundStyle(.secondary)
+            Text("Hand $\(live / 1000)k")
+                .font(.title3).bold().monospacedDigit()
+            Text("Match $\(match / 1000)k")
+                .font(.caption2).foregroundStyle(.tertiary).monospacedDigit()
+        }
     }
 
     private func statusLine(_ view: PlayerView) -> some View {
@@ -283,6 +295,29 @@ private struct GameBody: View {
     private func isPlayable(_ card: Card, in view: PlayerView) -> Bool {
         view.legalMoves.contains {
             if case .play(let c) = $0 { return c == card }; return false
+        }
+    }
+
+    private func sortedHand(_ hand: [Card]) -> [Card] {
+        hand.sorted { lhs, rhs in
+            let l = handSortKey(lhs)
+            let r = handSortKey(rhs)
+            if l.group != r.group { return l.group > r.group }
+            if l.color != r.color { return l.color > r.color }
+            return l.rank > r.rank
+        }
+    }
+
+    private func handSortKey(_ card: Card) -> (group: Int, color: Int, rank: Int) {
+        switch card {
+        case .colored(let color, let rank):
+            return (0, color.rawValue, rank.rawValue)
+        case .tiger:
+            return (1, 0, 0)
+        case .bull:
+            return (1, 0, 1)
+        case .bear:
+            return (1, 0, 2)
         }
     }
 

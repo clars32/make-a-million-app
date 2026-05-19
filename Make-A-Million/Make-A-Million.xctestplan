@@ -18,7 +18,7 @@
   },
   "testTargets" : [
     {
-      "parallelizable" : true,
+      "parallelizable" : false,
       "target" : {
         "containerPath" : "container:Make-A-Million.xcodeproj",
         "identifier" : "4367CAFE2FBBBFE30005A97E",
@@ -26,7 +26,6 @@
       }
     },
     {
-      "parallelizable" : true,
       "target" : {
         "containerPath" : "container:Make-A-Million.xcodeproj",
         "identifier" : "4367CB082FBBBFE30005A97E",

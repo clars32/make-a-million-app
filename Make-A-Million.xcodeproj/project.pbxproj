@@ -29,12 +29,48 @@
 		4367CB092FBBBFE30005A97E /* Make-A-MillionUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "Make-A-MillionUITests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
-/* Begin PBXFileSystemSynchronizedRootGroup section */
-		4367CAF42FBBBFE10005A97E /* Make-A-Million */ = {
-			isa = PBXFileSystemSynchronizedRootGroup;
-			path = "Make-A-Million";
-			sourceTree = "<group>";
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		4367CB2E2FBBC3DA0005A97E /* Exceptions for "Make-A-Million" folder in "Make-A-Million" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Agents/Agent.swift,
+				Agents/GameRunner.swift,
+				Agents/HumanAgent.swift,
+				Agents/RandomAgent.swift,
+				Assets.xcassets,
+				GameEngine/Cards.swift,
+				GameEngine/GameEngine.swift,
+				GameEngine/Players.swift,
+				Make_A_MillionApp.swift,
+				Views/ContentView.swift,
+				Views/Display.swift,
+				Views/GameSession.swift,
+				Views/GameView.swift,
+			);
+			target = 4367CAF12FBBBFE10005A97E /* Make-A-Million */;
 		};
+		4367CB2F2FBBC3DA0005A97E /* Exceptions for "Make-A-Million" folder in "Make-A-MillionUITests" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Agents/Agent.swift,
+				Agents/GameRunner.swift,
+				Agents/HumanAgent.swift,
+				Agents/RandomAgent.swift,
+				Assets.xcassets,
+				GameEngine/Cards.swift,
+				GameEngine/GameEngine.swift,
+				GameEngine/Players.swift,
+				Make_A_MillionApp.swift,
+				Views/ContentView.swift,
+				Views/Display.swift,
+				Views/GameSession.swift,
+				Views/GameView.swift,
+			);
+			target = 4367CB082FBBBFE30005A97E /* Make-A-MillionUITests */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
+/* Begin PBXFileSystemSynchronizedRootGroup section */
 		4367CB022FBBBFE30005A97E /* Make-A-MillionTests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = "Make-A-MillionTests";
@@ -43,6 +79,15 @@
 		4367CB0C2FBBBFE30005A97E /* Make-A-MillionUITests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = "Make-A-MillionUITests";
+			sourceTree = "<group>";
+		};
+		4367CB2A2FBBC3D90005A97E /* Make-A-Million */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				4367CB2E2FBBC3DA0005A97E /* Exceptions for "Make-A-Million" folder in "Make-A-Million" target */,
+				4367CB2F2FBBC3DA0005A97E /* Exceptions for "Make-A-Million" folder in "Make-A-MillionUITests" target */,
+			);
+			path = "Make-A-Million";
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -75,7 +120,7 @@
 		4367CAE92FBBBFE10005A97E = {
 			isa = PBXGroup;
 			children = (
-				4367CAF42FBBBFE10005A97E /* Make-A-Million */,
+				4367CB2A2FBBC3D90005A97E /* Make-A-Million */,
 				4367CB022FBBBFE30005A97E /* Make-A-MillionTests */,
 				4367CB0C2FBBBFE30005A97E /* Make-A-MillionUITests */,
 				4367CAF32FBBBFE10005A97E /* Products */,
@@ -106,9 +151,6 @@
 			buildRules = (
 			);
 			dependencies = (
-			);
-			fileSystemSynchronizedGroups = (
-				4367CAF42FBBBFE10005A97E /* Make-A-Million */,
 			);
 			name = "Make-A-Million";
 			packageProductDependencies = (
@@ -155,6 +197,7 @@
 			);
 			fileSystemSynchronizedGroups = (
 				4367CB0C2FBBBFE30005A97E /* Make-A-MillionUITests */,
+				4367CB2A2FBBC3D90005A97E /* Make-A-Million */,
 			);
 			name = "Make-A-MillionUITests";
 			packageProductDependencies = (
@@ -178,6 +221,7 @@
 					};
 					4367CAFE2FBBBFE30005A97E = {
 						CreatedOnToolsVersion = 26.5;
+						LastSwiftMigration = 2650;
 						TestTargetID = 4367CAF12FBBBFE10005A97E;
 					};
 					4367CB082FBBBFE30005A97E = {
@@ -458,6 +502,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
+				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 5WMPJUQY8F;
@@ -469,6 +514,7 @@
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -480,6 +526,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
+				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 5WMPJUQY8F;

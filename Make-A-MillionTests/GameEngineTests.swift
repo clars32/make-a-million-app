@@ -7,7 +7,7 @@
 //
 
 import XCTest
-@testable import MakeAMillion
+@testable import Make_A_Million
 
 final class GameEngineTests: XCTestCase {
 
@@ -148,6 +148,44 @@ final class GameEngineTests: XCTestCase {
         XCTAssertEqual(GameState.trickWinner(trick, trump: .green), PlayerID(0))
     }
 
+    // MARK: Leading-rule endgame (regression)
+
+    func testCanLeadBullBearWhenTheyAreTheOnlyCardsLeft() throws {
+        // Regression: at the end of a hand a player can be on lead holding
+        // ONLY [Bull, Bear]. Bull/Bear normally can't be led, but the rule's
+        // intent is they can't be led while a leadable alternative exists.
+        // With none, the player must still have a legal move — earlier code
+        // only handled the single-card case and produced an empty move list,
+        // deadlocking the game. Found by random-agent self-play.
+        var g = GameState.newHand(dealer: PlayerID(0), seed: 4242)
+        g = try g.applying(.bid(.bid(175_000)), by: PlayerID(1))
+        g = try g.applying(.bid(.pass), by: PlayerID(2))
+        g = try g.applying(.bid(.pass), by: PlayerID(3))
+        g = try g.applying(.bid(.pass), by: PlayerID(0))
+        if g.view(for: PlayerID(1)).phase == .misdealDecision {
+            g = try g.applying(.declineMisdeal, by: PlayerID(1))
+        }
+        let d = g.legalMoves(for: PlayerID(1)).first {
+            if case .discardWidow = $0 { return true }; return false
+        }!
+        g = try g.applying(d, by: PlayerID(1))
+        g = try g.applying(.nameTrump(.red), by: PlayerID(1))
+
+        // Drive the whole hand with first-legal-move; the invariant under
+        // test is simply that nobody on turn is ever stranded.
+        var safety = 0
+        while g.view(for: PlayerID(0)).phase == .trickPlay {
+            let actor = g.view(for: PlayerID(0)).toAct
+            let moves = g.legalMoves(for: actor)
+            XCTAssertFalse(moves.isEmpty,
+                "player \(actor) on turn with no legal move — leading-rule deadlock")
+            g = try g.applying(moves[0], by: actor)
+            safety += 1
+            XCTAssertLessThan(safety, 1000)
+        }
+        XCTAssertEqual(g.view(for: PlayerID(0)).phase, .handComplete)
+    }
+
     // MARK: Trick value (Bull / Bear)
 
     func testBullDoublesTrickValue() {
@@ -188,6 +226,33 @@ final class GameEngineTests: XCTestCase {
             PlayedCard(player: PlayerID(3), card: .colored(.red, .money10k)),
         ])
         XCTAssertEqual(GameState.trickValue(trick), 80_000)
+    }
+
+    func testPlayerViewLiveHandScoreTotalsCompletedTricksByTeam() {
+        let view = PlayerView(
+            me: PlayerID(0),
+            myHand: [],
+            phase: .trickPlay,
+            toAct: PlayerID(0),
+            trump: .red,
+            highBid: 175_000,
+            highBidder: PlayerID(0),
+            passed: [],
+            currentTrick: nil,
+            completedTrickCount: 3,
+            completedTricks: [
+                CompletedTrickInfo(leader: PlayerID(0), plays: [], winner: PlayerID(0), value: 40_000),
+                CompletedTrickInfo(leader: PlayerID(1), plays: [], winner: PlayerID(1), value: 80_000),
+                CompletedTrickInfo(leader: PlayerID(2), plays: [], winner: PlayerID(2), value: 10_000),
+            ],
+            matchScore: [0: 125_000, 1: -175_000],
+            legalMoves: []
+        )
+
+        XCTAssertEqual(view.liveHandScore[0], 50_000)
+        XCTAssertEqual(view.liveHandScore[1], 80_000)
+        XCTAssertEqual(view.matchScore[0], 125_000)
+        XCTAssertEqual(view.matchScore[1], -175_000)
     }
 
     // MARK: Widow discard legality

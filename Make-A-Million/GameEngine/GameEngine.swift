@@ -531,6 +531,15 @@ struct PlayerView: Codable {
 
     /// Convenience: the trick that just resolved, if any.
     var lastTrick: CompletedTrickInfo? { completedTricks.last }
+
+    /// Current hand score by team from public completed tricks. This is
+    /// deliberately separate from `matchScore`, which only changes once
+    /// set-back scoring settles the hand.
+    var liveHandScore: [Int: Int] {
+        completedTricks.reduce(into: [0: 0, 1: 0]) { totals, trick in
+            totals[Seats.team(of: trick.winner), default: 0] += trick.value
+        }
+    }
 }
 
 extension GameState {
