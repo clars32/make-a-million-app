@@ -27,10 +27,10 @@
 //    CompletedTrickInfo.{leader,plays,winner}
 //    GameState memberwise init (declaration order):
 //      (dealSeed,dealer,hands,widow,phase,toAct,highBid,highBidder,
-//       passed,bidHistory,trump,misdealEligible,currentTrick,
-//       completedTricks,capturedByTeam,matchScore,dealtHands,dealtWidow)
+//       passed,trump,misdealEligible,currentTrick,completedTricks,
+//       capturedByTeam,matchScore,bidLog,dealtHands,dealtWidow)
 //
-//    PlayerView.bidHistory : [BidRecord]  (public; opener also on the view)
+//    PlayerView.bidLog : [BidRecord]  (public; added in the bidding pass)
 //
 //  That initializer order is the single most fragile coupling. If a stored
 //  property is added to GameState, update `rebuild(...)` below to match.
@@ -265,18 +265,17 @@ struct Determinizer {
             highBid: view.highBid,
             highBidder: view.highBidder,
             passed: Set(view.passed),
-            // bidHistory is declared right after `passed` in GameState, so
-            // the memberwise initializer requires it here. Public record,
-            // carried faithfully from the view.
-            bidHistory: view.bidHistory,
             trump: view.trump,
             misdealEligible: false,
             currentTrick: view.currentTrick,
             completedTricks: completed,
             capturedByTeam: captured,
             matchScore: view.matchScore,
-            // Dealt-hand snapshots are a debug-reveal concern only — no rule
-            // or rollout reads them, so empty placeholders are correct here.
+            // New trailing fields (bidding-visibility pass). bidLog is
+            // public and faithfully carried; dealt-hand snapshots are a
+            // debug-reveal concern only — no rule or rollout ever reads
+            // them, so empty placeholders are correct here.
+            bidLog: view.bidLog,
             dealtHands: [:],
             dealtWidow: []
         )

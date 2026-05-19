@@ -2,11 +2,37 @@
 //  GameView.swift
 //  Make-a-Million
 //
-//  Visibility pass. Still deliberately PLAIN — no card art, no animation.
-//  The goal is to make the state the engine already tracks LEGIBLE: what
-//  each seat just played and who took the trick, the running team score,
-//  the trick history, and a clear message when you were outbid and have no
-//  legal bid. This doubles as the instrument panel for building the AI next.
+//  POLISH PASS 1 — card-to-trick travel (matchedGeometry) + the continuity
+//  fix that has to exist for it (or any trick animation) to be possible.
+//
+//  THE CONTINUITY FIX (this revision):
+//
+//   `human.pending` is nil BETWEEN every turn — cleared the instant you
+//   submit, stays nil while the bots play, set again at your next turn.
+//   The old body fell back to `startView` during that gap, tearing the
+//   whole hierarchy down and rebuilding it on every play. matchedGeometry
+//   cannot survive that. So: while a hand is running, we hold the last
+//   PlayerView and keep the active layout MOUNTED (inert) through the gap.
+//   No more startView flash; the namespace identities persist.
+//
+//   This is pure presentation state. It does NOT gate the engine, does NOT
+//   make the engine wait, does NOT mutate the model. It only stops the view
+//   from throwing its own screen away between turns.
+//
+//  KNOWN, STILL OPEN (next pass, deliberately not faked here):
+//
+//   The view only re-renders on YOUR turns. It never sees the trick fill
+//   in, so your played card is already in lastTrick by the next frame —
+//   there is no resting frame for it to travel to. Real trick animation
+//   needs the view to RECEIVE the trick as it progresses (a read-only
+//   presentation feed drained at a view-side cadence, engine never
+//   blocked). That needs GameRunner / HumanAgent and is its own focused
+//   pass. The matchedGeometry wiring below is correct and starts working
+//   the moment that feed exists; until then it has nothing to interpolate
+//   to, and that's expected — not a bug to chase.
+//
+//  GUARDRAIL, held: animation OBSERVES state, never DRIVES it. The tap
+//  still calls `human.submit(.play(card))` — identical to the old button.
 //
 
 import SwiftUI
@@ -29,16 +55,45 @@ private struct GameBody: View {
     @ObservedObject var human: HumanAgent
     @Binding var dealSeed: UInt64
 
+    /// Shared geometry namespace. Same `CardKey` in the hand and in the
+    /// trick → SwiftUI interpolates the frame between them.
+    @Namespace private var cardNS
+
+    /// The last view we were handed. Lets us keep the active layout mounted
+    /// during the between-turns gap so the hierarchy stays continuous.
+    @State private var lastView: PlayerView? = nil
+
     private let teamAName = "You + North"
     private let teamBName = "West + East"
 
+    /// Changes whenever `pending` transitions (incl. to/from nil). Drives
+    /// the lastView capture without assuming PlayerView is Equatable.
+    private var pendingTick: Int {
+        guard let p = human.pending else { return -1 }
+        return animationToken(p)
+    }
+
+    /// Live turn → the real pending view. Between turns while a hand is
+    /// still running → the remembered view (keeps the layout mounted).
+    /// Nothing running and nothing pending → no view (start screen).
+    private var renderView: PlayerView? {
+        if let p = human.pending { return p }
+        if session.running { return lastView }
+        return nil
+    }
+
     var body: some View {
-        if let final = session.finished {
-            handCompleteView(final)
-        } else if let view = human.pending {
-            activeView(view)
-        } else {
-            startView
+        Group {
+            if let final = session.finished {
+                handCompleteView(final)
+            } else if let view = renderView {
+                activeView(view, interactive: human.pending != nil)
+            } else {
+                startView
+            }
+        }
+        .onChange(of: pendingTick) { _, _ in
+            if let p = human.pending { lastView = p }
         }
     }
 
@@ -59,7 +114,7 @@ private struct GameBody: View {
 
     // MARK: Active hand
 
-    private func activeView(_ view: PlayerView) -> some View {
+    private func activeView(_ view: PlayerView, interactive: Bool) -> some View {
         VStack(alignment: .leading, spacing: 12) {
 
             scoreBar(view)
@@ -70,12 +125,10 @@ private struct GameBody: View {
                 bidHistoryPanel(records: view.bidHistory, opener: view.opener)
             }
 
-            // What just happened: the last completed trick + who took it.
             if let last = view.lastTrick {
                 lastTrickPanel(last)
             }
 
-            // Trick in progress.
             if let trick = view.currentTrick, !trick.plays.isEmpty {
                 trickInProgress(trick)
             }
@@ -85,25 +138,47 @@ private struct GameBody: View {
             Text("Your hand (\(view.myHand.count))")
                 .font(.caption).foregroundStyle(.secondary)
             FlowRow(spacing: 6) {
-                ForEach(Array(sortedHand(view.myHand).enumerated()), id: \.offset) { _, card in
-                    cardChip(card, faded: !isPlayable(card, in: view))
+                ForEach(keyedHand(view.myHand), id: \.key) { entry in
+                    handCard(entry.card, view: view, interactive: interactive)
                 }
             }
 
             Divider()
 
-            movePanel(view)
+            movePanel(view, interactive: interactive)
 
             Spacer(minLength: 4)
 
-            // Collapsible trick history — instrument panel for AI tuning.
             if !view.completedTricks.isEmpty {
                 historyPanel(view)
             }
         }
+        .animation(.spring(response: 0.34, dampingFraction: 0.80),
+                   value: animationToken(view))
+        .opacity(interactive ? 1.0 : 0.97)
     }
 
-    // MARK: Score bar (prominent, always visible)
+    @ViewBuilder
+    private func handCard(_ card: Card, view: PlayerView, interactive: Bool) -> some View {
+        let playable = isPlayable(card, in: view)
+        let tappable = interactive && view.phase == .trickPlay && playable
+
+        Group {
+            if tappable {
+                Button {
+                    human.submit(.play(card))
+                } label: {
+                    cardChip(card, faded: false)
+                }
+                .buttonStyle(.plain)
+            } else {
+                cardChip(card, faded: !playable)
+            }
+        }
+        .matchedGeometryEffect(id: cardKey(card), in: cardNS)
+    }
+
+    // MARK: Score bar
 
     private func scoreBar(_ view: PlayerView) -> some View {
         let live = view.liveHandScore
@@ -168,14 +243,14 @@ private struct GameBody: View {
                     .foregroundStyle(last.winner.raw % 2 == 0 ? Color.green : Color.orange)
             }
             HStack(spacing: 8) {
-                ForEach(Array(last.plays.enumerated()), id: \.offset) { _, pc in
+                ForEach(keyedPlays(last.plays), id: \.key) { entry in
                     VStack(spacing: 2) {
-                        Text(seatShort(pc.player))
+                        Text(seatShort(entry.play.player))
                             .font(.caption2)
-                            .foregroundStyle(pc.player == last.winner
+                            .foregroundStyle(entry.play.player == last.winner
                                              ? AnyShapeStyle(.primary)
                                              : AnyShapeStyle(.tertiary))
-                        cardChip(pc.card, faded: pc.player != last.winner)
+                        cardChip(entry.play.card, faded: entry.play.player != last.winner)
                     }
                 }
             }
@@ -188,33 +263,36 @@ private struct GameBody: View {
         VStack(alignment: .leading, spacing: 4) {
             Text("Trick in progress").font(.caption).foregroundStyle(.secondary)
             HStack(spacing: 8) {
-                ForEach(Array(trick.plays.enumerated()), id: \.offset) { _, pc in
+                ForEach(keyedPlays(trick.plays), id: \.key) { entry in
                     VStack(spacing: 2) {
-                        Text(seatShort(pc.player))
+                        Text(seatShort(entry.play.player))
                             .font(.caption2).foregroundStyle(.tertiary)
-                        cardChip(pc.card, faded: false)
+                        cardChip(entry.play.card, faded: false)
+                            .matchedGeometryEffect(id: cardKey(entry.play.card),
+                                                   in: cardNS)
+                            .transition(.asymmetric(
+                                insertion: .scale(scale: 0.6).combined(with: .opacity),
+                                removal: .opacity))
                     }
                 }
             }
         }
     }
 
-    // MARK: Move panel — handles the "shut out of bidding" case explicitly
+    // MARK: Move panel
 
     @ViewBuilder
-    private func movePanel(_ view: PlayerView) -> some View {
+    private func movePanel(_ view: PlayerView, interactive: Bool) -> some View {
         Text("Your move — \(view.phase.headline)")
             .font(.caption).foregroundStyle(.secondary)
 
-        if view.legalMoves.isEmpty {
-            // Should not happen on your turn (engine guarantees a move), but
-            // if the runner is waiting on a bot this branch shows why the UI
-            // is idle rather than appearing frozen.
+        if !interactive {
+            Text("Waiting for other players…")
+                .font(.callout).foregroundStyle(.secondary).italic()
+        } else if view.legalMoves.isEmpty {
             Text("Waiting for other players…")
                 .font(.callout).foregroundStyle(.secondary).italic()
         } else if view.phase == .bidding && bidOptionsOnly(view).isEmpty {
-            // You can still pass but every raise is above any sane ceiling —
-            // i.e. you've effectively been bid out. Say so plainly.
             VStack(alignment: .leading, spacing: 6) {
                 Text("The bidding has run past you — you can only pass.")
                     .font(.caption).foregroundStyle(.orange)
@@ -225,6 +303,9 @@ private struct GameBody: View {
                     }
                 }
             }
+        } else if view.phase == .trickPlay {
+            Text("Tap a card in your hand to play it.")
+                .font(.caption).foregroundStyle(.secondary).italic()
         } else {
             FlowRow(spacing: 6) {
                 ForEach(Array(view.legalMoves.enumerated()), id: \.offset) { _, move in
@@ -235,15 +316,13 @@ private struct GameBody: View {
         }
     }
 
-    /// Non-pass bid options, used only to detect the "all you can do is pass"
-    /// situation for a clearer message.
     private func bidOptionsOnly(_ view: PlayerView) -> [Move] {
         view.legalMoves.filter {
             if case .bid(.bid) = $0 { return true }; return false
         }
     }
 
-    // MARK: History (instrument panel)
+    // MARK: History
 
     private func historyPanel(_ view: PlayerView) -> some View {
         DisclosureGroup("Trick history (\(view.completedTricks.count))") {
@@ -281,9 +360,11 @@ private struct GameBody: View {
             if !s.bidHistory.isEmpty {
                 bidHistoryPanel(records: s.bidHistory, opener: Seats.next(s.dealer))
             }
+            HandRevealPanel(reveal: s.debugReveal())
             Button("Deal another") {
                 dealSeed &+= 1
                 session.reset()
+                lastView = nil
                 session.start(dealSeed: dealSeed)
             }
             .buttonStyle(.borderedProminent)
@@ -387,6 +468,30 @@ private struct GameBody: View {
         }
     }
 
+    // MARK: Card identity for matched geometry
+    //
+    // Unique (group,color,rank) per distinct card. Assumes no duplicate
+    // cards in a deal — true for any standard trick-taking deck.
+
+    private func cardKey(_ card: Card) -> CardKey {
+        let k = handSortKey(card)
+        return CardKey(g: k.group, c: k.color, r: k.rank)
+    }
+
+    private func keyedHand(_ hand: [Card]) -> [(key: CardKey, card: Card)] {
+        sortedHand(hand).map { (cardKey($0), $0) }
+    }
+
+    private func keyedPlays(_ plays: [PlayedCard]) -> [(key: CardKey, play: PlayedCard)] {
+        plays.map { (cardKey($0.card), $0) }
+    }
+
+    private func animationToken(_ v: PlayerView) -> Int {
+        v.myHand.count &* 1000
+            &+ (v.currentTrick?.plays.count ?? 0) &* 13
+            &+ v.completedTricks.count
+    }
+
     private func cardChip(_ card: Card, faded: Bool) -> some View {
         Text(card.shortLabel)
             .font(.caption).bold()
@@ -399,6 +504,13 @@ private struct GameBody: View {
                     .stroke(card.tint.opacity(faded ? 0.3 : 0.9), lineWidth: 1))
             .foregroundStyle(faded ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary))
     }
+}
+
+/// Stable, card-derived identity for matchedGeometryEffect and ForEach.
+struct CardKey: Hashable {
+    let g: Int   // group: 0 = colored, 1 = beast
+    let c: Int   // color rawValue (0 for beasts)
+    let r: Int   // rank rawValue / beast discriminator
 }
 
 /// Minimal wrapping layout so a 13–16 chip hand wraps instead of overflowing.

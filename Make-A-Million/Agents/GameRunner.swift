@@ -10,6 +10,19 @@
 //  No SwiftUI. The loop is engine-side. It only ever hands an agent a
 //  PlayerView and only ever receives a Move back.
 //
+//  PRESENTATION FEED (added):
+//
+//   An OPTIONAL, headless observer. If a `spectator` seat and an `onView`
+//   sink are supplied, the runner emits that seat's ALREADY-REDACTED
+//   PlayerView once for the initial deal and once after every applied move.
+//   It is the same projection an agent receives — no hidden information
+//   crosses, and the emission point stays correct if this ever goes remote.
+//
+//   This does NOT change the loop, does NOT pace anything, and does NOT
+//   wait on a consumer. The runner emits and moves on; pacing is entirely
+//   the consumer's problem. Defaults are nil, so `playMatch` and any other
+//   caller are completely unaffected.
+//
 
 import Foundation
 
@@ -27,13 +40,27 @@ struct GameRunner {
     /// Play one hand to completion from a fresh deal. Returns the final state
     /// (phase == .handComplete, scores settled). Pure with respect to the
     /// seeds: (dealSeed, agent seeds) fully reproduces the hand.
+    ///
+    /// - Parameters:
+    ///   - spectator: if set, the seat whose redacted view is emitted.
+    ///   - onView: headless sink for emitted views. Called from the runner's
+    ///     own context; the consumer is responsible for hopping actors and
+    ///     for any pacing. The runner never blocks on it.
     func playHand(dealer: PlayerID,
                   dealSeed: UInt64,
-                  carryScore: [Int: Int] = [0: 0, 1: 0]) async throws -> GameState {
+                  carryScore: [Int: Int] = [0: 0, 1: 0],
+                  spectator: PlayerID? = nil,
+                  onView: (@Sendable (PlayerView) -> Void)? = nil) async throws -> GameState {
 
         var state = GameState.newHand(dealer: dealer,
                                       seed: dealSeed,
                                       carryScore: carryScore)
+
+        // Initial deal frame, so the consumer can show the dealt hand /
+        // opening of bidding rather than starting one move in.
+        if let s = spectator, let sink = onView {
+            sink(state.view(for: s))
+        }
 
         // Safety bound: a hand is 4 bids-ish + misdeal + discard + trump + 52
         // card plays. A few hundred steps is a generous ceiling; exceeding it
@@ -46,6 +73,13 @@ struct GameRunner {
             let view = state.view(for: mover)
             let move = await agents[mover.raw].chooseMove(from: view)
             state = try state.applying(move, by: mover)
+
+            // Post-move frame. This is what makes single-step animation
+            // possible: between any two consecutive emitted views exactly
+            // one move has happened.
+            if let s = spectator, let sink = onView {
+                sink(state.view(for: s))
+            }
 
             steps += 1
             if steps > maxSteps {
