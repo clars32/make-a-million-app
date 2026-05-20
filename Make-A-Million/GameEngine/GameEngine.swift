@@ -183,7 +183,7 @@ extension GameState {
                 : highBid! + Bidding.raiseIncrement
             while amount <= 400_000 {
                 moves.append(.bid(.bid(amount)))
-                amount += Bidding.raiseIncrement
+                amount += Bidding.bidIncrement
             }
             return moves
 
@@ -360,12 +360,12 @@ extension GameState {
                 // *relative to that minimum*. $175,000 itself is legal even
                 // though it is not a multiple of $10,000.
                 guard amount >= Bidding.openingMinimum,
-                      (amount - Bidding.openingMinimum) % Bidding.raiseIncrement == 0
+                      (amount - Bidding.openingMinimum) % Bidding.bidIncrement == 0
                 else { throw MoveError.illegalBid }
             } else {
                 // A raise: at least one increment above the standing high bid.
                 guard amount >= highBid! + Bidding.raiseIncrement,
-                      (amount - Bidding.openingMinimum) % Bidding.raiseIncrement == 0
+                      (amount - Bidding.openingMinimum) % Bidding.bidIncrement == 0
                 else { throw MoveError.illegalBid }
             }
             highBid = amount
@@ -551,6 +551,9 @@ struct PlayerView: Codable {
     let passed: [PlayerID]
     let opener: PlayerID
     let bidHistory: [BidRecord]
+    /// The three widow cards from this deal, public once the high bidder has
+    /// taken the bid and the hand moves past misdeal (if any).
+    let widow: [Card]?
     let currentTrick: Trick?
     let completedTrickCount: Int
     /// Full public trick history, oldest first. Empty until the first trick
@@ -570,6 +573,69 @@ struct PlayerView: Codable {
             totals[Seats.team(of: trick.winner), default: 0] += trick.value
         }
     }
+
+    /// Immediate table update when the human taps a card, before the runner
+    /// applies the move and emits the next frame.
+    func previewing(_ move: Move) -> PlayerView? {
+        switch move {
+        case .play(let card):
+            guard phase == .trickPlay, myHand.contains(card) else { return nil }
+            var plays = currentTrick?.plays ?? []
+            plays.append(PlayedCard(player: me, card: card))
+            let leader = currentTrick?.leader ?? me
+            return PlayerView(
+                me: me,
+                myHand: myHand.filter { $0 != card },
+                phase: phase,
+                toAct: Seats.next(me),
+                trump: trump,
+                highBid: highBid,
+                highBidder: highBidder,
+                passed: passed,
+                opener: opener,
+                bidHistory: bidHistory,
+                widow: widow,
+                currentTrick: Trick(leader: leader, plays: plays),
+                completedTrickCount: completedTrickCount,
+                completedTricks: completedTricks,
+                matchScore: matchScore,
+                legalMoves: []
+            )
+        default:
+            return nil
+        }
+    }
+
+    /// One more card in the current trick — used to animate the fourth play
+    /// before the engine's resolved (cleared) frame arrives.
+    func addingLastPlay(from resolved: PlayerView) -> PlayerView? {
+        guard let finished = resolved.lastTrick,
+              finished.plays.count == Seats.count,
+              let trick = currentTrick,
+              trick.plays.count == Seats.count - 1
+        else { return nil }
+
+        var plays = trick.plays
+        plays.append(finished.plays[Seats.count - 1])
+        return PlayerView(
+            me: me,
+            myHand: resolved.myHand,
+            phase: phase,
+            toAct: resolved.toAct,
+            trump: trump,
+            highBid: highBid,
+            highBidder: highBidder,
+            passed: passed,
+            opener: opener,
+            bidHistory: bidHistory,
+            widow: widow,
+            currentTrick: Trick(leader: trick.leader, plays: plays),
+            completedTrickCount: completedTrickCount,
+            completedTricks: completedTricks,
+            matchScore: resolved.matchScore,
+            legalMoves: []
+        )
+    }
 }
 
 extension GameState {
@@ -588,6 +654,13 @@ extension GameState {
                 winner: w,
                 value: GameState.trickValue(tr))
         }
+        let publicWidow: [Card]? = switch phase {
+        case .widowDiscard, .namingTrump, .trickPlay, .handComplete:
+            dealtWidow.isEmpty ? nil : dealtWidow
+        default:
+            nil
+        }
+
         return PlayerView(
             me: player,
             myHand: hands[player] ?? [],
@@ -599,6 +672,7 @@ extension GameState {
             passed: Array(passed),
             opener: Seats.next(dealer),
             bidHistory: bidHistory,
+            widow: publicWidow,
             currentTrick: currentTrick,
             completedTrickCount: completedTricks.count,
             completedTricks: history,

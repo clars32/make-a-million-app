@@ -31,6 +31,7 @@
 
 import Foundation
 import Combine
+import SwiftUI
 
 @MainActor
 final class GameSession: ObservableObject {
@@ -48,9 +49,8 @@ final class GameSession: ObservableObject {
     /// matchedGeometry identities survive.
     @Published private(set) var displayView: PlayerView? = nil
 
-    /// True when the buffer has drained to the live state. The UI arms the
-    /// human's controls only when `pending != nil && caughtUp` — so you
-    /// watch the bots' burst, then act.
+    /// True when the presentation buffer has caught up to the runner. Used
+    /// for the "Watching play…" label between your turns.
     @Published private(set) var caughtUp = true
 
     /// The seat the human occupies (constructed first in `start`).
@@ -59,13 +59,25 @@ final class GameSession: ObservableObject {
     /// Pacing knobs. Per-move cadence and the end-of-hand settle. These are
     /// the dials to turn if the game feels too slow or too frantic.
     private let frameInterval: Duration = .milliseconds(500)
+    private let trickSettleInterval: Duration = .milliseconds(850)
     private let settleInterval: Duration = .milliseconds(700)
+
+    /// The runner emits much faster than we can pace; without a cap the queue
+    /// replays the whole hand at the end. Keep only recent frames.
+    private let maxQueuedItems = 12
 
     /// One place to tune how hard the table plays.
     private let botDifficulty: MonteCarloAgent.Difficulty = .medium
 
-    private var queue: [PlayerView] = []
+    private enum QueueItem {
+        case show(PlayerView)
+        case pauseTrickSettle
+    }
+
+    private var queue: [QueueItem] = []
     private var draining = false
+    private var holdPresentation = false
+    private var pauseBotFramesUntil: ContinuousClock.Instant?
     private var pendingFinal: GameState? = nil
 
     private var runTask: Task<Void, Never>? = nil
@@ -73,6 +85,7 @@ final class GameSession: ObservableObject {
 
     init() {
         human = HumanAgent(name: "You")
+        human.coordinator = self
     }
 
     func start(dealSeed: UInt64) {
@@ -83,6 +96,8 @@ final class GameSession: ObservableObject {
         caughtUp = true
         queue.removeAll()
         draining = false
+        holdPresentation = false
+        pauseBotFramesUntil = nil
         pendingFinal = nil
 
         let agents: [PlayerAgent] = [
@@ -104,13 +119,10 @@ final class GameSession: ObservableObject {
                     dealSeed: dealSeed,
                     spectator: spectator,
                     onView: { [weak self] view in
-                        // Headless emission from the runner's context. Hop
-                        // to the main actor and enqueue; never block here.
-                        Task { @MainActor in self?.enqueue(view) }
+                        await self?.receiveFrame(view)
                     })
                 await MainActor.run {
-                    self.pendingFinal = final
-                    self.startDrainIfNeeded()   // ensures the finish path runs
+                    self.finishHand(final)
                 }
             } catch {
                 await MainActor.run { self.running = false }
@@ -124,6 +136,8 @@ final class GameSession: ObservableObject {
         drainTask?.cancel(); drainTask = nil
         queue.removeAll()
         draining = false
+        holdPresentation = false
+        pauseBotFramesUntil = nil
         pendingFinal = nil
         displayView = nil
         finished = nil
@@ -133,44 +147,216 @@ final class GameSession: ObservableObject {
 
     // MARK: - Buffer
 
-    private func enqueue(_ view: PlayerView) {
-        queue.append(view)
+    /// Awaited by GameRunner so frames are queued before the next agent acts.
+    private func receiveFrame(_ view: PlayerView) {
+        if isRedundantWithDisplay(view) { return }
+
+        if let live = effectiveTableView(),
+           trickJustCompleted(comparedTo: live, incoming: view) {
+            enqueueTrickSettle(from: live, resolved: view)
+            return
+        }
+
+        enqueue(.show(view))
+    }
+
+    /// Latest table snapshot: last queued show, else what is on screen.
+    private func effectiveTableView() -> PlayerView? {
+        for item in queue.reversed() {
+            if case .show(let view) = item { return view }
+        }
+        return displayView
+    }
+
+    private func trickJustCompleted(comparedTo live: PlayerView,
+                                    incoming: PlayerView) -> Bool {
+        incoming.completedTricks.count == live.completedTricks.count + 1
+            && incoming.lastTrick?.plays.count == Seats.count
+    }
+
+    /// Fourth card (if needed) → pause → cleared trick. Never rewinds completed tricks.
+    private func enqueueTrickSettle(from live: PlayerView, resolved: PlayerView) {
+        if live.currentTrick?.plays.count == Seats.count {
+            // Human preview (or table) already shows the full trick.
+            enqueue(.pauseTrickSettle)
+            enqueue(.show(resolved))
+        } else if let fourth = live.addingLastPlay(from: resolved) {
+            enqueue(.show(fourth))
+            enqueue(.pauseTrickSettle)
+            enqueue(.show(resolved))
+        } else if let hold = trickCompletionHoldFrame(before: resolved, live: live) {
+            enqueue(.show(hold))
+            enqueue(.pauseTrickSettle)
+            enqueue(.show(resolved))
+        } else {
+            enqueue(.show(resolved))
+        }
+    }
+
+    /// Fallback when we did not see the third play before resolution.
+    private func trickCompletionHoldFrame(before resolved: PlayerView,
+                                          live: PlayerView) -> PlayerView? {
+        guard let finished = resolved.lastTrick else { return nil }
+        return PlayerView(
+            me: resolved.me,
+            myHand: resolved.myHand,
+            phase: resolved.phase,
+            toAct: resolved.toAct,
+            trump: resolved.trump,
+            highBid: resolved.highBid,
+            highBidder: resolved.highBidder,
+            passed: resolved.passed,
+            opener: resolved.opener,
+            bidHistory: resolved.bidHistory,
+            widow: resolved.widow,
+            currentTrick: Trick(leader: finished.leader, plays: finished.plays),
+            completedTrickCount: live.completedTricks.count,
+            completedTricks: live.completedTricks,
+            matchScore: resolved.matchScore,
+            legalMoves: []
+        )
+    }
+
+    private func isRedundantWithDisplay(_ view: PlayerView) -> Bool {
+        guard let live = displayView else { return false }
+        return live.myHand.count == view.myHand.count
+            && live.currentTrick?.plays.count == view.currentTrick?.plays.count
+            && live.completedTricks.count == view.completedTricks.count
+            && live.bidHistory.count == view.bidHistory.count
+    }
+
+    private func enqueue(_ item: QueueItem) {
+        queue.append(item)
+        trimQueue()
+        if holdPresentation {
+            caughtUp = false
+            return
+        }
         caughtUp = false
         startDrainIfNeeded()
     }
 
+    private func trimQueue() {
+        while queue.count > maxQueuedItems {
+            if let idx = queue.firstIndex(where: {
+                if case .show = $0 { return true }
+                return false
+            }) {
+                queue.remove(at: idx)
+            } else {
+                queue.removeFirst()
+            }
+        }
+    }
+
+    private func publishFrame(_ view: PlayerView) {
+        withAnimation(.spring(response: 0.34, dampingFraction: 0.80)) {
+            displayView = view
+        }
+    }
+
+    private func finishHand(_ final: GameState) {
+        drainTask?.cancel()
+        drainTask = nil
+        draining = false
+        queue.removeAll()
+        pendingFinal = final
+        publishFrame(final.view(for: spectator))
+        caughtUp = true
+
+        drainTask = Task { @MainActor in
+            try? await Task.sleep(for: settleInterval)
+            if Task.isCancelled { return }
+            if self.pendingFinal != nil {
+                self.finished = final
+                self.running = false
+            }
+        }
+    }
+
     private func startDrainIfNeeded() {
+        guard !holdPresentation else { return }
         guard !draining else { return }
-        guard !queue.isEmpty || pendingFinal != nil else { return }
+        guard !queue.isEmpty else { return }
         draining = true
 
         drainTask = Task { @MainActor in
-            // First frame of a (re)started drain shows immediately, so your
-            // own play and the start of a burst feel responsive; subsequent
-            // frames are paced.
-            while !queue.isEmpty {
+            while !queue.isEmpty && !holdPresentation {
                 if Task.isCancelled { return }
-                let next = queue.removeFirst()
-                // No withAnimation here on purpose: the view animates via
-                // its `.animation(_, value:)` modifier. One transaction,
-                // not two.
-                displayView = next
-                if queue.isEmpty { break }
-                try? await Task.sleep(for: frameInterval)
+                if let until = pauseBotFramesUntil {
+                    let clock = ContinuousClock()
+                    if clock.now < until {
+                        try? await clock.sleep(until: until)
+                    }
+                    pauseBotFramesUntil = nil
+                }
+
+                switch queue.removeFirst() {
+                case .show(let view):
+                    publishFrame(view)
+                    let nextIsSettlePause = if case .pauseTrickSettle = queue.first { true } else { false }
+                    if !queue.isEmpty && !nextIsSettlePause {
+                        try? await Task.sleep(for: frameInterval)
+                    }
+                case .pauseTrickSettle:
+                    try? await Task.sleep(for: trickSettleInterval)
+                }
             }
 
             draining = false
-            caughtUp = queue.isEmpty
+            caughtUp = queue.isEmpty && !holdPresentation
 
-            // Hand over only after the last frame has been seen and held.
-            if queue.isEmpty, let final = pendingFinal {
-                try? await Task.sleep(for: settleInterval)
-                if Task.isCancelled { return }
-                if self.pendingFinal != nil {   // not reset in the meantime
-                    self.finished = final
-                    self.running = false
-                }
+            if !holdPresentation && !queue.isEmpty {
+                startDrainIfNeeded()
             }
         }
+    }
+
+    private func drainQueueOnMainActor() async {
+        while !queue.isEmpty {
+            switch queue.removeFirst() {
+            case .show(let view):
+                publishFrame(view)
+                if !queue.isEmpty {
+                    try? await Task.sleep(for: frameInterval)
+                }
+            case .pauseTrickSettle:
+                try? await Task.sleep(for: trickSettleInterval)
+            }
+        }
+    }
+}
+
+// MARK: - Human turn pacing (PresentationCoordinator)
+
+extension GameSession: PresentationCoordinator {
+
+    /// Play every queued bot frame at full cadence, then hand off to the human.
+    func drainBeforeHumanTurn() async {
+        drainTask?.cancel()
+        draining = false
+        await drainQueueOnMainActor()
+        caughtUp = true
+    }
+
+    func humanTurnDidBegin() {
+        holdPresentation = true
+        drainTask?.cancel()
+        draining = false
+    }
+
+    func humanCommittedMove(_ move: Move, from view: PlayerView) {
+        guard let preview = view.previewing(move) else { return }
+        drainTask?.cancel()
+        draining = false
+        publishFrame(preview)
+        pauseBotFramesUntil = ContinuousClock.now + frameInterval
+        caughtUp = false
+    }
+
+    func humanTurnDidEnd() {
+        holdPresentation = false
+        caughtUp = queue.isEmpty
+        startDrainIfNeeded()
     }
 }

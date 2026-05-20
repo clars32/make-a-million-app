@@ -43,6 +43,7 @@ enum BidAction: Codable, Hashable {
 enum Bidding {
     static let openingMinimum = 175_000
     static let raiseIncrement = 10_000
+    static let bidIncrement = 5_000
 }
 
 // MARK: - Moves

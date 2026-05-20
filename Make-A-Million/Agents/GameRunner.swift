@@ -58,7 +58,7 @@ struct GameRunner {
                   dealSeed: UInt64,
                   carryScore: [Int: Int] = [0: 0, 1: 0],
                   spectator: PlayerID? = nil,
-                  onView: (@Sendable (PlayerView) -> Void)? = nil) async throws -> GameState {
+                  onView: (@Sendable @MainActor (PlayerView) async -> Void)? = nil) async throws -> GameState {
 
         var state = GameState.newHand(dealer: dealer,
                                       seed: dealSeed,
@@ -67,7 +67,7 @@ struct GameRunner {
         // Initial deal frame, so the consumer can show the dealt hand /
         // opening of bidding rather than starting one move in.
         if let s = spectator, let sink = onView {
-            sink(state.view(for: s))
+            await sink(state.view(for: s))
         }
 
         // Safety bound: a hand is 4 bids-ish + misdeal + discard + trump + 52
@@ -86,7 +86,7 @@ struct GameRunner {
             // possible: between any two consecutive emitted views exactly
             // one move has happened.
             if let s = spectator, let sink = onView {
-                sink(state.view(for: s))
+                await sink(state.view(for: s))
             }
 
             steps += 1

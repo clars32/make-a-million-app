@@ -71,6 +71,9 @@ private struct GameBody: View {
     /// during the between-turns gap so the hierarchy stays continuous.
     @State private var lastView: PlayerView? = nil
 
+    /// Cards tapped for widow discard (must pick exactly 3, then confirm).
+    @State private var discardSelection: Set<Card> = []
+
     private let teamAName = "You + North"
     private let teamBName = "West + East"
 
@@ -81,27 +84,48 @@ private struct GameBody: View {
         return animationToken(p)
     }
 
-    /// Live turn → the real pending view. Between turns while a hand is
-    /// still running → the remembered view (keeps the layout mounted).
-    /// Nothing running and nothing pending → no view (start screen).
-    private var renderView: PlayerView? {
-        if let p = human.pending { return p }
-        if session.running { return lastView }
-        return nil
+    private var displayTick: Int {
+        guard let d = session.displayView else { return -1 }
+        return animationToken(d)
+    }
+
+    /// Animated table state — always prefer the paced feed when available.
+    private var tableView: PlayerView? {
+        session.displayView ?? human.pending ?? lastView
+    }
+
+    /// Legal moves / interaction — live pending when it is your turn.
+    private var decisionView: PlayerView? {
+        human.pending ?? session.displayView ?? lastView
+    }
+
+    private var isInteractive: Bool {
+        human.pending != nil
     }
 
     var body: some View {
         Group {
             if let final = session.finished {
                 handCompleteView(final)
-            } else if let view = renderView {
-                activeView(view, interactive: human.pending != nil)
+            } else if let table = tableView {
+                activeView(
+                    table: table,
+                    decision: decisionView ?? table,
+                    interactive: isInteractive)
             } else {
                 startView
             }
         }
         .onChange(of: pendingTick) { _, _ in
-            if let p = human.pending { lastView = p }
+            if let p = human.pending {
+                lastView = p
+                if p.phase != .widowDiscard { discardSelection = [] }
+            }
+        }
+        .onChange(of: displayTick) { _, _ in
+            if let d = session.displayView {
+                lastView = d
+            }
         }
     }
 
@@ -122,65 +146,81 @@ private struct GameBody: View {
 
     // MARK: Active hand
 
-    private func activeView(_ view: PlayerView, interactive: Bool) -> some View {
+    private func activeView(table: PlayerView,
+                            decision: PlayerView,
+                            interactive: Bool) -> some View {
         VStack(alignment: .leading, spacing: 12) {
 
-            scoreBar(view)
+            scoreBar(table)
 
-            statusLine(view)
+            statusLine(table)
 
-            if view.phase == .bidding || !view.bidHistory.isEmpty {
-                bidHistoryPanel(records: view.bidHistory, opener: view.opener)
+            if table.phase == .bidding || !table.bidHistory.isEmpty {
+                bidHistoryPanel(records: table.bidHistory, opener: table.opener)
             }
 
-            if let last = view.lastTrick {
+            if let widow = table.widow, !widow.isEmpty {
+                widowPanel(widow, highBidder: table.highBidder)
+            }
+
+            if let last = table.lastTrick {
                 lastTrickPanel(last)
             }
 
-            if let trick = view.currentTrick, !trick.plays.isEmpty {
+            if let trick = table.currentTrick, !trick.plays.isEmpty {
                 trickInProgress(trick)
             }
 
             Divider()
 
-            Text("Your hand (\(view.myHand.count))")
+            Text("Your hand (\(table.myHand.count))")
                 .font(.caption).foregroundStyle(.secondary)
             FlowRow(spacing: 6) {
-                ForEach(keyedHand(view.myHand), id: \.key) { entry in
-                    handCard(entry.card, view: view, interactive: interactive)
+                ForEach(keyedHand(table.myHand), id: \.key) { entry in
+                    handCard(entry.card, decision: decision, interactive: interactive)
                 }
             }
 
             Divider()
 
-            movePanel(view, interactive: interactive)
+            movePanel(decision, interactive: interactive)
 
             Spacer(minLength: 4)
 
-            if !view.completedTricks.isEmpty {
-                historyPanel(view)
+            if !table.completedTricks.isEmpty {
+                historyPanel(table)
             }
         }
-        .animation(.spring(response: 0.34, dampingFraction: 0.80),
-                   value: animationToken(view))
         .opacity(interactive ? 1.0 : 0.97)
     }
 
     @ViewBuilder
-    private func handCard(_ card: Card, view: PlayerView, interactive: Bool) -> some View {
-        let playable = isPlayable(card, in: view)
-        let tappable = interactive && view.phase == .trickPlay && playable
+    private func handCard(_ card: Card,
+                          decision: PlayerView,
+                          interactive: Bool) -> some View {
+        let playable = isPlayable(card, in: decision)
+        let discardSelectable = isDiscardSelectable(card, in: decision)
+        let selected = discardSelection.contains(card)
 
         Group {
-            if tappable {
+            if interactive && decision.phase == .trickPlay && playable {
                 Button {
                     human.submit(.play(card))
                 } label: {
-                    cardChip(card, faded: false)
+                    cardChip(card, faded: false, selected: false)
+                }
+                .buttonStyle(.plain)
+            } else if interactive && decision.phase == .widowDiscard && discardSelectable {
+                Button {
+                    toggleDiscardSelection(card)
+                } label: {
+                    cardChip(card, faded: false, selected: selected)
                 }
                 .buttonStyle(.plain)
             } else {
-                cardChip(card, faded: !playable)
+                let faded = decision.phase == .trickPlay ? !playable
+                    : (decision.phase == .widowDiscard ? !discardSelectable : false)
+                cardChip(card, faded: faded, selected: selected)
             }
         }
         .matchedGeometryEffect(id: cardKey(card), in: cardNS)
@@ -221,22 +261,33 @@ private struct GameBody: View {
     }
 
     private func statusLine(_ view: PlayerView) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 6) {
             Text(view.phase.headline).font(.title3).bold()
-            HStack(spacing: 12) {
-                if let hb = view.highBid, let who = view.highBidder {
-                    Text("High bid $\(hb / 1000)k — \(seatName(who))")
-                }
-                if let t = view.trump {
-                    HStack(spacing: 4) {
-                        Text("Trump:")
-                        Circle().fill(t.swatch).frame(width: 10, height: 10)
-                        Text(t.displayName)
-                    }
-                }
+            if let t = view.trump {
+                trumpBadge(t, prominent: view.phase == .trickPlay)
             }
-            .font(.caption).foregroundStyle(.secondary)
         }
+    }
+
+    private func trumpBadge(_ color: CardColor, prominent: Bool) -> some View {
+        HStack(spacing: 6) {
+            Circle()
+                .fill(color.swatch)
+                .frame(width: prominent ? 14 : 10, height: prominent ? 14 : 10)
+            Text(color.displayName)
+                .font(prominent ? .subheadline : .caption)
+                .fontWeight(prominent ? .bold : .semibold)
+                .foregroundStyle(color.swatch)
+        }
+        .padding(.horizontal, prominent ? 10 : 7)
+        .padding(.vertical, prominent ? 6 : 4)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(color.swatch.opacity(prominent ? 0.22 : 0.14)))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(color.swatch.opacity(prominent ? 0.75 : 0.5), lineWidth: prominent ? 2 : 1))
+        .accessibilityLabel("Trump: \(color.displayName)")
     }
 
     // MARK: Last completed trick
@@ -294,7 +345,13 @@ private struct GameBody: View {
         Text("Your move — \(view.phase.headline)")
             .font(.caption).foregroundStyle(.secondary)
 
-        if !interactive {
+        if view.phase == .handComplete {
+            Text("Hand complete.")
+                .font(.callout).foregroundStyle(.secondary)
+        } else if !interactive && !session.caughtUp {
+            Text("Watching play…")
+                .font(.callout).foregroundStyle(.secondary).italic()
+        } else if !interactive {
             Text("Waiting for other players…")
                 .font(.callout).foregroundStyle(.secondary).italic()
         } else if view.legalMoves.isEmpty {
@@ -314,6 +371,8 @@ private struct GameBody: View {
         } else if view.phase == .trickPlay {
             Text("Tap a card in your hand to play it.")
                 .font(.caption).foregroundStyle(.secondary).italic()
+        } else if view.phase == .widowDiscard {
+            widowDiscardPanel(view)
         } else {
             FlowRow(spacing: 6) {
                 ForEach(Array(view.legalMoves.enumerated()), id: \.offset) { _, move in
@@ -327,6 +386,58 @@ private struct GameBody: View {
     private func bidOptionsOnly(_ view: PlayerView) -> [Move] {
         view.legalMoves.filter {
             if case .bid(.bid) = $0 { return true }; return false
+        }
+    }
+
+    private func widowDiscardPanel(_ view: PlayerView) -> some View {
+        let count = discardSelection.count
+        let ready = count == 3
+        let legalMove = ready ? matchingWidowDiscardMove(selection: discardSelection, in: view) : nil
+
+        return VStack(alignment: .leading, spacing: 8) {
+            Text("Tap three cards in your hand to discard. Tiger, Bull, and Bear cannot be discarded.")
+                .font(.caption).foregroundStyle(.secondary)
+
+            if ready && legalMove == nil {
+                Text("That discard isn't legal — you can only discard money cards when you have no other choice.")
+                    .font(.caption).foregroundStyle(.orange)
+            }
+
+            HStack(spacing: 8) {
+                Text("\(count) of 3 selected")
+                    .font(.callout).monospacedDigit()
+                Spacer()
+                Button("Discard selected") {
+                    if let move = legalMove {
+                        human.submit(move)
+                        discardSelection = []
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(legalMove == nil)
+            }
+        }
+    }
+
+    /// `Move.discardWidow` compares card arrays in order; the UI tracks a set.
+    /// Submit the engine's canonical move so HumanAgent's legality check passes.
+    private func matchingWidowDiscardMove(selection: Set<Card>, in view: PlayerView) -> Move? {
+        view.legalMoves.first { move in
+            guard case .discardWidow(let cards) = move else { return false }
+            return Set(cards) == selection
+        }
+    }
+
+    private func isDiscardSelectable(_ card: Card, in view: PlayerView) -> Bool {
+        guard view.phase == .widowDiscard else { return false }
+        return !card.isSpecial
+    }
+
+    private func toggleDiscardSelection(_ card: Card) {
+        if discardSelection.contains(card) {
+            discardSelection.remove(card)
+        } else if discardSelection.count < 3 {
+            discardSelection.insert(card)
         }
     }
 
@@ -361,8 +472,13 @@ private struct GameBody: View {
     private func handCompleteView(_ s: GameState) -> some View {
         let a = s.matchScore[0, default: 0]
         let b = s.matchScore[1, default: 0]
+        let matchOver = s.matchWinner != nil
         return VStack(spacing: 14) {
-            Text("Hand complete").font(.title2).bold()
+            Text(matchOver ? "Match complete" : "Hand complete").font(.title2).bold()
+            if let winner = s.matchWinner {
+                Text("\(winner == 0 ? teamAName : teamBName) wins!")
+                    .font(.headline).foregroundStyle(.green)
+            }
             Text("\(teamAName): $\(a / 1000)k")
             Text("\(teamBName): $\(b / 1000)k").foregroundStyle(.secondary)
             if !s.bidHistory.isEmpty {
@@ -394,12 +510,13 @@ private struct GameBody: View {
                     .foregroundStyle(.tertiary)
             } else {
                 FlowRow(spacing: 6) {
-                    ForEach(Array(records.enumerated()), id: \.offset) { _, record in
+                    ForEach(Array(records.enumerated()), id: \.offset) { index, record in
+                        let firstMention = !records[..<index].contains { $0.player == record.player }
                         HStack(spacing: 4) {
                             Text(seatShort(record.player))
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
-                            if record.player == opener {
+                            if record.player == opener && firstMention {
                                 Text("opens")
                                     .font(.caption2)
                                     .foregroundStyle(.blue)
@@ -411,11 +528,31 @@ private struct GameBody: View {
                         .padding(.vertical, 5)
                         .background(
                             RoundedRectangle(cornerRadius: 6)
-                                .fill(bidHistoryTint(record, opener: opener).opacity(0.14)))
+                                .fill(bidHistoryTint(record).opacity(0.14)))
                         .overlay(
                             RoundedRectangle(cornerRadius: 6)
-                                .stroke(bidHistoryTint(record, opener: opener).opacity(0.45), lineWidth: 1))
+                                .stroke(bidHistoryTint(record).opacity(0.45), lineWidth: 1))
                     }
+                }
+            }
+        }
+        .padding(8)
+        .background(RoundedRectangle(cornerRadius: 8).fill(.quaternary.opacity(0.5)))
+    }
+
+    private func widowPanel(_ widow: [Card], highBidder: PlayerID?) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Text("Widow").font(.caption).foregroundStyle(.secondary)
+                if let bidder = highBidder {
+                    Text("taken by \(seatName(bidder))")
+                        .font(.caption2).foregroundStyle(.tertiary)
+                }
+                Spacer()
+            }
+            FlowRow(spacing: 6) {
+                ForEach(keyedHand(widow), id: \.key) { entry in
+                    cardChip(entry.card, faded: false)
                 }
             }
         }
@@ -445,8 +582,7 @@ private struct GameBody: View {
         }
     }
 
-    private func bidHistoryTint(_ record: BidRecord, opener: PlayerID) -> Color {
-        if record.player == opener { return .blue }
+    private func bidHistoryTint(_ record: BidRecord) -> Color {
         switch record.action {
         case .pass: return .secondary
         case .bid: return .blue
@@ -495,21 +631,25 @@ private struct GameBody: View {
     }
 
     private func animationToken(_ v: PlayerView) -> Int {
-        v.myHand.count &* 1000
-            &+ (v.currentTrick?.plays.count ?? 0) &* 13
-            &+ v.completedTricks.count
+        var token = v.myHand.count &* 1000
+        token &+= (v.currentTrick?.plays.count ?? 0) &* 13
+        token &+= v.completedTricks.count &* 100
+        token &+= v.bidHistory.count &* 7
+        return token
     }
 
-    private func cardChip(_ card: Card, faded: Bool) -> some View {
+    private func cardChip(_ card: Card, faded: Bool, selected: Bool = false) -> some View {
         Text(card.shortLabel)
             .font(.caption).bold()
             .padding(.horizontal, 8).padding(.vertical, 6)
             .background(
                 RoundedRectangle(cornerRadius: 6)
-                    .fill(card.tint.opacity(faded ? 0.12 : 0.28)))
+                    .fill(card.tint.opacity(faded ? 0.12 : selected ? 0.45 : 0.28)))
             .overlay(
                 RoundedRectangle(cornerRadius: 6)
-                    .stroke(card.tint.opacity(faded ? 0.3 : 0.9), lineWidth: 1))
+                    .stroke(
+                        selected ? Color.accentColor : card.tint.opacity(faded ? 0.3 : 0.9),
+                        lineWidth: selected ? 2.5 : 1))
             .foregroundStyle(faded ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary))
     }
 }

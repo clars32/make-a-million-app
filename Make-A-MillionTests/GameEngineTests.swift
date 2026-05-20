@@ -254,6 +254,7 @@ final class GameEngineTests: XCTestCase {
             passed: [],
             opener: PlayerID(0),
             bidHistory: [BidRecord(player: PlayerID(0), action: .bid(175_000))],
+            widow: nil,
             currentTrick: nil,
             completedTrickCount: 3,
             completedTricks: [
