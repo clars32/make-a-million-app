@@ -29,9 +29,9 @@ extension Card.Rank {
     var label: String {
         switch self {
         case .one: "1"; case .two: "2"; case .three: "3"; case .four: "4"
-        case .money5k: "$5k"; case .seven: "7"; case .eight: "8"
-        case .nine: "9"; case .money10k: "$10k"; case .eleven: "11"
-        case .money15k: "$15k"; case .money30k: "$30k"; case .money40k: "$40k"
+        case .money5k: "$5"; case .seven: "7"; case .eight: "8"
+        case .nine: "9"; case .money10k: "$10"; case .eleven: "11"
+        case .money15k: "$15"; case .money30k: "$30"; case .money40k: "$40"
         }
     }
 }

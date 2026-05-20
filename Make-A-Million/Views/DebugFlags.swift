@@ -1,5 +1,5 @@
 //
-//  BiddingDebugViews.swift
+//  DebugFlags.swift
 //  Make-a-Million
 //
 //  The bidding-visibility pass, view side. Same intent as the trick-history
@@ -26,7 +26,8 @@ import SwiftUI
 
 /// Flip to `false` for real play; `true` while tuning bidding.
 enum BiddingDebug {
-    static let revealHands = true
+    static let revealHands = false
+    static let showTrickHistory = false
 }
 
 // MARK: - Shared seat labels (kept consistent with GameView's convention)

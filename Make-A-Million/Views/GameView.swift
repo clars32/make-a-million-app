@@ -53,7 +53,6 @@ struct GameView: View {
         GameBody(session: session,
                  human: session.human,
                  dealSeed: $dealSeed)
-            .padding()
             .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
@@ -73,6 +72,10 @@ private struct GameBody: View {
 
     /// Cards tapped for widow discard (must pick exactly 3, then confirm).
     @State private var discardSelection: Set<Card> = []
+    
+    @State private var selectedBidIndex: Int = 0
+    
+    @State private var bidHistoryExpanded: Bool = true
 
     private let teamAName = "You + North"
     private let teamBName = "West + East"
@@ -104,27 +107,45 @@ private struct GameBody: View {
     }
 
     var body: some View {
-        Group {
-            if let final = session.finished {
-                handCompleteView(final)
-            } else if let table = tableView {
-                activeView(
-                    table: table,
-                    decision: decisionView ?? table,
-                    interactive: isInteractive)
-            } else {
-                startView
+        ZStack {
+            // A bright, casual gradient background
+            LinearGradient(
+                colors: [Color.teal.opacity(0.2), Color.blue.opacity(0.05)],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            .ignoresSafeArea()
+            Group {
+                if let final = session.finished {
+                    handCompleteView(final)
+                } else if let table = tableView {
+                    activeView(
+                        table: table,
+                        decision: decisionView ?? table,
+                        interactive: isInteractive)
+                } else {
+                    startView
+                }
             }
-        }
-        .onChange(of: pendingTick) { _, _ in
-            if let p = human.pending {
-                lastView = p
-                if p.phase != .widowDiscard { discardSelection = [] }
+            .padding()
+            .onChange(of: pendingTick) { _, _ in
+                if let p = human.pending {
+                    lastView = p
+                    if p.phase != .widowDiscard { discardSelection = [] }
+                }
             }
-        }
-        .onChange(of: displayTick) { _, _ in
-            if let d = session.displayView {
-                lastView = d
+            .onChange(of: displayTick) { _, _ in
+                if let d = session.displayView {
+                    lastView = d
+                }
+            }
+            .onChange(of: tableView?.phase) { _, newPhase in
+                guard let newPhase else { return }
+                if newPhase == .bidding {
+                    bidHistoryExpanded = true
+                } else {
+                    bidHistoryExpanded = false
+                }
             }
         }
     }
@@ -175,11 +196,50 @@ private struct GameBody: View {
 
             Text("Your hand (\(table.myHand.count))")
                 .font(.caption).foregroundStyle(.secondary)
-            FlowRow(spacing: 6) {
-                ForEach(keyedHand(table.myHand), id: \.key) { entry in
-                    handCard(entry.card, decision: decision, interactive: interactive)
+            
+            let hand = keyedHand(table.myHand)
+
+            GeometryReader { proxy in
+                let n = hand.count
+                let cardWidth: CGFloat = 60
+                let rotationPad: CGFloat = 30
+                let usable = max(cardWidth, proxy.size.width - rotationPad)
+                let preferredOverlap: CGFloat = 30
+                let naturalWidth = CGFloat(n) * cardWidth - CGFloat(max(0, n - 1)) * preferredOverlap
+                let spacing: CGFloat = (n <= 1 || naturalWidth <= usable)
+                    ? -preferredOverlap
+                    : (usable - CGFloat(n) * cardWidth) / CGFloat(n - 1)
+                let centerIndex = Double(n - 1) / 2.0
+                
+                // Arc parameters: each step away from center adds `anglePerCard` degrees.
+                let anglePerCard: Double = 3.5
+                let maxAngle = anglePerCard * centerIndex
+                // Pick radius so the outermost dip is a few points — keeps the fan subtle.
+                let outerDip: CGFloat = 12
+                let radius: CGFloat = maxAngle > 0
+                    ? outerDip / CGFloat(1 - cos(maxAngle * .pi / 180))
+                    : 1
+                
+                HStack(spacing: spacing) {
+                    ForEach(Array(hand.enumerated()), id: \.element.key) { index, entry in
+                        let offset = Double(index) - centerIndex
+                        let angleDeg = offset * anglePerCard
+                        let angleRad = angleDeg * .pi / 180
+                        let dip = radius * CGFloat(1 - cos(angleRad))
+                        
+                        handCard(entry.card, decision: decision, interactive: interactive, totalCards: n)
+                            .rotationEffect(.degrees(angleDeg), anchor: .bottom)
+                            .offset(y: dip)
+                            .offset(y: discardSelection.contains(entry.card) ? -8 : 0)
+                            .zIndex(Double(index))
+                    }
                 }
+                .frame(width: proxy.size.width, height: proxy.size.height)
             }
+            .padding(.top, 25)
+            .padding(.bottom, 45)
+            .frame(height: 130)
+            .frame(maxWidth: .infinity)
 
             Divider()
 
@@ -187,7 +247,7 @@ private struct GameBody: View {
 
             Spacer(minLength: 4)
 
-            if !table.completedTricks.isEmpty {
+            if BiddingDebug.showTrickHistory && !table.completedTricks.isEmpty {
                 historyPanel(table)
             }
         }
@@ -197,7 +257,8 @@ private struct GameBody: View {
     @ViewBuilder
     private func handCard(_ card: Card,
                           decision: PlayerView,
-                          interactive: Bool) -> some View {
+                          interactive: Bool,
+                          totalCards: Int) -> some View { // Added parameter
         let playable = isPlayable(card, in: decision)
         let discardSelectable = isDiscardSelectable(card, in: decision)
         let selected = discardSelection.contains(card)
@@ -207,20 +268,19 @@ private struct GameBody: View {
                 Button {
                     human.submit(.play(card))
                 } label: {
-                    cardChip(card, faded: false, selected: false)
+                    cardChip(card, faded: false, selected: false, highlighted: true, totalCards: totalCards)
                 }
                 .buttonStyle(.plain)
             } else if interactive && decision.phase == .widowDiscard && discardSelectable {
                 Button {
                     toggleDiscardSelection(card)
                 } label: {
-                    cardChip(card, faded: false, selected: selected)
+                    cardChip(card, faded: false, selected: selected, totalCards: totalCards)
                 }
                 .buttonStyle(.plain)
             } else {
-                let faded = decision.phase == .trickPlay ? !playable
-                    : (decision.phase == .widowDiscard ? !discardSelectable : false)
-                cardChip(card, faded: faded, selected: selected)
+                let faded = decision.phase == .widowDiscard ? !discardSelectable : false
+                cardChip(card, faded: faded, selected: selected, totalCards: totalCards)
             }
         }
         .matchedGeometryEffect(id: cardKey(card), in: cardNS)
@@ -293,26 +353,23 @@ private struct GameBody: View {
     // MARK: Last completed trick
 
     private func lastTrickPanel(_ last: CompletedTrickInfo) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                Text("Last trick").font(.caption).foregroundStyle(.secondary)
-                Spacer()
-                Text("\(seatName(last.winner)) took it · $\(last.value / 1000)k")
-                    .font(.caption).bold()
-                    .foregroundStyle(last.winner.raw % 2 == 0 ? Color.green : Color.orange)
-            }
-            HStack(spacing: 8) {
-                ForEach(keyedPlays(last.plays), id: \.key) { entry in
-                    VStack(spacing: 2) {
-                        Text(seatShort(entry.play.player))
-                            .font(.caption2)
-                            .foregroundStyle(entry.play.player == last.winner
-                                             ? AnyShapeStyle(.primary)
-                                             : AnyShapeStyle(.tertiary))
-                        cardChip(entry.play.card, faded: entry.play.player != last.winner)
-                    }
+        HStack(spacing: 8) {
+            Text("Last trick")
+                .font(.caption).foregroundStyle(.secondary)
+            ForEach(keyedPlays(last.plays), id: \.key) { entry in
+                VStack(spacing: 1) {
+                    Text(seatShort(entry.play.player))
+                        .font(.system(size: 9))
+                        .foregroundStyle(entry.play.player == last.winner
+                                         ? AnyShapeStyle(.primary)
+                                         : AnyShapeStyle(.tertiary))
+                    miniCardChip(entry.play.card, faded: entry.play.player != last.winner)
                 }
             }
+            Spacer()
+            Text("\(seatShort(last.winner)) · $\(last.value / 1000)k")
+                .font(.caption).bold()
+                .foregroundStyle(last.winner.raw % 2 == 0 ? Color.green : Color.orange)
         }
         .padding(8)
         .background(RoundedRectangle(cornerRadius: 8).fill(.quaternary.opacity(0.5)))
@@ -342,50 +399,151 @@ private struct GameBody: View {
 
     @ViewBuilder
     private func movePanel(_ view: PlayerView, interactive: Bool) -> some View {
-        Text("Your move — \(view.phase.headline)")
-            .font(.caption).foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 10) {
 
-        if view.phase == .handComplete {
-            Text("Hand complete.")
-                .font(.callout).foregroundStyle(.secondary)
-        } else if !interactive && !session.caughtUp {
-            Text("Watching play…")
-                .font(.callout).foregroundStyle(.secondary).italic()
-        } else if !interactive {
-            Text("Waiting for other players…")
-                .font(.callout).foregroundStyle(.secondary).italic()
-        } else if view.legalMoves.isEmpty {
-            Text("Waiting for other players…")
-                .font(.callout).foregroundStyle(.secondary).italic()
-        } else if view.phase == .bidding && bidOptionsOnly(view).isEmpty {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("The bidding has run past you — you can only pass.")
-                    .font(.caption).foregroundStyle(.orange)
-                FlowRow(spacing: 6) {
-                    ForEach(Array(view.legalMoves.enumerated()), id: \.offset) { _, m in
-                        Button(m.label) { human.submit(m) }
-                            .font(.callout).buttonStyle(.bordered)
+            Text("Your move — \(view.phase.headline)")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            if view.phase == .handComplete {
+
+                Text("Hand complete.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+
+            } else if !interactive && !session.caughtUp {
+
+                Text("Watching play…")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .italic()
+
+            } else if !interactive || view.legalMoves.isEmpty {
+
+                Text("Waiting for other players…")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .italic()
+
+            } else if view.phase == .trickPlay {
+
+                Text("Tap a card in your hand to play it.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .italic()
+
+            } else if view.phase == .widowDiscard {
+
+                widowDiscardPanel(view)
+
+            } else {
+
+                let passMove = view.legalMoves.first {
+                    $0.label.lowercased().contains("pass")
+                }
+
+                let bidMoves = view.legalMoves.filter {
+                    !$0.label.lowercased().contains("pass")
+                }
+
+                VStack(spacing: 14) {
+
+                    // Horizontal bid selector
+
+                    ScrollViewReader { proxy in
+
+                        ScrollView(.horizontal, showsIndicators: false) {
+
+                            HStack(spacing: 12) {
+
+                                ForEach(Array(bidMoves.enumerated()), id: \.offset) { index, move in
+
+                                    let isSelected = index == selectedBidIndex
+
+                                    Button {
+
+                                        withAnimation(.spring(response: 0.28,
+                                                              dampingFraction: 0.82)) {
+
+                                            selectedBidIndex = index
+                                            proxy.scrollTo(index, anchor: .center)
+                                        }
+
+                                    } label: {
+
+                                        Text(move.label.replacingOccurrences(of: "Bid ", with: ""))
+                                            .font(.subheadline.weight(.bold))
+                                            .foregroundStyle(.white)
+                                            .padding(.horizontal, 16)
+                                            .frame(height: 44)
+                                            .background {
+
+                                                Capsule(style: .continuous)
+                                                    .fill(
+                                                        isSelected
+                                                        ? Color.blue
+                                                        : Color.blue.opacity(0.28)
+                                                    )
+                                            }
+                                            .scaleEffect(isSelected ? 1.0 : 0.92)
+                                            .opacity(isSelected ? 1.0 : 0.72)
+                                    }
+                                    .buttonStyle(.plain)
+                                    .id(index)
+                                }
+                            }
+                            .padding(.horizontal)
+                            .padding(.vertical, 2)
+                        }
+                        .frame(height: 58)
                     }
-                }
-            }
-        } else if view.phase == .trickPlay {
-            Text("Tap a card in your hand to play it.")
-                .font(.caption).foregroundStyle(.secondary).italic()
-        } else if view.phase == .widowDiscard {
-            widowDiscardPanel(view)
-        } else {
-            FlowRow(spacing: 6) {
-                ForEach(Array(view.legalMoves.enumerated()), id: \.offset) { _, move in
-                    Button(move.label) { human.submit(move) }
-                        .font(.callout).buttonStyle(.bordered)
-                }
-            }
-        }
-    }
 
-    private func bidOptionsOnly(_ view: PlayerView) -> [Move] {
-        view.legalMoves.filter {
-            if case .bid(.bid) = $0 { return true }; return false
+                    // Action row
+
+                    HStack(spacing: 10) {
+
+                        if let passMove {
+
+                            Button {
+
+                                human.submit(passMove)
+
+                            } label: {
+
+                                Text("Pass")
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(.white)
+                                    .frame(width: 90, height: 42)
+                                    .background(
+                                        Capsule(style: .continuous)
+                                            .fill(.gray.opacity(0.75))
+                                    )
+                            }
+                            .buttonStyle(.plain)
+                        }
+
+                        Button {
+
+                            human.submit(bidMoves[selectedBidIndex])
+
+                        } label: {
+
+                            Text("Bid \(bidMoves[selectedBidIndex].label.replacingOccurrences(of: "Bid ", with: ""))")
+                                .font(.subheadline.weight(.bold))
+                                .foregroundStyle(.white)
+                                .frame(maxWidth: .infinity)
+                                .frame(height: 42)
+                                .background(
+                                    Capsule(style: .continuous)
+                                        .fill(Color.blue)
+                                )
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(.horizontal)
+                }
+                .padding(.horizontal)
+            }
         }
     }
 
@@ -496,64 +654,85 @@ private struct GameBody: View {
     }
 
     private func bidHistoryPanel(records: [BidRecord], opener: PlayerID) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 8) {
-                Text("Bid history").font(.caption).foregroundStyle(.secondary)
-                Text("Opener: \(seatName(opener))")
-                    .font(.caption2).bold()
-                    .foregroundStyle(.blue)
-                Spacer()
-            }
-            if records.isEmpty {
-                Text("Waiting for \(seatName(opener)) to open")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-            } else {
-                FlowRow(spacing: 6) {
-                    ForEach(Array(records.enumerated()), id: \.offset) { index, record in
-                        let firstMention = !records[..<index].contains { $0.player == record.player }
-                        HStack(spacing: 4) {
-                            Text(seatShort(record.player))
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                            if record.player == opener && firstMention {
-                                Text("opens")
+        DisclosureGroup(isExpanded: $bidHistoryExpanded) {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 8) {
+                    Text("Opener: \(seatName(opener))")
+                        .font(.caption2).bold()
+                        .foregroundStyle(.blue)
+                    Spacer()
+                }
+                if records.isEmpty {
+                    Text("Waiting for \(seatName(opener)) to open")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                } else {
+                    FlowRow(spacing: 6) {
+                        ForEach(Array(records.enumerated()), id: \.offset) { index, record in
+                            let firstMention = !records[..<index].contains { $0.player == record.player }
+                            HStack(spacing: 4) {
+                                Text(seatShort(record.player))
                                     .font(.caption2)
-                                    .foregroundStyle(.blue)
+                                    .foregroundStyle(.secondary)
+                                if record.player == opener && firstMention {
+                                    Text("opens")
+                                        .font(.caption2)
+                                        .foregroundStyle(.blue)
+                                }
+                                Text(bidHistoryLabel(record.action))
+                                    .font(.caption2).bold().monospacedDigit()
                             }
-                            Text(bidHistoryLabel(record.action))
-                                .font(.caption2).bold().monospacedDigit()
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 5)
+                            .background(
+                                RoundedRectangle(cornerRadius: 6)
+                                    .fill(bidHistoryTint(record).opacity(0.14)))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 6)
+                                    .stroke(bidHistoryTint(record).opacity(0.45), lineWidth: 1))
                         }
-                        .padding(.horizontal, 7)
-                        .padding(.vertical, 5)
-                        .background(
-                            RoundedRectangle(cornerRadius: 6)
-                                .fill(bidHistoryTint(record).opacity(0.14)))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 6)
-                                .stroke(bidHistoryTint(record).opacity(0.45), lineWidth: 1))
                     }
                 }
             }
+            .padding(.top, 4)
+        } label: {
+            bidHistorySummary(records: records, opener: opener)
         }
+        .font(.caption)
         .padding(8)
         .background(RoundedRectangle(cornerRadius: 8).fill(.quaternary.opacity(0.5)))
     }
 
-    private func widowPanel(_ widow: [Card], highBidder: PlayerID?) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
-                Text("Widow").font(.caption).foregroundStyle(.secondary)
-                if let bidder = highBidder {
-                    Text("taken by \(seatName(bidder))")
-                        .font(.caption2).foregroundStyle(.tertiary)
-                }
-                Spacer()
+    private func bidHistorySummary(records: [BidRecord], opener: PlayerID) -> some View {
+        let winning = records.reversed().first { rec in
+            if case .bid = rec.action { return true }; return false
+        }
+        return HStack(spacing: 8) {
+            Text("Bid history").font(.caption).foregroundStyle(.secondary)
+            Spacer()
+            if let w = winning, case .bid(let amount) = w.action {
+                Text("\(seatShort(w.player)) $\(amount / 1000)k")
+                    .font(.caption).bold().monospacedDigit()
+                    .foregroundStyle(.blue)
+            } else {
+                Text("Opener: \(seatName(opener))")
+                    .font(.caption2).foregroundStyle(.tertiary)
             }
-            FlowRow(spacing: 6) {
-                ForEach(keyedHand(widow), id: \.key) { entry in
-                    cardChip(entry.card, faded: false)
-                }
+        }
+    }
+    
+    private func widowPanel(_ widow: [Card], highBidder: PlayerID?) -> some View {
+        HStack(spacing: 8) {
+            Text("Widow")
+                .font(.caption).foregroundStyle(.secondary)
+            ForEach(keyedHand(widow), id: \.key) { entry in
+                miniCardChip(entry.card)
+            }
+            Spacer()
+            if let bidder = highBidder {
+                Text(seatShort(bidder))
+                    .font(.caption).bold()
+                    .foregroundStyle(bidder.raw % 2 == 0 ? Color.green : Color.orange)
             }
         }
         .padding(8)
@@ -638,19 +817,70 @@ private struct GameBody: View {
         return token
     }
 
-    private func cardChip(_ card: Card, faded: Bool, selected: Bool = false) -> some View {
-        Text(card.shortLabel)
-            .font(.caption).bold()
-            .padding(.horizontal, 8).padding(.vertical, 6)
-            .background(
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(card.tint.opacity(faded ? 0.12 : selected ? 0.45 : 0.28)))
+    private func cardChip(_ card: Card, faded: Bool, selected: Bool = false, highlighted: Bool = false, totalCards: Int = 1) -> some View {
+        let safeTint = card.tint == .primary ? Color.black : card.tint
+        let isDense = totalCards > 12
+        
+        return RoundedRectangle(cornerRadius: 12, style: .continuous)
+            .fill(Color.white)
             .overlay(
-                RoundedRectangle(cornerRadius: 6)
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .stroke(
-                        selected ? Color.accentColor : card.tint.opacity(faded ? 0.3 : 0.9),
-                        lineWidth: selected ? 2.5 : 1))
-            .foregroundStyle(faded ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary))
+                        selected ? Color.accentColor
+                            : (highlighted ? Color.green : Color.gray.opacity(0.3)),
+                        lineWidth: (selected || highlighted) ? 2.5 : 0.5
+                    )
+            )
+            .overlay(
+                VStack(alignment: .leading, spacing: 0) {
+                    // Show the full label (e.g., "$30k") instead of just a prefix
+                    Text(card.shortLabel)
+                        .font(.system(size: isDense ? 10 : 13, weight: .heavy, design: .rounded))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.5)
+                    
+                    // Move the indicator to a line below or just beside the text
+                    Circle()
+                        .fill(safeTint)
+                        .frame(width: 6, height: 6)
+                }
+                .padding(.top, 6)
+                .padding(.leading, 6)
+                .foregroundStyle(safeTint),
+                alignment: .topLeading
+            )
+            .shadow(
+                color: .black.opacity(selected ? 0.3 : 0.15),
+                radius: selected ? 8 : 2,
+                y: selected ? 4 : 1
+            )
+            .frame(width: 60, height: 85)
+            .opacity(faded ? 0.5 : 1.0)
+            .scaleEffect(selected ? 1.1 : 1.0)
+            .animation(.spring(response: 0.3, dampingFraction: 0.6), value: selected)
+    }
+    
+    private func miniCardChip(_ card: Card, faded: Bool = false) -> some View {
+        let safeTint = card.tint == .primary ? Color.black : card.tint
+        return RoundedRectangle(cornerRadius: 6, style: .continuous)
+            .fill(Color.white)
+            .overlay(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .stroke(Color.gray.opacity(0.3), lineWidth: 0.5)
+            )
+            .overlay(
+                HStack(spacing: 2) {
+                    Text(card.shortLabel)
+                        .font(.system(size: 9, weight: .heavy, design: .rounded))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.6)
+                    Circle().fill(safeTint).frame(width: 4, height: 4)
+                }
+                .padding(.horizontal, 4)
+                .foregroundStyle(safeTint)
+            )
+            .frame(width: 38, height: 26)
+            .opacity(faded ? 0.5 : 1.0)
     }
 }
 
