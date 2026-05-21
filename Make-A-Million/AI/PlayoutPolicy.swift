@@ -1,53 +1,75 @@
 //
 //  PlayoutPolicy.swift
-//  Make-A-Million
-//
-//  Created by Carter Larsen on 5/20/26.
-//
-
-
-//
-//  PlayoutPolicy.swift
 //  Make-a-Million
 //
-//  A fast, deterministic, rule-respecting policy used to roll a determinized
-//  world forward to handComplete. It is NOT the AI's real decision procedure
-//  — it is the cheap "what would roughly happen next" simulator the Monte
-//  Carlo agent calls thousands of times.
+//  REWRITE — a tactically aware rollout policy. The Monte Carlo agent
+//  calls this thousands of times per decision to roll determinized worlds
+//  forward to handComplete. The previous version was a thin "play low,
+//  take when you can" sketch; this one encodes the bulk of the strategic
+//  principles a strong human player uses, expressed in code that is
+//  cheap enough to be called inside an MCTS rollout.
 //
-//  Why not random rollouts: in trick-taking games with hidden information,
-//  uniform-random playouts are famously weak — they wash out exactly the
-//  tactical signal (who can win this trick, is my partner already winning,
-//  is there money on the table) that the evaluation needs. A small amount of
-//  sane heuristic here is worth far more than more samples of noise. This is
-//  the first and most important tuning surface.
+//  WHY: in trick-taking games with hidden information, uniform-random
+//  rollouts are famously weak — they wash out the very signal MCTS is
+//  trying to estimate (who wins this trick, is there money on the table,
+//  is partner already winning). A smarter playout converges far faster,
+//  *especially* on bidding-relevant evaluation. This is the single
+//  highest-leverage piece of the whole AI stack to tune.
 //
-//  It chooses ONLY from the engine's own legalMoves, so it can never produce
-//  an illegal move and never duplicates a rule.
+//  Note: the playout runs over a DETERMINIZED full-information state.
+//  It is therefore allowed to read every seat's hand — that's the entire
+//  point of MCTS-on-PIMC. The hidden information lives in the SAMPLING
+//  (AIWorld.swift), not in the playout.
 //
-//  ENGINE BINDING: GameState.legalMoves(for:) / .currentTrick / .trump /
-//  .highBidder ; GameState.trickWinner(_:trump:) ; Card.effectiveColor /
-//  .isSpecial / .isMoney ; Seats.team(of:) ; Move cases.
+//  PRINCIPLES ENCODED (mapped to user's list):
+//
+//   1. "$40k first time a color is led" — when leading and the color is
+//      virgin (no completed trick has been led in it), lead our $40k of
+//      a side-suit if we hold it.
+//   2. "Lead others out of trump" — as the declarer with trump length
+//      and the Tiger still loose, lead low trump to draw it.
+//   3. "Big money protection" — never volunteer big trump money before
+//      the Tiger is accounted for; never lead it AT ALL until pulled.
+//   4. "Don't waste $30k after partner's $40k" — when forced to follow,
+//      we dump LOW (only follow with a money card if it's the smallest
+//      we have of the color).
+//   5. "Dump money on partner's safe trick" — when partner is winning
+//      and the win is safe (no over-trump risk from yet-to-play seats),
+//      shed our highest money of the led color.
+//   6. "Slip big money on opponent's already-resolving trick" — when
+//      forced and partner can't help, dump small; save big for the
+//      tricks you can actually take.
+//   7. "Bull doubles partner's money trick", "Bear cancels opponent's
+//      money trick" — Bull on partner-winning, Bear on opponent-winning
+//      tricks with money on the table.
+//   8. "Try to void" — when discarding and you have only one of a side
+//      suit, get rid of it (used at the leading-low fallback).
+//
+//  ENGINE BINDING: GameState.{phase, currentTrick, trump, highBidder,
+//  hands, capturedByTeam, completedTricks, toAct, legalMoves(for:)} ;
+//  GameState.trickWinner(_:trump:) ; Trick.ledColor(trump:) ;
+//  Card.{effectiveColor, isSpecial, isMoney, moneyValue} ; Seats.{team,
+//  count, all, next}.
 //
 
 import Foundation
 
 enum PlayoutPolicy {
 
-    /// Choose a move for `seat` in `state`. Total: always returns a legal
-    /// move (engine guarantees a non-empty set on turn).
+    /// Pick a legal move for `seat` in `state`. Guarantees: returns a
+    /// move from `state.legalMoves(for: seat)`. Total over all phases.
     static func move(in state: GameState, seat: PlayerID) -> Move {
         let moves = state.legalMoves(for: seat)
         precondition(!moves.isEmpty,
-                     "PlayoutPolicy asked to move with no legal moves — "
-                     + "engine invariant violated (called at \(state.phase)?)")
+                     "PlayoutPolicy asked to move with no legal moves "
+                     + "(phase = \(state.phase))")
         if moves.count == 1 { return moves[0] }
 
         switch state.phase {
         case .bidding:
-            // Determinized worlds are constructed at/after the declarer is
-            // known, so rollouts effectively never bid. Pass keeps the loop
-            // total if one ever does.
+            // Rollouts are constructed at/after the declarer is known, so
+            // we should never have to bid here. Pass if we can; otherwise
+            // the cheapest action keeps the loop total.
             return moves.first { $0.isPass } ?? moves[0]
 
         case .misdealDecision:
@@ -57,21 +79,19 @@ enum PlayoutPolicy {
             return cheapestDiscard(moves)
 
         case .namingTrump:
-            // Dead in normal play: every real trump choice is made by
-            // MonteCarloAgent (which evaluates all four colors), never by a
-            // rollout — bidding and discard both name trump *before* rolling
-            // out. This is only a safety fallback so the policy stays total.
+            // Real trump choice is always made by the agent (which evaluates
+            // all four colors), never inside a rollout. Safety fallback.
             return moves[0]
 
         case .trickPlay:
             return trickMove(in: state, seat: seat, legal: moves)
 
         case .handComplete:
-            return moves[0]                                  // unreachable
+            return moves[0]
         }
     }
 
-    // MARK: Trick play — the part that actually matters
+    // MARK: - Trick play (the part that matters)
 
     private static func trickMove(in state: GameState,
                                   seat: PlayerID,
@@ -82,129 +102,332 @@ enum PlayoutPolicy {
 
         let trick = state.currentTrick
         let onTable = trick?.plays ?? []
+        let isLeading = onTable.isEmpty
+        let amDeclarer = (seat == state.highBidder)
 
-        // Leading: lead a low non-special card; hang onto money and trump.
-        if onTable.isEmpty {
-            let nonSpecial = plays.filter { !$0.isSpecial && !$0.isMoney }
-            let pickFrom = nonSpecial.isEmpty ? plays : nonSpecial
-            let c = pickFrom.min { strength($0, led: nil, trump: trump)
-                                 < strength($1, led: nil, trump: trump) }!
-            return .play(c)
+        if isLeading {
+            return .play(chooseLead(plays: plays,
+                                    state: state,
+                                    seat: seat,
+                                    trump: trump,
+                                    amDeclarer: amDeclarer))
+        } else {
+            return .play(chooseFollow(plays: plays,
+                                      onTable: onTable,
+                                      trickLeader: trick?.leader ?? seat,
+                                      state: state,
+                                      seat: seat,
+                                      trump: trump))
         }
+    }
 
-        // Following / discarding. Work out who is currently winning.
-        let led = trick?.ledColor(trump: trump)
-        let provisional = Trick(leader: trick?.leader ?? seat, plays: onTable)
-        let currentWinner = GameState.trickWinner(provisional, trump: trump)
-        let partnerWinning = Seats.team(of: currentWinner) == Seats.team(of: seat)
+    // MARK: - Leading
 
-        // EFFECTIVE money on the trick, with Bull/Bear applied. A
-        // Bear-locked trick is worth $0 no matter how much money is
-        // stacked on it, so the "defend partner's winning trick" branch
-        // below should treat it as worthless and shed junk instead of
-        // piling cash onto a trick that scores zero anyway. This is the
-        // root of the Bear-on-table bug.
-        let effectiveMoneyOnTable = currentEffectiveMoney(on: onTable)
+    private static func chooseLead(plays: [Card],
+                                   state: GameState,
+                                   seat: PlayerID,
+                                   trump: CardColor,
+                                   amDeclarer: Bool) -> Card {
 
-        // Seats that still play AFTER me in this trick. Cards I commit can
-        // be topped by any of these. We treat THEIR sampled hands as truth
-        // for this determinized world — the MC layer averages over many
-        // samples, so reading state.hands here is the right move, not a
-        // peek at hidden information.
-        let playedSeats = Set(onTable.map(\.player))
-        let remainingSeats = Seats.all.filter { $0 != seat && !playedSeats.contains($0) }
-        let remainingOpponents = remainingSeats.filter {
-            Seats.team(of: $0) != Seats.team(of: seat)
-        }
-
-        // Cards that, if played now, would take the trick.
-        func wouldWin(_ c: Card) -> Bool {
-            var t = onTable
-            t.append(PlayedCard(player: seat, card: c))
-            let w = GameState.trickWinner(
-                Trick(leader: trick?.leader ?? seat, plays: t), trump: trump)
-            return w == seat
-        }
-
-        // True if any remaining opponent holds a card that beats `c` in
-        // this trick's strength order. The "$30k into $40k" bug is exactly
-        // this: $30k wouldWin() right now, but $40k is in an opponent's
-        // sampled hand and will arrive later.
-        func couldBeTopped(_ c: Card) -> Bool {
-            let myStr = strength(c, led: led, trump: trump)
-            for opp in remainingOpponents {
-                guard let hand = state.hands[opp] else { continue }
-                for other in hand where strength(other, led: led, trump: trump) > myStr {
-                    return true
+        // Helper: has this color been led in any completed trick?
+        func colorLed(_ color: CardColor) -> Bool {
+            for t in state.completedTricks {
+                for pc in t.plays {
+                    if pc.card.effectiveColor(trump: trump) == color {
+                        return true
+                    }
                 }
             }
             return false
         }
 
-        if partnerWinning && effectiveMoneyOnTable == 0 {
-            // Partner has a trick that's currently worth nothing — empty
-            // of money OR Bear-locked. Dump the lowest card; don't add
-            // money that's about to score zero.
-            return .play(lowest(plays, led: led, trump: trump))
+        // How much trump is still out among other seats?
+        let trumpStillOut: Int = {
+            var count = 0
+            for (s, hand) in state.hands where s != seat {
+                count += hand.filter { $0.effectiveColor(trump: trump) == trump }.count
+            }
+            return count
+        }()
+        let tigerStillOut: Bool = state.hands.contains { (s, hand) in
+            s != seat && hand.contains(where: { if case .tiger = $0 { return true }; return false })
         }
 
-        let allWinners = plays.filter(wouldWin)
+        let myTrump = plays.filter { $0.effectiveColor(trump: trump) == trump }
+        let myNonTrump = plays.filter { $0.effectiveColor(trump: trump) != trump && !$0.isSpecial }
 
-        // Money cards count as winners only if they can't still be
-        // beaten by a remaining opponent. Non-money winners are kept
-        // unconditionally: even if they get topped we've lost a low
-        // card, not a money card.
-        let winners = allWinners.filter { c in
-            if !c.isMoney { return true }
-            return !couldBeTopped(c)
+        // ---- 1. Pull trumps (declarer principle).
+        //
+        // As declarer with strong trump and the Tiger or large trump still
+        // loose, lead a LOW trump — not money, not the Tiger, just our
+        // smallest trump card — to draw out opponents'.
+        if amDeclarer && trumpStillOut >= 2 && myTrump.count >= 4 {
+            let lowTrump = myTrump
+                .filter { !$0.isMoney && !$0.isSpecial }
+                .min { rankOf($0) < rankOf($1) }
+            if let c = lowTrump { return c }
         }
 
-        if !winners.isEmpty && (effectiveMoneyOnTable > 0 || !partnerWinning) {
-            // Take it as cheaply as possible, BUT prefer a non-money winner
-            // when one exists. Without this preference, raw `strength` sort
-            // picks $5k (rank 4) over a 7 (rank 5) — committing money for
-            // no extra capturing power.
-            let nonMoneyWinners = winners.filter { !$0.isMoney }
-            let pool = nonMoneyWinners.isEmpty ? winners : nonMoneyWinners
-            let c = pool.min { strength($0, led: led, trump: trump)
-                             < strength($1, led: led, trump: trump) }!
-            return .play(c)
+        // ---- 2. $40k of a virgin side suit.
+        //
+        // First time a color is led, the $40k is unlikely to be trumped
+        // (opponents probably aren't void yet) and locks in $40k+.
+        for color in CardColor.allCases where color != trump {
+            if colorLed(color) { continue }
+            for c in myNonTrump where c.effectiveColor(trump: trump) == color {
+                if case .colored(_, let r) = c, r == .money40k { return c }
+            }
         }
 
-        // Can't or shouldn't win: shed the least valuable card.
-        return .play(lowest(plays, led: led, trump: trump))
+        // ---- 3. Cash a sure winner in a side suit.
+        //
+        // If I hold a card that no other seat can beat IN ITS COLOR and
+        // no one is yet void in that color, lead it. This applies to
+        // mid-rank money like $30k once the $40k of that color is gone.
+        if let safe = sureWinnerNonTrump(plays: plays, state: state, seat: seat, trump: trump) {
+            return safe
+        }
+
+        // ---- 4. If trumps are pulled, cash high trump.
+        if trumpStillOut == 0 && !tigerStillOut {
+            // Highest trump first — Tiger or top trump money.
+            if let high = myTrump.max(by: { rankOf($0) < rankOf($1) }) {
+                return high
+            }
+        }
+
+        // ---- 5. Default: lead a low non-money, non-special card.
+        //
+        // Prefer a card from our shortest non-trump suit (heading toward
+        // a void) — "try to void another color".
+        if let lowSafe = lowSafeLead(plays: myNonTrump, hand: state.hands[seat] ?? []) {
+            return lowSafe
+        }
+
+        // ---- 6. Last resort: cheapest of whatever's legal.
+        return plays.min { strength($0, led: nil, trump: trump)
+                         < strength($1, led: nil, trump: trump) }!
     }
 
-    // MARK: Small heuristics
-
-    /// Effective money currently on the trick, with Bull/Bear modifiers
-    /// applied to what is on the table NOW. Mirrors GameState.trickValue
-    /// for the partial-trick case. The "last modifier wins" rule applies
-    /// even mid-trick — if Bear is the most recent of Bull/Bear played,
-    /// the trick is worth zero until/unless Bull arrives later. Future
-    /// Bull/Bear plays are accounted for by the rollout itself, not by
-    /// this snapshot.
-    private static func currentEffectiveMoney(on plays: [PlayedCard]) -> Int {
-        let base = plays.reduce(0) { $0 + $1.card.moneyValue }
-        var lastModifier: Card? = nil
-        for pc in plays {
-            if case .bull = pc.card { lastModifier = .bull }
-            if case .bear = pc.card { lastModifier = .bear }
+    /// Returns my lowest non-money, non-special card, preferring one from
+    /// my shortest non-trump suit (so a follow-up trump-lead voids it).
+    private static func lowSafeLead(plays: [Card], hand: [Card]) -> Card? {
+        let candidates = plays.filter { !$0.isMoney && !$0.isSpecial }
+        guard !candidates.isEmpty else { return nil }
+        // Group by raw color (these are all .colored cards).
+        var bySuit: [CardColor: Int] = [:]
+        for c in hand {
+            if case .colored(let col, _) = c { bySuit[col, default: 0] += 1 }
         }
-        switch lastModifier {
-        case .bull: return base * 2
-        case .bear: return 0
-        default:    return base
+        return candidates.min { a, b in
+            let sa = a.suitColor.map { bySuit[$0] ?? 0 } ?? 99
+            let sb = b.suitColor.map { bySuit[$0] ?? 0 } ?? 99
+            if sa != sb { return sa < sb }                  // shorter suit first
+            return rankOf(a) < rankOf(b)                    // then lowest rank
         }
     }
 
-    /// Mirrors the engine's trick-winner strength scheme so the policy's
-    /// notion of "high/low" matches who actually wins. This is the only
-    /// place the AI echoes winner logic, and only for ordering — never for
-    /// legality, which always comes from the engine.
-    private static func strength(_ card: Card,
-                                 led: CardColor?,
-                                 trump: CardColor) -> Int {
+    /// A non-trump card I hold that no other seat can beat in its color
+    /// AND no other seat is known void in that color (so they'll follow,
+    /// not trump). Used to cash a clean $40k/$30k.
+    private static func sureWinnerNonTrump(plays: [Card],
+                                           state: GameState,
+                                           seat: PlayerID,
+                                           trump: CardColor) -> Card? {
+        let nonTrump = plays.filter {
+            !$0.isSpecial && $0.effectiveColor(trump: trump) != trump
+        }
+        for card in nonTrump.sorted(by: { rankOf($0) > rankOf($1) }) {
+            guard let color = card.effectiveColor(trump: trump) else { continue }
+            // Is anything higher of that color still in another seat?
+            let myRank = rankOf(card)
+            var beaten = false
+            for (s, hand) in state.hands where s != seat {
+                for c in hand {
+                    if c.effectiveColor(trump: trump) == color && rankOf(c) > myRank {
+                        beaten = true; break
+                    }
+                }
+                if beaten { break }
+            }
+            if beaten { continue }
+            // Anyone void in this color? Then they can trump or sluff.
+            var canBeTrumped = false
+            for (s, hand) in state.hands where s != seat {
+                let hasColor = hand.contains { $0.effectiveColor(trump: trump) == color }
+                let hasTrump = hand.contains { $0.effectiveColor(trump: trump) == trump }
+                if !hasColor && hasTrump { canBeTrumped = true; break }
+            }
+            if canBeTrumped { continue }
+            return card
+        }
+        return nil
+    }
+
+    // MARK: - Following
+
+    private static func chooseFollow(plays: [Card],
+                                     onTable: [PlayedCard],
+                                     trickLeader: PlayerID,
+                                     state: GameState,
+                                     seat: PlayerID,
+                                     trump: CardColor) -> Card {
+        let provisional = Trick(leader: trickLeader, plays: onTable)
+        let currentWinner = GameState.trickWinner(provisional, trump: trump)
+        let partnerWinning = Seats.team(of: currentWinner) == Seats.team(of: seat)
+                          && currentWinner != seat
+        let moneyOnTable = onTable.reduce(0) { $0 + $1.card.moneyValue }
+        let led = provisional.ledColor(trump: trump)
+        let amLastToPlay = onTable.count == Seats.count - 1
+
+        // Can I follow the led color? (Engine has already filtered to
+        // legal moves, but knowing this changes our strategy.)
+        let mustFollow = led != nil
+            && plays.contains { $0.effectiveColor(trump: trump) == led }
+        let followingPool = mustFollow
+            ? plays.filter { $0.effectiveColor(trump: trump) == led }
+            : plays
+
+        func wouldWin(_ c: Card) -> Bool {
+            var t = onTable
+            t.append(PlayedCard(player: seat, card: c))
+            return GameState.trickWinner(
+                Trick(leader: trickLeader, plays: t), trump: trump) == seat
+        }
+
+        // ---- Partner already winning.
+        if partnerWinning {
+            // Is partner's win safe? Safe iff:
+            //   (a) I am last to play (no over-trump possible), OR
+            //   (b) no one yet-to-play can over-trump or over-rank.
+            let safe = amLastToPlay || partnerWinSafe(state: state,
+                                                       seat: seat,
+                                                       trickLeader: trickLeader,
+                                                       onTable: onTable,
+                                                       trump: trump)
+            if safe {
+                // BULL doubles a money trick. Play it if we can.
+                if !mustFollow, let bull = plays.first(where: { if case .bull = $0 { return true }; return false }),
+                   moneyOnTable > 0 {
+                    return bull
+                }
+                // Dump money — but PRESERVE secondary controllers
+                // (principle 8: don't dump $30k on partner's $40k; keep
+                // it to win the next round of that color).
+                let myTops = topOfEachColorInHand(state.hands[seat] ?? [], trump: trump)
+                let nonControllers = followingPool.filter { c in
+                    guard let color = c.effectiveColor(trump: trump) else { return true }
+                    return myTops[color] != c
+                }
+                let dumpFrom = nonControllers.isEmpty ? followingPool : nonControllers
+                if let dump = highestMoneyDump(dumpFrom) {
+                    return dump
+                }
+                // No money worth dumping — shed lowest non-special.
+                // CRITICAL: never let Bear sneak through here, it would
+                // cancel partner's money trick.
+                let safePool = dumpFrom.filter { !$0.isSpecial }
+                let lowPool = safePool.isEmpty ? dumpFrom : safePool
+                if let lo = lowPool.min(by: { strength($0, led: led, trump: trump)
+                                            < strength($1, led: led, trump: trump) }) {
+                    return lo
+                }
+            }
+            // Not safe — fall through to "try to win or shed low" logic.
+        }
+
+        // ---- I can take the trick AND it's worth taking.
+        let winners = followingPool.filter(wouldWin)
+        let worthTaking = moneyOnTable >= 5_000 || !partnerWinning
+        if !winners.isEmpty && worthTaking {
+            // Take it as cheaply as possible — don't waste the Tiger
+            // on a low trick.
+            let cheapest = winners.min { strength($0, led: led, trump: trump)
+                                       < strength($1, led: led, trump: trump) }!
+            return cheapest
+        }
+
+        // ---- Can't / shouldn't win. Bear off an opponent's money trick.
+        if !partnerWinning && moneyOnTable >= 10_000 {
+            if !mustFollow, let bear = plays.first(where: { if case .bear = $0 { return true }; return false }) {
+                return bear
+            }
+        }
+
+        // ---- Shed the least valuable card.
+        return cheapestShed(followingPool, led: led, trump: trump)
+    }
+
+    /// Is partner's currently-winning card safe from over-trump / over-rank
+    /// by anyone who has not yet played?
+    private static func partnerWinSafe(state: GameState,
+                                       seat: PlayerID,
+                                       trickLeader: PlayerID,
+                                       onTable: [PlayedCard],
+                                       trump: CardColor) -> Bool {
+        // Who's still to play (excluding me)?
+        let played = Set(onTable.map(\.player))
+        let yetToPlay = Seats.all.filter {
+            !played.contains($0) && $0 != seat
+        }
+        if yetToPlay.isEmpty { return true }
+
+        let provisional = Trick(leader: trickLeader, plays: onTable)
+        let winner = GameState.trickWinner(provisional, trump: trump)
+        let winnerCard = onTable.first { $0.player == winner }!.card
+        let winnerStrength = strength(winnerCard,
+                                      led: provisional.ledColor(trump: trump),
+                                      trump: trump)
+        for s in yetToPlay {
+            guard let hand = state.hands[s] else { continue }
+            for c in hand {
+                if strength(c, led: provisional.ledColor(trump: trump),
+                            trump: trump) > winnerStrength {
+                    return false
+                }
+            }
+        }
+        return true
+    }
+
+    /// Highest money card in a pool, excluding Tiger.
+    private static func highestMoneyDump(_ pool: [Card]) -> Card? {
+        let money = pool.filter { $0.isMoney }
+        guard !money.isEmpty else { return nil }
+        return money.max { rankOf($0) < rankOf($1) }
+    }
+
+    /// "Lowest" = least costly to give up: non-money first, then lowest
+    /// strength.
+    private static func cheapestShed(_ cards: [Card],
+                                     led: CardColor?,
+                                     trump: CardColor) -> Card {
+        cards.min { a, b in
+            if a.isMoney != b.isMoney { return !a.isMoney }
+            if a.isSpecial != b.isSpecial { return !a.isSpecial }
+            return strength(a, led: led, trump: trump)
+                 < strength(b, led: led, trump: trump)
+        }!
+    }
+
+    // MARK: - Discard fallback
+
+    private static func cheapestDiscard(_ moves: [Move]) -> Move {
+        // Cheapest by (money $$, then rank). The engine already disallows
+        // specials and unnecessary money discards.
+        func cost(_ m: Move) -> Int {
+            guard case .discardWidow(let cs) = m else { return .max }
+            return cs.reduce(0) { $0 + $1.moneyValue * 1000 + rankOf($1) }
+        }
+        return moves.min { cost($0) < cost($1) } ?? moves[0]
+    }
+
+    // MARK: - Shared strength + helpers
+
+    /// Mirrors GameState.trickWinner. Higher = stronger.
+    static func strength(_ card: Card,
+                         led: CardColor?,
+                         trump: CardColor) -> Int {
         switch card {
         case .tiger: return 10_000
         case .colored(let c, let r):
@@ -215,31 +438,39 @@ enum PlayoutPolicy {
         }
     }
 
-    /// "Lowest" = least costly to give up: non-money before money, low
-    /// strength before high.
-    private static func lowest(_ cards: [Card],
-                               led: CardColor?,
-                               trump: CardColor) -> Card {
-        cards.min { a, b in
-            if a.isMoney != b.isMoney { return !a.isMoney }
-            return strength(a, led: led, trump: trump)
-                 < strength(b, led: led, trump: trump)
-        }!
-    }
-
-    private static func cheapestDiscard(_ moves: [Move]) -> Move {
-        // Legality already forbids needless money discards; among the legal
-        // 3-card discards, drop the one carrying the least money / lowest
-        // ranks.
-        func cost(_ m: Move) -> Int {
-            guard case .discardWidow(let cs) = m else { return .max }
-            return cs.reduce(0) { $0 + $1.moneyValue * 1000 + rankValue($1) }
+    static func rankOf(_ card: Card) -> Int {
+        switch card {
+        case .tiger: return 13
+        case .colored(_, let r): return r.rawValue
+        case .bull, .bear: return -1
         }
-        return moves.min { cost($0) < cost($1) } ?? moves[0]
     }
 
-    private static func rankValue(_ c: Card) -> Int {
-        if case .colored(_, let r) = c { return r.rawValue }
-        return 0
+    /// Per effective color, the highest card the seat holds. Used to
+    /// identify "controllers" that should NOT be dumped onto a partner's
+    /// safe trick (principle 8).
+    static func topOfEachColorInHand(_ hand: [Card],
+                                     trump: CardColor) -> [CardColor: Card] {
+        var top: [CardColor: Card] = [:]
+        for c in hand {
+            guard let color = c.effectiveColor(trump: trump) else { continue }
+            if let cur = top[color] {
+                if rankOf(c) > rankOf(cur) { top[color] = c }
+            } else {
+                top[color] = c
+            }
+        }
+        return top
+    }
+}
+
+// MARK: - Tiny conveniences
+
+private extension Card {
+    /// The literal color (suit) of a colored card, irrespective of trump.
+    /// nil for Tiger/Bull/Bear.
+    var suitColor: CardColor? {
+        if case .colored(let c, _) = self { return c }
+        return nil
     }
 }

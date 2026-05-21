@@ -85,9 +85,12 @@ final class NetSession: ObservableObject, RemoteSeatDelegate {
 
     // MARK: - Configuration
 
-    private let hostSeat: PlayerID
-    private let hostName: String
-    private let hostHuman: HumanAgent
+    enum HostRole {
+        case player(seat: PlayerID, human: HumanAgent, name: String)
+        case tabletopSpectator
+    }
+
+    private var hostRole: HostRole
     private let botDifficulty: MonteCarloAgent.Difficulty
 
     // MARK: - Per-seat wiring (filled by `seat(_:as:)`)
@@ -118,18 +121,17 @@ final class NetSession: ObservableObject, RemoteSeatDelegate {
 
     private var runTask: Task<Void, Never>?
 
-    init(hostSeat: PlayerID = PlayerID(0),
-         hostName: String = "You",
-         hostHuman: HumanAgent,
-         botDifficulty: MonteCarloAgent.Difficulty = .medium) {
-        self.hostSeat = hostSeat
-        self.hostName = hostName
-        self.hostHuman = hostHuman
+    init(hostRole: HostRole, botDifficulty: MonteCarloAgent.Difficulty = .medium) {
+        self.hostRole = hostRole
         self.botDifficulty = botDifficulty
-        // Host seat is always present and connected.
-        assignments[hostSeat] = SeatAssignment(
-            seat: hostSeat, kind: .host, name: hostName,
-            remote: nil, botSeed: nil)
+        
+        // If the host is a player, lock in their seat immediately.
+        // If tabletopSpectator, ALL seats remain empty for peers/bots.
+        if case .player(let seat, _, let name) = hostRole {
+            assignments[seat] = SeatAssignment(
+                seat: seat, kind: .host, name: name,
+                remote: nil, botSeed: nil)
+        }
         publishSeats()
     }
 
@@ -139,10 +141,19 @@ final class NetSession: ObservableObject, RemoteSeatDelegate {
     /// per remote player from the lobby flow, before `start(...)`. Safe to
     /// re-call if the lobby allows changing seat assignments.
     func seat(_ seat: PlayerID, asRemote remote: RemoteSeat, name: String) {
-        precondition(seat != hostSeat, "Host seat is reserved for the local player")
+        if case .player(let hostSeat, _, _) = hostRole {
+            precondition(seat != hostSeat,
+                         "Host seat is reserved for the local player")
+        }
+
         assignments[seat] = SeatAssignment(
-            seat: seat, kind: .remote, name: name,
-            remote: remote, botSeed: nil)
+            seat: seat,
+            kind: .remote,
+            name: name,
+            remote: remote,
+            botSeed: nil
+        )
+
         publishSeats()
     }
 
@@ -156,6 +167,19 @@ final class NetSession: ObservableObject, RemoteSeatDelegate {
         }
         publishSeats()
     }
+    
+    // Add this to NetSession.swift to allow the UI to update the role before starting
+    func setHostRole(_ role: HostRole) {
+        self.hostRole = role
+        // Re-publish seats based on the new role
+        if case .player(let seat, _, let name) = role {
+            assignments[seat] = SeatAssignment(seat: seat, kind: .host, name: name, remote: nil, botSeed: nil)
+        } else {
+            // Free up seat 0 if switching to tabletop
+            assignments[PlayerID(0)] = nil
+        }
+        publishSeats()
+    }
 
     // MARK: - Start a hand
 
@@ -165,7 +189,6 @@ final class NetSession: ObservableObject, RemoteSeatDelegate {
         guard runTask == nil else { return }
         fillEmptySeatsWithBots(seedBase: dealSeed)
 
-        // Start every remote channel's receive loop and announce seating.
         let names = seatNamesArray()
         for assn in assignments.values where assn.kind == .remote {
             if let r = assn.remote {
@@ -178,13 +201,23 @@ final class NetSession: ObservableObject, RemoteSeatDelegate {
         }
 
         let agents = buildAgents()
-        // Every seat that needs to *see* the table is a spectator:
-        // every remote seat, and the host's own seat (so the host's
-        // bound GameSession can animate).
+        
+        // Every remote seat needs observation frames
         var spectatorSeats = assignments.values
             .filter { $0.kind == .remote }
             .map(\.seat)
-        spectatorSeats.append(hostSeat)
+            
+        switch hostRole {
+        case .player(let seat, _, _):
+            spectatorSeats.append(seat) // Host needs their own frames
+        case .tabletopSpectator:
+            // Tabletop needs frames to render the central table.
+            // We ask the engine for Seat 0's frames, and we will strip
+            // the hidden data out in `dispatchObservation`.
+            if !spectatorSeats.contains(PlayerID(0)) {
+                spectatorSeats.append(PlayerID(0))
+            }
+        }
 
         phase = .running
 
@@ -221,17 +254,24 @@ final class NetSession: ObservableObject, RemoteSeatDelegate {
 
     // MARK: - Frame dispatch
 
-    /// Called for every (seat, view) pair the runner emits. Only seats
-    /// with a live RemoteSeat actually need a frame over the wire — the
-    /// host's own frames are forwarded into a bound GameSession (if
-    /// any) so the host's local table animates, and bot seats don't
-    /// watch anything.
     private func dispatchObservation(seat: PlayerID, view: PlayerView) async {
-        // Host's own seat — feed the local GameSession if bound.
-        if seat == hostSeat {
-            forwardHostFrame(view)
-            return
+        // Handle local host UI observation
+        switch hostRole {
+        case .player(let hostSeat, _, _):
+            if seat == hostSeat {
+                forwardHostFrame(view)
+                return // Host seat doesn't have a remote channel
+            }
+        case .tabletopSpectator:
+            // Forward the redacted view to the iPad's tabletop UI
+            if seat == PlayerID(0) {
+                forwardHostFrame(view.asSpectator())
+                // DO NOT return early here! Seat 0 might be a connected
+                // iPhone peer that *also* needs this frame unredacted.
+            }
         }
+
+        // Forward to remote peers
         guard let assn = assignments[seat],
               assn.kind == .remote,
               let r = assn.remote else { return }
@@ -247,7 +287,10 @@ final class NetSession: ObservableObject, RemoteSeatDelegate {
             }
             switch assn.kind {
             case .host:
-                return hostHuman
+                guard case .player(_, let human, _) = hostRole else {
+                    preconditionFailure("Seat assigned as host, but hostRole is spectator")
+                }
+                return human
             case .remote:
                 guard let r = assn.remote else {
                     preconditionFailure("Remote seat \(seat.raw) has no channel")
@@ -392,7 +435,7 @@ final class NetSession: ObservableObject, RemoteSeatDelegate {
 //   • sessionCancelled — the session is shutting down; propagate by
 //                        returning a benign "pass" if legal, otherwise
 //                        any legal move (the runner will be cancelled
-//                        before its return is observed).
+//                        before its return isC observed).
 //
 // Kept private to NetSession.swift on purpose — its contract leans on
 // NetSession internals.

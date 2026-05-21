@@ -25,14 +25,32 @@ struct ClientLobbyView: View {
     }
 
     var body: some View {
-        ZStack {
-            background
-            VStack(alignment: .leading, spacing: 18) {
-                header
-                content
-                Spacer()
+        Group {
+            // Check if we are connected and have an active game frame
+            if case .connected(let peerName) = multipeer.state, let session = clientSession, session.displayView != nil {
+                ClientGameView(
+                    playerName: playerName,
+                    hostName: peerName.displayName, // Pass the host's peer name here
+                    session: session,
+                    onExit: {
+                        session.stop()
+                        multipeer.stop()
+                        clientSession = nil
+                        onExit()
+                    }
+                )
+            } else {
+                // Otherwise, show the normal Lobby UI
+                ZStack {
+                    background
+                    VStack(alignment: .leading, spacing: 18) {
+                        header
+                        content
+                        Spacer()
+                    }
+                    .padding()
+                }
             }
-            .padding()
         }
         .onAppear { multipeer.startBrowsing() }
         .onDisappear { multipeer.stop() }
@@ -161,32 +179,19 @@ struct ClientLobbyView: View {
     }
 
     private func connectedView(peerName: String) -> some View {
-        Group {
-            if let session = clientSession {
-                ClientGameView(
-                    session: session,
-                    onExit: {
-                        session.stop()
-                        multipeer.stop()
-                        clientSession = nil
-                        onExit()
-                    })
-            } else {
-                VStack(spacing: 14) {
-                    ProgressView().scaleEffect(1.2)
-                    Text("Joining \(peerName)…")
-                        .font(.headline)
-                }
-                .frame(maxWidth: .infinity)
-                .padding(20)
-                .onAppear {
-                    guard clientSession == nil, let t = multipeer.transport else { return }
-                    let session = ClientSession(transport: t)
-                    clientSession = session
-                    session.start()
-                    session.introduce(name: playerName)
-                }
-            }
+        VStack(spacing: 14) {
+            ProgressView().scaleEffect(1.2)
+            Text("Waiting for host to start…")
+                .font(.headline)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(20)
+        .onAppear {
+            guard clientSession == nil, let t = multipeer.transport else { return }
+            let session = ClientSession(transport: t)
+            clientSession = session
+            session.start()
+            session.introduce(name: playerName)
         }
     }
 

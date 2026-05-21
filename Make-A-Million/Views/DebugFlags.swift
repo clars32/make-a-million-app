@@ -26,7 +26,7 @@ import SwiftUI
 
 /// Flip to `false` for real play; `true` while tuning bidding.
 enum BiddingDebug {
-    static let revealHands = false
+    static let revealHands = true
     static let showTrickHistory = false
 }
 

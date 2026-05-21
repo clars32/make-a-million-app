@@ -91,6 +91,8 @@ struct GameBody: View {
     // NEW: Dynamic Names
     let seatNames: [String]
     
+    var isControllerMode: Bool = false
+    
     let submit: (Move) -> Void
     let startAction: (() -> Void)?
     let dealAnother: (() -> Void)?
@@ -177,92 +179,92 @@ struct GameBody: View {
     // MARK: Active hand
 
     private func activeView(table: PlayerView, decision: PlayerView, interactive: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            
-            // ADD: A dedicated top row for the controls
-            HStack {
-                Spacer()
-                // This is where your End/Leave button (passed from wrapper) lives
-                if let dealAction = startAction { /* ... */ }
-            }
-            
-            scoreBar(table) // Scores are now safely below the top row
-            statusLine(table)
-
-            if table.phase == .bidding || !table.bidHistory.isEmpty {
-                bidHistoryPanel(records: table.bidHistory, opener: table.opener)
-            }
-
-            if let widow = table.widow, !widow.isEmpty {
-                widowPanel(widow, highBidder: table.highBidder)
-            }
-
-            if let last = table.lastTrick {
-                lastTrickPanel(last)
-            }
-
-            if let trick = table.currentTrick, !trick.plays.isEmpty {
-                trickInProgress(trick)
-            }
-
-            Divider()
-
-            Text("Your hand (\(table.myHand.count))")
-                .font(.caption).foregroundStyle(.secondary)
-
-            let hand = keyedHand(table.myHand)
-
-            GeometryReader { proxy in
-                let n = hand.count
-                let cardWidth: CGFloat = 60
-                let rotationPad: CGFloat = 30
-                let usable = max(cardWidth, proxy.size.width - rotationPad)
-                let preferredOverlap: CGFloat = 30
-                let naturalWidth = CGFloat(n) * cardWidth - CGFloat(max(0, n - 1)) * preferredOverlap
-                let spacing: CGFloat = (n <= 1 || naturalWidth <= usable)
+        // Wrap in a ScrollView when in landscape controller mode to protect vertical space safety
+        ScrollView(isControllerMode ? .vertical : []) {
+            VStack(alignment: .leading, spacing: 12) {
+                
+                statusLine(table) // Crucial instructions stay fully visible
+                
+                if !isControllerMode {
+                    scoreBar(table)
+                    
+                    if table.phase == .bidding || !table.bidHistory.isEmpty {
+                        bidHistoryPanel(records: table.bidHistory, opener: table.opener)
+                    }
+                    
+                    if let widow = table.widow, !widow.isEmpty {
+                        widowPanel(widow, highBidder: table.highBidder)
+                    }
+                    
+                    if let last = table.lastTrick {
+                        lastTrickPanel(last)
+                    }
+                    
+                    if let trick = table.currentTrick, !trick.plays.isEmpty {
+                        trickInProgress(trick)
+                    }
+                    
+                    Divider()
+                }
+                
+                // Hands and Action buttons remain completely unobstructed below
+                Text("Your hand (\(table.myHand.count))")
+                    .font(.caption).foregroundStyle(.secondary)
+                
+                let hand = keyedHand(table.myHand)
+                
+                GeometryReader { proxy in
+                    let n = hand.count
+                    let cardWidth: CGFloat = 60
+                    let rotationPad: CGFloat = 30
+                    let usable = max(cardWidth, proxy.size.width - rotationPad)
+                    let preferredOverlap: CGFloat = 30
+                    let naturalWidth = CGFloat(n) * cardWidth - CGFloat(max(0, n - 1)) * preferredOverlap
+                    let spacing: CGFloat = (n <= 1 || naturalWidth <= usable)
                     ? -preferredOverlap
                     : (usable - CGFloat(n) * cardWidth) / CGFloat(n - 1)
-                let centerIndex = Double(n - 1) / 2.0
-
-                let anglePerCard: Double = 3.5
-                let maxAngle = anglePerCard * centerIndex
-                let outerDip: CGFloat = 12
-                let radius: CGFloat = maxAngle > 0
+                    let centerIndex = Double(n - 1) / 2.0
+                    
+                    let anglePerCard: Double = 3.5
+                    let maxAngle = anglePerCard * centerIndex
+                    let outerDip: CGFloat = 12
+                    let radius: CGFloat = maxAngle > 0
                     ? outerDip / CGFloat(1 - cos(maxAngle * .pi / 180))
                     : 1
-
-                HStack(spacing: spacing) {
-                    ForEach(Array(hand.enumerated()), id: \.element.key) { index, entry in
-                        let offset = Double(index) - centerIndex
-                        let angleDeg = offset * anglePerCard
-                        let angleRad = angleDeg * .pi / 180
-                        let dip = radius * CGFloat(1 - cos(angleRad))
-
-                        handCard(entry.card, decision: decision, interactive: interactive, totalCards: n)
-                            .rotationEffect(.degrees(angleDeg), anchor: .bottom)
-                            .offset(y: dip)
-                            .offset(y: discardSelection.contains(entry.card) ? -8 : 0)
-                            .zIndex(Double(index))
+                    
+                    HStack(spacing: spacing) {
+                        ForEach(Array(hand.enumerated()), id: \.element.key) { index, entry in
+                            let offset = Double(index) - centerIndex
+                            let angleDeg = offset * anglePerCard
+                            let angleRad = angleDeg * .pi / 180
+                            let dip = radius * CGFloat(1 - cos(angleRad))
+                            
+                            handCard(entry.card, decision: decision, interactive: interactive, totalCards: n)
+                                .rotationEffect(.degrees(angleDeg), anchor: .bottom)
+                                .offset(y: dip)
+                                .offset(y: discardSelection.contains(entry.card) ? -8 : 0)
+                                .zIndex(Double(index))
+                        }
                     }
+                    .frame(width: proxy.size.width, height: proxy.size.height)
                 }
-                .frame(width: proxy.size.width, height: proxy.size.height)
+                .padding(.top, 25)
+                .padding(.bottom, 45)
+                .frame(height: 130)
+                .frame(maxWidth: .infinity)
+                
+                Divider()
+                
+                movePanel(decision, interactive: interactive)
+                
+                Spacer(minLength: 4)
+                
+                if BiddingDebug.showTrickHistory && !table.completedTricks.isEmpty {
+                    historyPanel(table)
+                }
             }
-            .padding(.top, 25)
-            .padding(.bottom, 45)
-            .frame(height: 130)
-            .frame(maxWidth: .infinity)
-
-            Divider()
-
-            movePanel(decision, interactive: interactive)
-
-            Spacer(minLength: 4)
-
-            if BiddingDebug.showTrickHistory && !table.completedTricks.isEmpty {
-                historyPanel(table)
-            }
+            .opacity(interactive ? 1.0 : 0.97)
         }
-        .opacity(interactive ? 1.0 : 0.97)
     }
 
     @ViewBuilder

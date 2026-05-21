@@ -55,8 +55,10 @@
 				AI/AIArena.swift,
 				AI/AIMoveSupport.swift,
 				AI/AIWorld.swift,
+				AI/HandEvaluator.swift,
 				AI/MonteCarloAgent.swift,
 				AI/PlayoutPolicy.swift,
+				AI/TableInference.swift,
 				Assets.xcassets,
 				GameEngine/Cards.swift,
 				GameEngine/GameEngine.swift,
@@ -73,6 +75,8 @@
 				Views/GameView.swift,
 				Views/HostGameView.swift,
 				Views/HostLobbyView.swift,
+				"Views/PlayerView+Spectator.swift",
+				Views/TabletopGameView.swift,
 			);
 			target = 4367CAF12FBBBFE10005A97E /* Make-A-Million */;
 		};
@@ -96,8 +100,10 @@
 				AI/AIArena.swift,
 				AI/AIMoveSupport.swift,
 				AI/AIWorld.swift,
+				AI/HandEvaluator.swift,
 				AI/MonteCarloAgent.swift,
 				AI/PlayoutPolicy.swift,
+				AI/TableInference.swift,
 				Assets.xcassets,
 				GameEngine/Cards.swift,
 				GameEngine/GameEngine.swift,
@@ -115,6 +121,8 @@
 				Views/GameView.swift,
 				Views/HostGameView.swift,
 				Views/HostLobbyView.swift,
+				"Views/PlayerView+Spectator.swift",
+				Views/TabletopGameView.swift,
 			);
 			target = 4367CB082FBBBFE30005A97E /* Make-A-MillionUITests */;
 		};

@@ -7,6 +7,8 @@ import SwiftUI
 
 struct ClientGameView: View {
 
+    let playerName: String
+    let hostName: String // Track who the host is
     @ObservedObject var session: ClientSession
     let onExit: () -> Void
 
@@ -29,15 +31,10 @@ struct ClientGameView: View {
         return GameBody.animationToken(d)
     }
 
-    private var endOfHandSnapshot: HandCompleteSnapshot? {
-        guard case .handOver(let winner) = session.phase,
-              let live = lastView ?? session.displayView else { return nil }
-        return HandCompleteSnapshot(
-            matchScore: live.matchScore,
-            matchWinner: winner,
-            bidHistory: live.bidHistory,
-            opener: live.opener,
-            debugReveal: nil)
+    // AUTOMATIC DETECTION: If the host isn't playing at seat 0, it's a tabletop game!
+    private var isControllerMode: Bool {
+        guard let firstSeatName = session.seatNames.first else { return false }
+        return firstSeatName != hostName
     }
 
     var body: some View {
@@ -47,26 +44,40 @@ struct ClientGameView: View {
                 decisionView: decisionView ?? tableView,
                 isInteractive: isInteractive,
                 caughtUp: session.caughtUp,
-                endOfHandSnapshot: endOfHandSnapshot,
+                endOfHandSnapshot: nil,
                 pendingTick: pendingTick,
                 displayTick: displayTick,
-                seatNames: session.seatNames.isEmpty ? ["South", "West", "North", "East"] : session.seatNames, // NEW: Networked Names
+                seatNames: session.seatNames.isEmpty ? ["South", "West", "North", "East"] : session.seatNames,
+                isControllerMode: isControllerMode, // Pass auto-detected state
                 submit: { move in session.submit(move) },
                 startAction: nil,
                 dealAnother: nil,
                 dealSeed: 0,
                 onCaptureLastView: { lastView = $0 })
+            .padding(.top, isControllerMode ? 20 : 0) // Visual comfort padding for landscape layout
 
+            // Sleek utility overlay top bar
             VStack {
                 HStack {
+                    if isControllerMode {
+                        Text("🎮 Controller Mode")
+                            .font(.caption).bold()
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 5)
+                            .background(.ultraThinMaterial, in: Capsule())
+                    }
+                    
                     Spacer()
+                    
                     Button("Leave") {
                         session.stop()
                         onExit()
                     }
                     .buttonStyle(.bordered)
-                    .padding()
+                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8))
                 }
+                .padding()
                 Spacer()
             }
 
@@ -75,6 +86,24 @@ struct ClientGameView: View {
             } else if session.phase == .disconnected {
                 disconnectedOverlay
             }
+        }
+        // Force Landscape Orientation when playing on a Tabletop
+        .onAppear {
+            if isControllerMode {
+                setOrientation(.landscapeRight)
+            }
+        }
+        .onDisappear {
+            if isControllerMode {
+                setOrientation(.portrait)
+            }
+        }
+    }
+
+    // Native geometry request handler for orientation management
+    private func setOrientation(_ orientation: UIInterfaceOrientationMask) {
+        if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene {
+            windowScene.requestGeometryUpdate(.iOS(interfaceOrientations: orientation))
         }
     }
 
