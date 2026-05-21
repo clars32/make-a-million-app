@@ -2,15 +2,17 @@
 //  ContentView.swift
 //  Make-a-Million
 //
-//  Template root. It does nothing but host GameView so the app entry point
-//  (Make_A_MillionApp) stays untouched. All real UI lives in Views/GameView.
+//  Thin shell that hosts AppRoot. The actual mode selection (Solo,
+//  Host, Join) and lobby flow lives there; ContentView stays minimal so
+//  the app entry point (Make_A_MillionApp) doesn't need to know about
+//  any of it.
 //
 
 import SwiftUI
 
 struct ContentView: View {
     var body: some View {
-        GameView()
+        AppRoot()
     }
 }
 

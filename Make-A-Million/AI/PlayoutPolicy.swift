@@ -1,5 +1,13 @@
 //
 //  PlayoutPolicy.swift
+//  Make-A-Million
+//
+//  Created by Carter Larsen on 5/20/26.
+//
+
+
+//
+//  PlayoutPolicy.swift
 //  Make-a-Million
 //
 //  A fast, deterministic, rule-respecting policy used to roll a determinized
@@ -89,7 +97,25 @@ enum PlayoutPolicy {
         let provisional = Trick(leader: trick?.leader ?? seat, plays: onTable)
         let currentWinner = GameState.trickWinner(provisional, trump: trump)
         let partnerWinning = Seats.team(of: currentWinner) == Seats.team(of: seat)
-        let moneyOnTable = onTable.reduce(0) { $0 + $1.card.moneyValue }
+
+        // EFFECTIVE money on the trick, with Bull/Bear applied. A
+        // Bear-locked trick is worth $0 no matter how much money is
+        // stacked on it, so the "defend partner's winning trick" branch
+        // below should treat it as worthless and shed junk instead of
+        // piling cash onto a trick that scores zero anyway. This is the
+        // root of the Bear-on-table bug.
+        let effectiveMoneyOnTable = currentEffectiveMoney(on: onTable)
+
+        // Seats that still play AFTER me in this trick. Cards I commit can
+        // be topped by any of these. We treat THEIR sampled hands as truth
+        // for this determinized world — the MC layer averages over many
+        // samples, so reading state.hands here is the right move, not a
+        // peek at hidden information.
+        let playedSeats = Set(onTable.map(\.player))
+        let remainingSeats = Seats.all.filter { $0 != seat && !playedSeats.contains($0) }
+        let remainingOpponents = remainingSeats.filter {
+            Seats.team(of: $0) != Seats.team(of: seat)
+        }
 
         // Cards that, if played now, would take the trick.
         func wouldWin(_ c: Card) -> Bool {
@@ -100,16 +126,48 @@ enum PlayoutPolicy {
             return w == seat
         }
 
-        if partnerWinning && moneyOnTable == 0 {
-            // Partner has a worthless trick under control — dump the lowest.
+        // True if any remaining opponent holds a card that beats `c` in
+        // this trick's strength order. The "$30k into $40k" bug is exactly
+        // this: $30k wouldWin() right now, but $40k is in an opponent's
+        // sampled hand and will arrive later.
+        func couldBeTopped(_ c: Card) -> Bool {
+            let myStr = strength(c, led: led, trump: trump)
+            for opp in remainingOpponents {
+                guard let hand = state.hands[opp] else { continue }
+                for other in hand where strength(other, led: led, trump: trump) > myStr {
+                    return true
+                }
+            }
+            return false
+        }
+
+        if partnerWinning && effectiveMoneyOnTable == 0 {
+            // Partner has a trick that's currently worth nothing — empty
+            // of money OR Bear-locked. Dump the lowest card; don't add
+            // money that's about to score zero.
             return .play(lowest(plays, led: led, trump: trump))
         }
 
-        let winners = plays.filter(wouldWin)
-        if !winners.isEmpty && (moneyOnTable > 0 || !partnerWinning) {
-            // Take it as cheaply as possible.
-            let c = winners.min { strength($0, led: led, trump: trump)
-                                < strength($1, led: led, trump: trump) }!
+        let allWinners = plays.filter(wouldWin)
+
+        // Money cards count as winners only if they can't still be
+        // beaten by a remaining opponent. Non-money winners are kept
+        // unconditionally: even if they get topped we've lost a low
+        // card, not a money card.
+        let winners = allWinners.filter { c in
+            if !c.isMoney { return true }
+            return !couldBeTopped(c)
+        }
+
+        if !winners.isEmpty && (effectiveMoneyOnTable > 0 || !partnerWinning) {
+            // Take it as cheaply as possible, BUT prefer a non-money winner
+            // when one exists. Without this preference, raw `strength` sort
+            // picks $5k (rank 4) over a 7 (rank 5) — committing money for
+            // no extra capturing power.
+            let nonMoneyWinners = winners.filter { !$0.isMoney }
+            let pool = nonMoneyWinners.isEmpty ? winners : nonMoneyWinners
+            let c = pool.min { strength($0, led: led, trump: trump)
+                             < strength($1, led: led, trump: trump) }!
             return .play(c)
         }
 
@@ -118,6 +176,27 @@ enum PlayoutPolicy {
     }
 
     // MARK: Small heuristics
+
+    /// Effective money currently on the trick, with Bull/Bear modifiers
+    /// applied to what is on the table NOW. Mirrors GameState.trickValue
+    /// for the partial-trick case. The "last modifier wins" rule applies
+    /// even mid-trick — if Bear is the most recent of Bull/Bear played,
+    /// the trick is worth zero until/unless Bull arrives later. Future
+    /// Bull/Bear plays are accounted for by the rollout itself, not by
+    /// this snapshot.
+    private static func currentEffectiveMoney(on plays: [PlayedCard]) -> Int {
+        let base = plays.reduce(0) { $0 + $1.card.moneyValue }
+        var lastModifier: Card? = nil
+        for pc in plays {
+            if case .bull = pc.card { lastModifier = .bull }
+            if case .bear = pc.card { lastModifier = .bear }
+        }
+        switch lastModifier {
+        case .bull: return base * 2
+        case .bear: return 0
+        default:    return base
+        }
+    }
 
     /// Mirrors the engine's trick-winner strength scheme so the policy's
     /// notion of "high/low" matches who actually wins. This is the only

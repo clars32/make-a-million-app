@@ -2,6 +2,14 @@
 //  GameSession.swift
 //  Make-A-Million
 //
+//  Created by Carter Larsen on 5/20/26.
+//
+
+
+//
+//  GameSession.swift
+//  Make-A-Million
+//
 //  Created by Carter Larsen on 5/19/26.
 //
 
@@ -119,7 +127,7 @@ final class GameSession: ObservableObject {
                     dealSeed: dealSeed,
                     spectator: spectator,
                     onView: { [weak self] view in
-                        await self?.receiveFrame(view)
+                        await self?.receivePublicFrame(view)
                     })
                 await MainActor.run {
                     self.finishHand(final)
@@ -148,7 +156,9 @@ final class GameSession: ObservableObject {
     // MARK: - Buffer
 
     /// Awaited by GameRunner so frames are queued before the next agent acts.
-    private func receiveFrame(_ view: PlayerView) {
+    /// Also called by NetSession's host-session bridge when the engine
+    /// lives on NetSession instead of inside GameSession itself.
+    func receivePublicFrame(_ view: PlayerView) {
         if isRedundantWithDisplay(view) { return }
 
         if let live = effectiveTableView(),
@@ -255,7 +265,11 @@ final class GameSession: ObservableObject {
         }
     }
 
-    private func finishHand(_ final: GameState) {
+    /// Mark the hand finished and transition the UI through the end-of-
+    /// hand settle. Called locally by GameSession's own runner in the
+    /// solo flow, and called externally by NetSession's bridge when the
+    /// engine lives on NetSession (host networked flow).
+    func finishHand(_ final: GameState) {
         drainTask?.cancel()
         drainTask = nil
         draining = false
@@ -289,8 +303,16 @@ final class GameSession: ObservableObject {
                         try? await clock.sleep(until: until)
                     }
                     pauseBotFramesUntil = nil
+                    // The sleep above suspended the main actor. finishHand,
+                    // reset, or another start can have run during the gap
+                    // and emptied the queue. Re-check before we touch it.
+                    if Task.isCancelled { return }
+                    if queue.isEmpty || holdPresentation { break }
                 }
 
+                // Belt-and-braces guard — any future await above this line
+                // could also empty the queue, so make removeFirst() honest.
+                guard !queue.isEmpty else { break }
                 switch queue.removeFirst() {
                 case .show(let view):
                     publishFrame(view)
@@ -314,6 +336,7 @@ final class GameSession: ObservableObject {
 
     private func drainQueueOnMainActor() async {
         while !queue.isEmpty {
+            guard !queue.isEmpty else { break }
             switch queue.removeFirst() {
             case .show(let view):
                 publishFrame(view)
