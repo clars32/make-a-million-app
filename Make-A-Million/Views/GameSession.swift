@@ -66,9 +66,21 @@ final class GameSession: ObservableObject {
 
     /// Pacing knobs. Per-move cadence and the end-of-hand settle. These are
     /// the dials to turn if the game feels too slow or too frantic.
-    private let frameInterval: Duration = .milliseconds(500)
-    private let trickSettleInterval: Duration = .milliseconds(850)
-    private let settleInterval: Duration = .milliseconds(700)
+    private let frameInterval: Duration = .milliseconds(800)
+    private let trickSettleInterval: Duration = .milliseconds(1300)
+    private let settleInterval: Duration = .milliseconds(1000)
+    
+    // MARK: Match progression
+
+    /// All hands in one match share this base; each hand uses (base + handIndex)
+    /// so deals are deterministic across the match without all looking the same.
+    private var matchSeedBase: UInt64 = 0
+    /// 0 for the first hand of a match, increments by one per hand.
+    private var handIndex: UInt64 = 0
+    /// Rotates left each completed hand.
+    private var currentDealer: PlayerID = PlayerID(0)
+    /// Cumulative match score carried into the next hand.
+    private var currentCarry: [Int: Int] = [0: 0, 1: 0]
 
     /// The runner emits much faster than we can pace; without a cap the queue
     /// replays the whole hand at the end. Keep only recent frames.
@@ -80,6 +92,10 @@ final class GameSession: ObservableObject {
     private enum QueueItem {
         case show(PlayerView)
         case pauseTrickSettle
+        /// Tail of the queue when the hand has ended. The drain plays
+        /// every preceding frame (notably the last trick's settle) and
+        /// only THEN flips `finished`, so the deciding trick is seen.
+        case handFinishedMarker(GameState)
     }
 
     private var queue: [QueueItem] = []
@@ -96,7 +112,35 @@ final class GameSession: ObservableObject {
         human.coordinator = self
     }
 
-    func start(dealSeed: UInt64) {
+    /// Begin a fresh match. Resets dealer rotation, hand index, and carry
+    /// score, then kicks off the first hand.
+    func startNewMatch(dealSeed: UInt64) {
+        guard !running else { return }
+        matchSeedBase = dealSeed
+        handIndex = 0
+        currentDealer = PlayerID(0)
+        currentCarry = [0: 0, 1: 0]
+        runHand()
+    }
+
+    /// Continue an in-progress match into the next hand. Carries the
+    /// previous hand's match score forward and rotates the dealer left.
+    /// No-op if a hand is still running or the match is already decided.
+    func startNextHand() {
+        guard !running,
+              let final = finished,
+              final.matchWinner == nil
+        else { return }
+        currentCarry = final.matchScore
+        currentDealer = Seats.next(currentDealer)
+        handIndex &+= 1
+        runHand()
+    }
+
+    /// Launch one hand with the current match-progression state. Shared by
+    /// both entry points so dealer/seed/carry handling lives in exactly one
+    /// place.
+    private func runHand() {
         guard !running else { return }
         running = true
         finished = nil
@@ -108,23 +152,30 @@ final class GameSession: ObservableObject {
         pauseBotFramesUntil = nil
         pendingFinal = nil
 
+        // Hand-unique seed derived from the match base. Agents seed off it
+        // too so their RNGs vary hand to hand (otherwise West would always
+        // make the same "random" jump-bid decisions).
+        let handSeed = matchSeedBase &+ handIndex
         let agents: [PlayerAgent] = [
             human,
             MonteCarloAgent(name: "West",  difficulty: botDifficulty,
-                            seed: dealSeed &+ 101),
+                            seed: handSeed &+ 101),
             MonteCarloAgent(name: "North", difficulty: botDifficulty,
-                            seed: dealSeed &+ 202),
+                            seed: handSeed &+ 202),
             MonteCarloAgent(name: "East",  difficulty: botDifficulty,
-                            seed: dealSeed &+ 303),
+                            seed: handSeed &+ 303),
         ]
         let runner = GameRunner(agents: agents)
         let spectator = self.spectator
+        let dealer = currentDealer
+        let carry = currentCarry
 
         runTask = Task {
             do {
                 let final = try await runner.playHand(
-                    dealer: PlayerID(0),
-                    dealSeed: dealSeed,
+                    dealer: dealer,
+                    dealSeed: handSeed,
+                    carryScore: carry,
                     spectator: spectator,
                     onView: { [weak self] view in
                         await self?.receivePublicFrame(view)
@@ -151,6 +202,11 @@ final class GameSession: ObservableObject {
         finished = nil
         running = false
         caughtUp = true
+        // Match-progression state — wipe so the next start is a fresh match.
+        matchSeedBase = 0
+        handIndex = 0
+        currentDealer = PlayerID(0)
+        currentCarry = [0: 0, 1: 0]
     }
 
     // MARK: - Buffer
@@ -229,7 +285,8 @@ final class GameSession: ObservableObject {
 
     private func isRedundantWithDisplay(_ view: PlayerView) -> Bool {
         guard let live = displayView else { return false }
-        return live.myHand.count == view.myHand.count
+        return live.phase == view.phase
+            && live.myHand.count == view.myHand.count
             && live.currentTrick?.plays.count == view.currentTrick?.plays.count
             && live.completedTricks.count == view.completedTricks.count
             && live.bidHistory.count == view.bidHistory.count
@@ -269,23 +326,16 @@ final class GameSession: ObservableObject {
     /// hand settle. Called locally by GameSession's own runner in the
     /// solo flow, and called externally by NetSession's bridge when the
     /// engine lives on NetSession (host networked flow).
+    ///
+    /// Do NOT clear the queue or publish the final view here. The last
+    /// trick's settle frames (4th-card show + pause + resolved frame)
+    /// were enqueued by `receivePublicFrame` an instant before this call
+    /// and MUST play out — otherwise the player never sees who took the
+    /// deciding trick. We append a marker; the drain processes it last
+    /// and flips `finished` then.
     func finishHand(_ final: GameState) {
-        drainTask?.cancel()
-        drainTask = nil
-        draining = false
-        queue.removeAll()
         pendingFinal = final
-        publishFrame(final.view(for: spectator))
-        caughtUp = true
-
-        drainTask = Task { @MainActor in
-            try? await Task.sleep(for: settleInterval)
-            if Task.isCancelled { return }
-            if self.pendingFinal != nil {
-                self.finished = final
-                self.running = false
-            }
-        }
+        enqueue(.handFinishedMarker(final))
     }
 
     private func startDrainIfNeeded() {
@@ -322,6 +372,18 @@ final class GameSession: ObservableObject {
                     }
                 case .pauseTrickSettle:
                     try? await Task.sleep(for: trickSettleInterval)
+                case .handFinishedMarker(let final):
+                    // Hold on the cleared/resolved last-trick frame so
+                    // the lastTrick panel registers, then flip to the
+                    // end-of-hand panel. `pendingFinal` guards against
+                    // reset() racing during the sleep.
+                    try? await Task.sleep(for: settleInterval)
+                    if Task.isCancelled { return }
+                    if self.pendingFinal != nil {
+                        publishFrame(final.view(for: spectator))
+                        self.finished = final
+                        self.running = false
+                    }
                 }
             }
 
@@ -345,6 +407,13 @@ final class GameSession: ObservableObject {
                 }
             case .pauseTrickSettle:
                 try? await Task.sleep(for: trickSettleInterval)
+            case .handFinishedMarker(let final):
+                try? await Task.sleep(for: settleInterval)
+                if self.pendingFinal != nil {
+                    publishFrame(final.view(for: spectator))
+                    self.finished = final
+                    self.running = false
+                }
             }
         }
     }

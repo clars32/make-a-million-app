@@ -75,9 +75,9 @@ final class ClientSession: ObservableObject {
 
     // MARK: - Pacing knobs (mirror GameSession)
 
-    private let frameInterval: Duration       = .milliseconds(500)
-    private let trickSettleInterval: Duration = .milliseconds(850)
-    private let settleInterval: Duration      = .milliseconds(700)
+    private let frameInterval: Duration       = .milliseconds(800)
+    private let trickSettleInterval: Duration = .milliseconds(1300)
+    private let settleInterval: Duration      = .milliseconds(1000)
     private let maxQueuedItems = 12
 
     // MARK: - Wire
@@ -314,7 +314,8 @@ final class ClientSession: ObservableObject {
 
     private func isRedundantWithDisplay(_ view: PlayerView) -> Bool {
         guard let live = displayView else { return false }
-        return live.myHand.count == view.myHand.count
+        return live.phase == view.phase
+            && live.myHand.count == view.myHand.count
             && live.currentTrick?.plays.count == view.currentTrick?.plays.count
             && live.completedTricks.count == view.completedTricks.count
             && live.bidHistory.count == view.bidHistory.count

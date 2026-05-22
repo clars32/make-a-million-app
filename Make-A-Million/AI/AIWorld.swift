@@ -27,7 +27,7 @@
 //    CompletedTrickInfo.{leader,plays,winner}
 //    GameState memberwise init (declaration order):
 //      (dealSeed,dealer,hands,widow,phase,toAct,highBid,highBidder,
-//       passed,bidHistory,trump,misdealEligible,currentTrick,
+//       passed,bidHistory,trump,misdealRule,currentTrick,
 //       completedTricks,capturedByTeam,matchScore,dealtHands,dealtWidow)
 //
 //    PlayerView.bidHistory : [BidRecord]  (public; opener also on the view)
@@ -244,7 +244,8 @@ struct Determinizer {
     /// `dealer` are not public; we use placeholders because no reachable
     /// transition from bidding-onward consults them (misdeal redeal and the
     /// degenerate all-pass branch are the only readers, and rollouts never
-    /// enter them). `misdealEligible` is likewise post-bidding-irrelevant.
+    /// enter them). `misdealRule: .disabled` makes redeals impossible in
+    /// the rollout, which is the correct rollout semantics.
     private func rebuild(hands: [PlayerID: [Card]]) -> GameState? {
         // Public completed tricks → engine Tricks + capturedByTeam grouping.
         var completed: [Trick] = []
@@ -270,7 +271,7 @@ struct Determinizer {
             // carried faithfully from the view.
             bidHistory: view.bidHistory,
             trump: view.trump,
-            misdealEligible: false,
+            misdealRule: .disabled,
             currentTrick: view.currentTrick,
             completedTricks: completed,
             capturedByTeam: captured,

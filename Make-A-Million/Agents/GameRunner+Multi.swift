@@ -34,7 +34,7 @@
 import Foundation
 
 extension GameRunner {
-
+    
     /// Play one hand to completion, emitting one PlayerView per spectator
     /// after the initial deal and after every applied move.
     ///
@@ -46,35 +46,54 @@ extension GameRunner {
     func playHand(dealer: PlayerID,
                   dealSeed: UInt64,
                   carryScore: [Int: Int] = [0: 0, 1: 0],
+                  misdealRule: MisdealRule = .standard,
                   spectators: [PlayerID],
                   onSeatView: (@Sendable (PlayerID, PlayerView) async -> Void)?)
-                  async throws -> GameState {
-
+    async throws -> GameState {
+        
         var state = GameState.newHand(dealer: dealer,
                                       seed: dealSeed,
-                                      carryScore: carryScore)
-
+                                      carryScore: carryScore,
+                                      misdealRule: misdealRule)
+        
         // Initial deal frame — one per spectator.
         if let sink = onSeatView {
             for s in spectators { await sink(s, state.view(for: s)) }
         }
-
+        
         // Same safety ceiling as the single-spectator path. A hand has a
         // bounded number of legal transitions; busting the ceiling means
         // a state-machine bug, not legitimate play.
         var steps = 0
         let maxSteps = 1_000
-
+        
         while state.phase != .handComplete {
+            // Auto-misdeal: hold the notice visible, then apply the forced
+            // redeal. All spectators see the misdeal frame and the post-
+            // redeal frame, exactly as if it were any other transition.
+            if state.phase == .misdealDecision {
+                try? await Task.sleep(for: .milliseconds(2200))
+                state = try state.applying(.callMisdeal, by: state.toAct)
+                if let sink = onSeatView {
+                    for s in spectators { await sink(s, state.view(for: s)) }
+                }
+                steps += 1
+                if steps > maxSteps {
+                    throw RunnerError.didNotTerminate(afterSteps: steps,
+                                                      stuckIn: state.phase)
+                }
+                continue
+            }
+            
             let mover = state.toAct
             let view = state.view(for: mover)
             let move = await agents[mover.raw].chooseMove(from: view)
             state = try state.applying(move, by: mover)
-
+            
             if let sink = onSeatView {
                 for s in spectators { await sink(s, state.view(for: s)) }
             }
-
+            
             steps += 1
             if steps > maxSteps {
                 throw RunnerError.didNotTerminate(afterSteps: steps,

@@ -73,7 +73,9 @@ enum PlayoutPolicy {
             return moves.first { $0.isPass } ?? moves[0]
 
         case .misdealDecision:
-            return .declineMisdeal
+            // Defensive: rollouts run against `.disabled` worlds and never
+            // reach this phase. The forced move is the only legal one.
+            return .callMisdeal
 
         case .widowDiscard:
             return cheapestDiscard(moves)

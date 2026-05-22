@@ -64,12 +64,19 @@ private struct SoloGameBody: View {
             displayTick: displayTick,
             seatNames: ["You", "West", "North", "East"],
             submit: { move in human.submit(move) },
-            startAction: { session.start(dealSeed: dealSeed) },
+            startAction: { session.startNewMatch(dealSeed: dealSeed) },
             dealAnother: {
-                dealSeed = .random(in: .min ... .max)
-                session.reset()
-                lastView = nil
-                session.start(dealSeed: dealSeed)
+                // Mid-match: continue the same game; the score and dealer
+                // carry forward. Only after a team has won the match do we
+                // wipe everything and start fresh.
+                if let final = session.finished, final.matchWinner != nil {
+                    dealSeed = .random(in: .min ... .max)
+                    session.reset()
+                    lastView = nil
+                    session.startNewMatch(dealSeed: dealSeed)
+                } else {
+                    session.startNextHand()
+                }
             },
             dealSeed: dealSeed,
             onCaptureLastView: { lastView = $0 })
@@ -184,7 +191,11 @@ struct GameBody: View {
             VStack(alignment: .leading, spacing: 12) {
                 
                 statusLine(table) // Crucial instructions stay fully visible
-                
+
+                if table.phase == .misdealDecision {
+                    misdealBanner(table)
+                }
+
                 if !isControllerMode {
                     scoreBar(table)
                     
@@ -216,7 +227,11 @@ struct GameBody: View {
                 GeometryReader { proxy in
                     let n = hand.count
                     let cardWidth: CGFloat = 60
-                    let rotationPad: CGFloat = 30
+                    // Reserve enough horizontal margin for the rotated corners
+                    // of the outer cards to live inside the ScrollView's clip.
+                    // 80pt covers both the 13-card hand and the 16-card hand
+                    // the bidder holds during trump-naming and widow-discard.
+                    let rotationPad: CGFloat = 80
                     let usable = max(cardWidth, proxy.size.width - rotationPad)
                     let preferredOverlap: CGFloat = 30
                     let naturalWidth = CGFloat(n) * cardWidth - CGFloat(max(0, n - 1)) * preferredOverlap
@@ -281,12 +296,14 @@ struct GameBody: View {
                 .buttonStyle(.plain)
             } else if interactive && decision.phase == .widowDiscard && discardSelectable {
                 Button { toggleDiscardSelection(card) } label: {
-                    cardChip(card, faded: false, selected: selected, totalCards: totalCards)
+                    cardChip(card, faded: false, selected: selected, highlighted: true, totalCards: totalCards)
                 }
                 .buttonStyle(.plain)
             } else {
-                let faded = decision.phase == .widowDiscard ? !discardSelectable : false
-                cardChip(card, faded: faded, selected: selected, totalCards: totalCards)
+                // No fade for non-discardable cards — the green border on
+                // legal ones is enough to convey legality, same affordance
+                // as during trick play.
+                cardChip(card, faded: false, selected: selected, totalCards: totalCards)
             }
         }
         .matchedGeometryEffect(id: cardKey(card), in: cardNS)
@@ -333,6 +350,26 @@ struct GameBody: View {
             Text(view.phase.headline).font(.system(.title3, design: .rounded)).bold()
             if let t = view.trump { trumpBadge(t, prominent: view.phase == .trickPlay) }
         }
+    }
+    
+    private func misdealBanner(_ view: PlayerView) -> some View {
+        let myMoney = view.myHand.reduce(0) { $0 + $1.moneyValue }
+        return HStack(spacing: 12) {
+            Image(systemName: "arrow.triangle.2.circlepath")
+                .font(.title2)
+                .foregroundStyle(.orange)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Misdeal — redealing").font(.subheadline).bold()
+                Text("A player has too little money in hand. Your hand: $\(myMoney / 1000)k in money cards.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 8)
+            ProgressView().controlSize(.small)
+        }
+        .padding(12)
+        .background(.orange.opacity(0.15), in: RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(.orange.opacity(0.5), lineWidth: 1))
     }
 
     private func trumpBadge(_ color: CardColor, prominent: Bool) -> some View {
@@ -406,7 +443,9 @@ struct GameBody: View {
                 Text("Tap a card in your hand to play it.").font(.caption).foregroundStyle(.secondary).italic()
             } else if view.phase == .widowDiscard {
                 widowDiscardPanel(view)
-            } else {
+            } else if view.phase == .namingTrump {
+                trumpNamingPanel(view)
+            } else if view.phase == .bidding {
                 let passMove = view.legalMoves.first { $0.label.lowercased().contains("pass") }
                 let bidMoves = view.legalMoves.filter { !$0.label.lowercased().contains("pass") }
 
@@ -469,6 +508,52 @@ struct GameBody: View {
             }
         }
     }
+    
+    private func trumpNamingPanel(_ view: PlayerView) -> some View {
+        // Build the four color buttons from CardColor directly, not from
+        // move.label — the bid panel's label-munging produced "Bid Trump: Red",
+        // which is what this panel is here to replace.
+        let trumpMoves: [(CardColor, Move)] = view.legalMoves.compactMap { move in
+            if case .nameTrump(let c) = move { return (c, move) }
+            return nil
+        }
+        return VStack(alignment: .leading, spacing: 10) {
+            Text("Pick the trump color for this hand. You'll discard three after.")
+                .font(.caption).foregroundStyle(.secondary)
+            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
+                ForEach(trumpMoves, id: \.0) { color, move in
+                    // `CardColor.black` maps to `Color.primary` in `swatch`, which
+                    // inverts in dark mode and would render the Black trump button
+                    // as white-on-white. The selector should always show the suit
+                    // color faithfully, so override `.black` to a literal black.
+                    let solidSwatch: Color = (color == .black) ? .black : color.swatch
+                    Button { submit(move) } label: {
+                        HStack(spacing: 10) {
+                            Circle().fill(solidSwatch)
+                                .frame(width: 22, height: 22)
+                                .overlay(Circle().stroke(.white.opacity(0.8), lineWidth: 1.5))
+                            Text(color.displayName)
+                                .font(.system(.headline, design: .rounded).weight(.bold))
+                                .foregroundStyle(.white)
+                            Spacer(minLength: 0)
+                        }
+                        .padding(.horizontal, 14)
+                        .frame(height: 50)
+                        .frame(maxWidth: .infinity)
+                        .background(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .fill(solidSwatch.opacity(0.85))
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .stroke(solidSwatch, lineWidth: 1.5)
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+    }
 
     private func widowDiscardPanel(_ view: PlayerView) -> some View {
         let count = discardSelection.count
@@ -476,7 +561,7 @@ struct GameBody: View {
         let legalMove = ready ? matchingWidowDiscardMove(selection: discardSelection, in: view) : nil
 
         return VStack(alignment: .leading, spacing: 8) {
-            Text("Tap three cards in your hand to discard. Tiger, Bull, and Bear cannot be discarded.")
+            Text(discardHelpText(for: view))
                 .font(.caption).foregroundStyle(.secondary)
             if ready && legalMove == nil {
                 Text("That discard isn't legal — you can only discard money cards when you have no other choice.")
@@ -493,6 +578,14 @@ struct GameBody: View {
             }
         }
     }
+    
+    private func discardHelpText(for view: PlayerView) -> String {
+        if let trump = view.trump {
+            return "Tap three cards in your hand to discard. Tiger, Bull, Bear, and \(trump.displayName) (trump) cards cannot be discarded."
+        } else {
+            return "Tap three cards in your hand to discard. Tiger, Bull, and Bear cannot be discarded."
+        }
+    }
 
     private func matchingWidowDiscardMove(selection: Set<Card>, in view: PlayerView) -> Move? {
         view.legalMoves.first { move in
@@ -503,7 +596,18 @@ struct GameBody: View {
 
     private func isDiscardSelectable(_ card: Card, in view: PlayerView) -> Bool {
         guard view.phase == .widowDiscard else { return false }
-        return !card.isSpecial
+        if card.isSpecial { return false }
+        if let trump = view.trump, card.effectiveColor(trump: trump) == trump {
+            // Trump is protected, except when the hand simply doesn't have
+            // three non-special non-trump cards to fill the discard. The
+            // engine's legality check is the authority; this mirror keeps
+            // the UI from offering taps the engine would reject.
+            let safePool = view.myHand.filter {
+                !$0.isSpecial && $0.effectiveColor(trump: trump) != trump
+            }
+            return safePool.count < 3
+        }
+        return true
     }
 
     private func toggleDiscardSelection(_ card: Card) {
@@ -557,7 +661,8 @@ struct GameBody: View {
             }
             HandRevealPanel(reveal: s.debugReveal)
             if let dealAnother {
-                Button("Deal another", action: dealAnother).buttonStyle(.borderedProminent)
+                let label = (s.matchWinner == nil) ? "Next hand" : "Start new match"
+                Button(label, action: dealAnother).buttonStyle(.borderedProminent)
             }
         }
     }

@@ -189,40 +189,49 @@ final class NetSession: ObservableObject, RemoteSeatDelegate {
         guard runTask == nil else { return }
         fillEmptySeatsWithBots(seedBase: dealSeed)
 
-        let names = seatNamesArray()
-        for assn in assignments.values where assn.kind == .remote {
-            if let r = assn.remote {
-                Task { [weak self] in
-                    await r.start(delegate: self)
-                    await r.sendSeatAssignment(seatNames: names)
-                    await r.sendHandStarted()
-                }
-            }
-        }
-
-        let agents = buildAgents()
-        
-        // Every remote seat needs observation frames
-        var spectatorSeats = assignments.values
-            .filter { $0.kind == .remote }
-            .map(\.seat)
-            
-        switch hostRole {
-        case .player(let seat, _, _):
-            spectatorSeats.append(seat) // Host needs their own frames
-        case .tabletopSpectator:
-            // Tabletop needs frames to render the central table.
-            // We ask the engine for Seat 0's frames, and we will strip
-            // the hidden data out in `dispatchObservation`.
-            if !spectatorSeats.contains(PlayerID(0)) {
-                spectatorSeats.append(PlayerID(0))
-            }
-        }
-
         phase = .running
 
         runTask = Task { [weak self] in
             guard let self else { return }
+            
+            // 1. DETACH the receive loops so they don't freeze the host setup!
+            for assn in self.assignments.values where assn.kind == .remote {
+                if let r = assn.remote {
+                    Task { await r.start(delegate: self) }
+                }
+            }
+
+            // 2. Guarantee handshakes are queued BEFORE the engine starts.
+            // This prevents .handStarted from arriving late and erasing the first .observation.
+            let names = self.seatNamesArray()
+            await withTaskGroup(of: Void.self) { group in
+                for assn in self.assignments.values where assn.kind == .remote {
+                    if let r = assn.remote {
+                        group.addTask {
+                            await r.sendSeatAssignment(seatNames: names)
+                            await r.sendHandStarted()
+                        }
+                    }
+                }
+            }
+
+            // 3. Safely start the engine. The clients are now fully prepared.
+            let agents = self.buildAgents()
+            
+            var spectatorSeats = self.assignments.values
+                .filter { $0.kind == .remote }
+                .map(\.seat)
+                
+            switch self.hostRole {
+            case .player(let seat, _, _):
+                spectatorSeats.append(seat) // Host needs their own frames
+            case .tabletopSpectator:
+                // Tabletop needs frames to render the central table.
+                if !spectatorSeats.contains(PlayerID(0)) {
+                    spectatorSeats.append(PlayerID(0))
+                }
+            }
+
             let runner = GameRunner(agents: agents)
             do {
                 let final = try await runner.playHand(

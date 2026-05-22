@@ -29,7 +29,7 @@
 
 /* Begin PBXFileReference section */
 		430CBF782FBD5DF800776693 /* MakeAMillion.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; path = MakeAMillion.icon; sourceTree = "<group>"; };
-		4367CAF22FBBBFE10005A97E /* Make-A-Million.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Make-A-Million.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		4367CAF22FBBBFE10005A97E /* Make-A-Million Mobile.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Make-A-Million Mobile.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		4367CAFF2FBBBFE30005A97E /* Make-A-MillionTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "Make-A-MillionTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 		4367CB092FBBBFE30005A97E /* Make-A-MillionUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "Make-A-MillionUITests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
@@ -189,7 +189,7 @@
 		4367CAF32FBBBFE10005A97E /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				4367CAF22FBBBFE10005A97E /* Make-A-Million.app */,
+				4367CAF22FBBBFE10005A97E /* Make-A-Million Mobile.app */,
 				4367CAFF2FBBBFE30005A97E /* Make-A-MillionTests.xctest */,
 				4367CB092FBBBFE30005A97E /* Make-A-MillionUITests.xctest */,
 			);
@@ -215,7 +215,7 @@
 			packageProductDependencies = (
 			);
 			productName = "Make-A-Million";
-			productReference = 4367CAF22FBBBFE10005A97E /* Make-A-Million.app */;
+			productReference = 4367CAF22FBBBFE10005A97E /* Make-A-Million Mobile.app */;
 			productType = "com.apple.product-type.application";
 		};
 		4367CAFE2FBBBFE30005A97E /* Make-A-MillionTests */ = {
@@ -518,7 +518,7 @@
 				);
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "com.truebluedev.Make-A-Million";
-				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_NAME = "Make-A-Million Mobile";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
@@ -553,7 +553,7 @@
 				);
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "com.truebluedev.Make-A-Million";
-				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_NAME = "Make-A-Million Mobile";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;

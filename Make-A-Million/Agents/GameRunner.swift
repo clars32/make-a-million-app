@@ -57,12 +57,14 @@ struct GameRunner {
     func playHand(dealer: PlayerID,
                   dealSeed: UInt64,
                   carryScore: [Int: Int] = [0: 0, 1: 0],
+                  misdealRule: MisdealRule = .standard,
                   spectator: PlayerID? = nil,
                   onView: (@Sendable @MainActor (PlayerView) async -> Void)? = nil) async throws -> GameState {
 
         var state = GameState.newHand(dealer: dealer,
                                       seed: dealSeed,
-                                      carryScore: carryScore)
+                                      carryScore: carryScore,
+                                      misdealRule: misdealRule)
 
         // Initial deal frame, so the consumer can show the dealt hand /
         // opening of bidding rather than starting one move in.
@@ -77,6 +79,24 @@ struct GameRunner {
         let maxSteps = 1_000
 
         while state.phase != .handComplete {
+            // Auto-misdeal: the rule fires before bidding, no agent is asked.
+            // The notice frame was already emitted (initial deal, or the
+            // post-move frame of a prior redeal). Hold it visible briefly,
+            // then apply the forced redeal and emit the next frame.
+            if state.phase == .misdealDecision {
+                try? await Task.sleep(for: .milliseconds(2200))
+                state = try state.applying(.callMisdeal, by: state.toAct)
+                if let s = spectator, let sink = onView {
+                    await sink(state.view(for: s))
+                }
+                steps += 1
+                if steps > maxSteps {
+                    throw RunnerError.didNotTerminate(afterSteps: steps,
+                                                      stuckIn: state.phase)
+                }
+                continue
+            }
+
             let mover = state.toAct
             let view = state.view(for: mover)
             let move = await agents[mover.raw].chooseMove(from: view)
@@ -102,27 +122,19 @@ struct GameRunner {
     /// until a team reaches 1,000,000. Returns the winning team and the
     /// final state.
     func playMatch(firstDealer: PlayerID = PlayerID(0),
-                   baseSeed: UInt64) async throws -> (winner: Int, finalState: GameState) {
+                       baseSeed: UInt64,
+                   misdealRule: MisdealRule = .standard) async throws -> (winner: Int, finalState: GameState) {
         var dealer = firstDealer
         var carry: [Int: Int] = [0: 0, 1: 0]
         var handIndex: UInt64 = 0
         let maxHands: UInt64 = 500   // sanity ceiling; a real match ends far sooner
-
+        
         while true {
             let state = try await playHand(
                 dealer: dealer,
                 dealSeed: baseSeed &+ handIndex,
-                carryScore: carry)
-
-            carry = state.matchScore
-            if let w = state.matchWinner {
-                return (w, state)
-            }
-            dealer = Seats.next(dealer)   // deal passes left
-            handIndex += 1
-            if handIndex > maxHands {
-                throw RunnerError.matchDidNotConclude(afterHands: handIndex)
-            }
+                carryScore: carry,
+                misdealRule: misdealRule)
         }
     }
 }

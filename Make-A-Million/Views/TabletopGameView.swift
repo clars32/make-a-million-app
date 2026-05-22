@@ -91,6 +91,9 @@ struct TabletopGameView: View {
             HStack(alignment: .top, spacing: 16) {
                 VStack(alignment: .leading, spacing: 12) {
                     statusLine(table)
+                    if table.phase == .misdealDecision {
+                        misdealBanner()
+                    }
                     if table.phase == .bidding || !table.bidHistory.isEmpty {
                         bidHistoryPanel(records: table.bidHistory, opener: table.opener)
                     }
@@ -210,6 +213,25 @@ struct TabletopGameView: View {
                 .background(RoundedRectangle(cornerRadius: 10).fill(t.swatch.opacity(0.15)))
             }
         }
+    }
+    
+    private func misdealBanner() -> some View {
+        HStack(spacing: 14) {
+            Image(systemName: "arrow.triangle.2.circlepath")
+                .font(.title)
+                .foregroundStyle(.orange)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Misdeal — redealing")
+                    .font(.system(.title3, design: .rounded).bold())
+                Text("A player has too little money in hand. The cards are being redealt.")
+                    .font(.subheadline).foregroundStyle(.secondary)
+            }
+            Spacer()
+            ProgressView()
+        }
+        .padding(16)
+        .background(.orange.opacity(0.15), in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(.orange.opacity(0.5), lineWidth: 1))
     }
 
     private func lastTrickPanel(_ last: CompletedTrickInfo) -> some View {

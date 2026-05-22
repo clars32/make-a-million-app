@@ -249,16 +249,21 @@ struct MonteCarloAgent: PlayerAgent {
         return .declineMisdeal
     }
 
-    // MARK: - Widow discard (joint with trump)
+    // MARK: - Widow discard (trump already known)
 
     private func decideDiscard(_ view: PlayerView, legal: [Move]) -> Move {
+        // Trump was named in the previous phase — score each legal discard
+        // against the known trump rather than searching jointly.
+        guard let trump = view.trump else { return legal[0] }
+
         let discards = legal.compactMap { m -> (Move, [Card])? in
             if let cs = m.discardCards { return (m, cs) }; return nil
         }
         guard !discards.isEmpty else { return legal[0] }
 
-        // Shortlist by ascending cost: the engine already forbids needless
-        // money/special discards, so cheap = low-rank off-color trash.
+        // Shortlist by ascending cost: the engine already enforces the
+        // protection ordering (specials, trump, money), so cheap = low-rank
+        // off-color trash, which is exactly the right thing to throw away.
         let ranked = discards
             .map { ($0.0, $0.1, discardCost($0.1)) }
             .sorted { $0.2 < $1.2 }
@@ -266,12 +271,10 @@ struct MonteCarloAgent: PlayerAgent {
 
         var best: (Move, Int) = (legal[0], Int.min)
         for (move, cards, _) in ranked {
-            // Hand after this discard.
             var hand = view.myHand
             for c in cards { if let i = hand.firstIndex(of: c) { hand.remove(at: i) } }
-            // Best trump for THIS particular kept hand.
-            let v = HandEvaluator.bestValuation(view: view, hand: hand)
-            if v.expectedGross > best.1 { best = (move, v.expectedGross) }
+            let score = HandEvaluator.evaluate(view: view, hand: hand, assumingTrump: trump)
+            if score > best.1 { best = (move, score) }
         }
         return best.0
     }

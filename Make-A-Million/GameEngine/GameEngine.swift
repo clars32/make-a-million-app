@@ -14,11 +14,29 @@ import Foundation
 
 enum Phase: Codable, Hashable {
     case bidding
-    case misdealDecision        // high bidder is misdeal-eligible, must call or decline
+    case misdealDecision        // auto-redeal in progress; notification visible to all
     case widowDiscard           // high bidder holds 13+3, must discard 3
     case namingTrump
     case trickPlay
     case handComplete
+}
+
+// MARK: - Misdeal configuration
+
+/// Optional, configurable house rule: if any player's money-card total falls
+/// at or below `threshold`, the engine immediately redeals (no vote). Carried
+/// on `GameState` so it survives redeals, and so a future settings UI can
+/// swap it in per-match without touching the engine.
+struct MisdealRule: Codable, Hashable {
+    /// When false, low-money hands never trigger a redeal.
+    var enabled: Bool
+    /// A hand is "short" when its money-card total is <= this value.
+    var threshold: Int
+
+    /// House default: redeal at $15,000 or below.
+    static let standard = MisdealRule(enabled: true, threshold: 15_000)
+    /// Rule turned off entirely. Used by AI rollouts and as the future "off" toggle.
+    static let disabled = MisdealRule(enabled: false, threshold: 0)
 }
 
 // MARK: - A trick in progress / completed
@@ -74,7 +92,10 @@ struct GameState: Codable {
 
     // Hand setup
     private(set) var trump: CardColor?
-    private(set) var misdealEligible: Bool
+    /// House rule governing automatic redeals on low-money hands. Stored on
+    /// state so a redeal carries the same rule forward, and so `legalMoves`
+    /// in `.misdealDecision` can reason about it.
+    let misdealRule: MisdealRule
 
     // Trick play
     private(set) var currentTrick: Trick?
@@ -96,7 +117,8 @@ struct GameState: Codable {
     /// Seeded shuffle → deterministic and reconstructable.
     static func newHand(dealer: PlayerID,
                         seed: UInt64,
-                        carryScore: [Int: Int] = [0: 0, 1: 0]) -> GameState {
+                        carryScore: [Int: Int] = [0: 0, 1: 0],
+                        misdealRule: MisdealRule = .standard) -> GameState {
         var rng = SeededRNG(seed: seed)
         var deck = Deck.full
         // Fisher–Yates with the seeded RNG.
@@ -113,26 +135,31 @@ struct GameState: Codable {
 
         let opener = Seats.next(dealer)   // player left of dealer bids first
 
-        // Misdeal eligibility: any player with $15,000 or less of Money in hand
-        // may (later) call for a redeal. We flag it now; the social vote is
-        // simplified for solo — the eligible player alone decides.
-        let anyShort = hands.values.contains { hand in
-            hand.reduce(0) { $0 + $1.moneyValue } <= 15_000
+        // Auto-misdeal: if the rule is on and any seat is at/below the
+        // threshold in money cards, start the hand in `.misdealDecision`
+        // instead of `.bidding`. The runner shows a brief notice and
+        // immediately redeals — no vote, no human tap. `toAct` is the
+        // dealer as a neutral placeholder; the forced move doesn't read it
+        // beyond identity.
+        let anyShort = misdealRule.enabled && hands.values.contains { hand in
+            hand.reduce(0) { $0 + $1.moneyValue } <= misdealRule.threshold
         }
+        let initialPhase: Phase = anyShort ? .misdealDecision : .bidding
+        let initialToAct: PlayerID = anyShort ? dealer : opener
 
         return GameState(
             dealSeed: seed,
             dealer: dealer,
             hands: hands,
             widow: widow,
-            phase: .bidding,
-            toAct: opener,
+            phase: initialPhase,
+            toAct: initialToAct,
             highBid: nil,
             highBidder: nil,
             passed: [],
             bidHistory: [],
             trump: nil,
-            misdealEligible: anyShort,
+            misdealRule: misdealRule,
             currentTrick: nil,
             completedTricks: [],
             capturedByTeam: [0: [], 1: []],
@@ -188,16 +215,20 @@ extension GameState {
             return moves
 
         case .misdealDecision:
-            return [.callMisdeal, .declineMisdeal]
+               // Auto-trigger rule: the only legal move is the forced redeal.
+               // The runner applies this without consulting an agent; this entry
+               // exists so the move is "legal" through the normal apply path.
+               return [.callMisdeal]
 
         case .widowDiscard:
             // Any 3-card discard that obeys the Money / special restrictions.
             // Enumerating all C(16,3) combinations is fine (560 max) and lets
             // the UI/AI see exactly what's legal.
-            guard let hand = hands[player] else { return [] }
+            // Trump is always known here — namingTrump precedes widowDiscard.
+            guard let hand = hands[player], let trump = trump else { return [] }
             var moves: [Move] = []
             let combos = Self.combinations(hand, choose: 3)
-            for combo in combos where Self.isLegalWidowDiscard(combo, from: hand) {
+            for combo in combos where Self.isLegalWidowDiscard(combo, from: hand, trump: trump) {
                 moves.append(.discardWidow(combo))
             }
             return moves
@@ -254,19 +285,34 @@ extension GameState {
         }
     }
 
-    static func isLegalWidowDiscard(_ discard: [Card], from hand: [Card]) -> Bool {
+    /// Protection ordering, strictest first:
+    ///   specials > trump > money > everything else
+    /// Each upper tier may only be touched when the strictly-safer pool
+    /// can't supply 3 cards. The trump tier exists because trump is named
+    /// BEFORE the discard now — the bidder always knows which color they're
+    /// committed to.
+    static func isLegalWidowDiscard(_ discard: [Card],
+                                    from hand: [Card],
+                                    trump: CardColor) -> Bool {
         guard discard.count == 3 else { return false }
-        // Never discard Tiger / Bull / Bear.
+
+        // 1. Tiger / Bull / Bear: never. Hard rule.
         if discard.contains(where: { $0.isSpecial }) { return false }
-        // Must not discard a Money card unless there is no non-Money,
-        // non-special alternative. (If forced, the rules require showing them;
-        // that disclosure is a UI concern, legality is enforced here.)
-        let nonMoneyNonSpecial = hand.filter { !$0.isMoney && !$0.isSpecial }
-        for card in discard where card.isMoney {
-            // A Money discard is only legal if we couldn't have filled that
-            // slot from the non-Money pool.
-            if nonMoneyNonSpecial.count >= 3 { return false }
+
+        // 2. Trump: only legal if there aren't enough non-special non-trump
+        //    cards to fill the discard.
+        let nonSpecialNonTrump = hand.filter {
+            !$0.isSpecial && $0.effectiveColor(trump: trump) != trump
         }
+        let trumpInDiscard = discard.contains { $0.effectiveColor(trump: trump) == trump }
+        if trumpInDiscard && nonSpecialNonTrump.count >= 3 { return false }
+
+        // 3. Money: only legal if there aren't enough non-special non-trump
+        //    non-money cards to fill the discard.
+        let nonMoneyNonSpecialNonTrump = nonSpecialNonTrump.filter { !$0.isMoney }
+        let moneyInDiscard = discard.contains { $0.isMoney }
+        if moneyInDiscard && nonMoneyNonSpecialNonTrump.count >= 3 { return false }
+
         return true
     }
 
@@ -301,12 +347,14 @@ extension GameState {
             try s.applyBid(action, by: player)
             return s
 
-        // MARK: Misdeal decision
-        case (.misdealDecision, .callMisdeal):
-            // Redeal: same dealer, next seed derived deterministically.
-            return GameState.newHand(dealer: s.dealer,
-                                     seed: s.dealSeed &+ 1,
-                                     carryScore: s.matchScore)
+            // MARK: Misdeal — automatic redeal
+            case (.misdealDecision, .callMisdeal):
+                // Same dealer, next seed, same rule (so a future settings
+                // change persists for the whole match, not just one deal).
+                return GameState.newHand(dealer: s.dealer,
+                                         seed: s.dealSeed &+ 1,
+                                         carryScore: s.matchScore,
+                                         misdealRule: s.misdealRule)
 
         case (.misdealDecision, .declineMisdeal):
             s.phase = .widowDiscard
@@ -317,20 +365,24 @@ extension GameState {
         // MARK: Widow discard
         case (.widowDiscard, .discardWidow(let cards)):
             guard let hand = s.hands[player],
+                  let trump = s.trump,
                   Set(cards).count == 3,
                   cards.allSatisfy({ hand.contains($0) }),
-                  GameState.isLegalWidowDiscard(cards, from: hand)
+                  GameState.isLegalWidowDiscard(cards, from: hand, trump: trump)
             else { throw MoveError.illegalDiscard }
             s.hands[player] = hand.filter { !cards.contains($0) }
-            s.phase = .namingTrump
+            // Discard is the LAST setup step now — go straight to trick play.
+            s.phase = .trickPlay
+            s.toAct = s.highBidder!
+            s.currentTrick = Trick(leader: s.highBidder!)
             return s
 
-        // MARK: Naming trump
+        // MARK: Naming trump (precedes discard — the bidder must know trump
+        // before deciding what to throw away).
         case (.namingTrump, .nameTrump(let color)):
             s.trump = color
-            s.phase = .trickPlay
-            s.toAct = s.highBidder!          // high bidder leads first trick
-            s.currentTrick = Trick(leader: s.highBidder!)
+            s.phase = .widowDiscard
+            // toAct is already the bidder from the bidding-end transition.
             return s
 
         // MARK: Trick play
@@ -374,29 +426,25 @@ extension GameState {
         }
 
         // Bidding ends when everyone except one has passed AND there is a bid.
+        // The bidder takes the widow now (16 cards) and names trump on the
+        // full set; the discard follows once trump is fixed.
         if let bidder = highBidder, passed.count == Seats.count - 1 {
-            highBidder = bidder
-            if misdealEligible {
-                phase = .misdealDecision
-                toAct = bidder              // high bidder decides on misdeal
-            } else {
-                phase = .widowDiscard
-                toAct = bidder
-                takeWidowIntoHand()
-            }
+            phase = .namingTrump
+            toAct = bidder
+            takeWidowIntoHand()
             return
         }
 
         // No one bid and three passed: degenerate. Force opener to hold the
-        // minimum bid rather than deadlock. (Rare with a 55-card deal; the
-        // misdeal rule usually catches the bad hands first.)
+        // minimum bid rather than deadlock. (Very rare in practice — auto-
+        // misdeal pre-bidding catches the truly dead hands first.)
         if highBidder == nil && passed.count == Seats.count - 1 {
             let opener = Seats.next(dealer)
             highBid = Bidding.openingMinimum
             highBidder = opener
-            phase = misdealEligible ? .misdealDecision : .widowDiscard
+            phase = .namingTrump
             toAct = opener
-            if !misdealEligible { takeWidowIntoHand() }
+            takeWidowIntoHand()
             return
         }
 
