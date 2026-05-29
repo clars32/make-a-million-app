@@ -65,12 +65,16 @@ struct HostLobbyView: View {
                 lobbyContent
             }
         }
-        .onAppear { multipeer.start() }
+        .onAppear {
+            multipeer.maxConnectedPeers = isTabletopMode ? Seats.count : Seats.count - 1
+            multipeer.start()
+        }
         .onDisappear { multipeer.stop() }
         .onChange(of: multipeer.connectedPeers.count) { _, _ in
             maintainSeatAssignments()
         }
         .onChange(of: isTabletopMode) { _, isTabletop in
+            multipeer.maxConnectedPeers = isTabletop ? Seats.count : Seats.count - 1
             // Update NetSession and clear assignments when mode changes
             let newRole: NetSession.HostRole = isTabletop
                 ? .tabletopSpectator

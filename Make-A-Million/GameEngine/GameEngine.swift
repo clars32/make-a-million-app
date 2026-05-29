@@ -12,7 +12,7 @@ import Foundation
 
 // MARK: - Phases
 
-enum Phase: Codable, Hashable {
+nonisolated enum Phase: Codable, Hashable {
     case bidding
     case misdealDecision        // auto-redeal in progress; notification visible to all
     case widowDiscard           // high bidder holds 13+3, must discard 3
@@ -27,7 +27,7 @@ enum Phase: Codable, Hashable {
 /// at or below `threshold`, the engine immediately redeals (no vote). Carried
 /// on `GameState` so it survives redeals, and so a future settings UI can
 /// swap it in per-match without touching the engine.
-struct MisdealRule: Codable, Hashable {
+nonisolated struct MisdealRule: Codable, Hashable {
     /// When false, low-money hands never trigger a redeal.
     var enabled: Bool
     /// A hand is "short" when its money-card total is <= this value.
@@ -41,17 +41,17 @@ struct MisdealRule: Codable, Hashable {
 
 // MARK: - A trick in progress / completed
 
-struct PlayedCard: Codable, Hashable {
+nonisolated struct PlayedCard: Codable, Hashable {
     let player: PlayerID
     let card: Card
 }
 
-struct BidRecord: Codable, Hashable {
+nonisolated struct BidRecord: Codable, Hashable {
     let player: PlayerID
     let action: BidAction
 }
 
-struct Trick: Codable, Hashable {
+nonisolated struct Trick: Codable, Hashable {
     let leader: PlayerID
     var plays: [PlayedCard] = []
     var isComplete: Bool { plays.count == Seats.count }
@@ -70,7 +70,7 @@ struct Trick: Codable, Hashable {
 
 // MARK: - GameState  (the single source of truth)
 
-struct GameState: Codable {
+nonisolated struct GameState: Codable {
 
     // Dealing / identity
     let dealSeed: UInt64
@@ -356,12 +356,6 @@ extension GameState {
                                          carryScore: s.matchScore,
                                          misdealRule: s.misdealRule)
 
-        case (.misdealDecision, .declineMisdeal):
-            s.phase = .widowDiscard
-            s.toAct = s.highBidder!
-            s.takeWidowIntoHand()
-            return s
-
         // MARK: Widow discard
         case (.widowDiscard, .discardWidow(let cards)):
             guard let hand = s.hands[player],
@@ -581,14 +575,14 @@ extension GameState {
 /// watches each trick being taken — so surfacing it in the redacted view
 /// leaks nothing. The AI will also need this to reason about what has been
 /// played; same projection, no privileged access.
-struct CompletedTrickInfo: Codable, Hashable {
+nonisolated struct CompletedTrickInfo: Codable, Hashable {
     let leader: PlayerID
     let plays: [PlayedCard]
     let winner: PlayerID
     let value: Int          // settled $ value of the trick (Bull/Bear applied)
 }
 
-struct PlayerView: Codable {
+nonisolated struct PlayerView: Codable {
     let me: PlayerID
     let myHand: [Card]
     let phase: Phase

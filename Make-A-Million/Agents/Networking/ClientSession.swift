@@ -115,6 +115,9 @@ final class ClientSession: ObservableObject {
     }
 
     func stop() {
+        Task { [transport] in
+            try? await transport.send(.goodbye)
+        }
         receiveTask?.cancel()
         drainTask?.cancel()
         receiveTask = nil

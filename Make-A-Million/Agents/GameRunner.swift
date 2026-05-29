@@ -129,13 +129,21 @@ struct GameRunner {
         var handIndex: UInt64 = 0
         let maxHands: UInt64 = 500   // sanity ceiling; a real match ends far sooner
         
-        while true {
+        while handIndex < maxHands {
             let state = try await playHand(
                 dealer: dealer,
                 dealSeed: baseSeed &+ handIndex,
                 carryScore: carry,
                 misdealRule: misdealRule)
+            if let winner = state.matchWinner {
+                return (winner, state)
+            }
+            carry = state.matchScore
+            dealer = Seats.next(dealer)
+            handIndex &+= 1
         }
+
+        throw RunnerError.matchDidNotConclude(afterHands: maxHands)
     }
 }
 

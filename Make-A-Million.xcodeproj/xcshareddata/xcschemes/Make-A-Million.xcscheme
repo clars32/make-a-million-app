@@ -16,7 +16,7 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "4367CAF12FBBBFE10005A97E"
-               BuildableName = "Make-A-Million.app"
+               BuildableName = "Make-A-Million Mobile.app"
                BlueprintName = "Make-A-Million"
                ReferencedContainer = "container:Make-A-Million.xcodeproj">
             </BuildableReference>
@@ -75,7 +75,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "4367CAF12FBBBFE10005A97E"
-            BuildableName = "Make-A-Million.app"
+            BuildableName = "Make-A-Million Mobile.app"
             BlueprintName = "Make-A-Million"
             ReferencedContainer = "container:Make-A-Million.xcodeproj">
          </BuildableReference>
@@ -92,7 +92,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "4367CAF12FBBBFE10005A97E"
-            BuildableName = "Make-A-Million.app"
+            BuildableName = "Make-A-Million Mobile.app"
             BlueprintName = "Make-A-Million"
             ReferencedContainer = "container:Make-A-Million.xcodeproj">
          </BuildableReference>

@@ -165,7 +165,7 @@ struct GameBody: View {
     private func startView(action: @escaping () -> Void) -> some View {
         VStack(spacing: 16) {
             Text("Make-a-Million").font(.system(.largeTitle, design: .rounded)).bold()
-            Text("You are seat 1 (South). West, North, East are random bots.")
+            Text("You are South. West, North, and East are bots.")
                 .font(.subheadline).foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
             Button("Deal a hand", action: action)
@@ -313,26 +313,24 @@ struct GameBody: View {
 
     private func scoreBar(_ view: PlayerView) -> some View {
         let live = view.liveHandScore
+        let myTeam = Seats.team(of: view.me)
         return HStack {
-            teamScoreColumn(teamAName, live: live[0, default: 0], match: view.matchScore[0, default: 0], alignment: .leading)
+            teamScoreColumn(teamAName, live: live[0, default: 0], match: view.matchScore[0, default: 0], alignment: .leading, isHighlighted: myTeam == 0)
             Spacer()
             Text("vs").font(.caption2).foregroundStyle(.tertiary)
             Spacer()
-            teamScoreColumn(teamBName, live: live[1, default: 0], match: view.matchScore[1, default: 0], alignment: .trailing)
+            teamScoreColumn(teamBName, live: live[1, default: 0], match: view.matchScore[1, default: 0], alignment: .trailing, isHighlighted: myTeam == 1)
         }
         .padding(12)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
-    private func teamScoreColumn(_ name: String, live: Int, match: Int, alignment: HorizontalAlignment) -> some View {
-        // Determine if this is the "You" team (Team A)
-        let isMyTeam = name.contains("You") || name.contains(seatNames[0])
-        
+    private func teamScoreColumn(_ name: String, live: Int, match: Int, alignment: HorizontalAlignment, isHighlighted: Bool) -> some View {
         return VStack(alignment: alignment, spacing: 2) {
             Text(name)
                 .font(.caption)
                 .bold()
-                .foregroundStyle(isMyTeam ? .blue : .secondary) // Highlight my team
+                .foregroundStyle(isHighlighted ? .blue : .secondary)
             
             Text("Hand $\(live / 1000)k")
                 .font(.system(.title3, design: .rounded).bold().monospacedDigit())
@@ -342,7 +340,7 @@ struct GameBody: View {
                 .foregroundStyle(.tertiary)
         }
         .padding(8)
-        .background(isMyTeam ? Color.blue.opacity(0.1) : Color.clear, in: RoundedRectangle(cornerRadius: 8))
+        .background(isHighlighted ? Color.blue.opacity(0.1) : Color.clear, in: RoundedRectangle(cornerRadius: 8))
     }
     
     private func statusLine(_ view: PlayerView) -> some View {
@@ -446,39 +444,42 @@ struct GameBody: View {
             } else if view.phase == .namingTrump {
                 trumpNamingPanel(view)
             } else if view.phase == .bidding {
-                let passMove = view.legalMoves.first { $0.label.lowercased().contains("pass") }
-                let bidMoves = view.legalMoves.filter { !$0.label.lowercased().contains("pass") }
+                let passMove = view.legalMoves.first { $0.isPass }
+                let bidMoves = view.legalMoves.filter { $0.bidAmount != nil }
+                let safeBidIndex = min(selectedBidIndex, max(0, bidMoves.count - 1))
 
                 VStack(spacing: 14) {
-                    ScrollViewReader { proxy in
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 12) {
-                                ForEach(Array(bidMoves.enumerated()), id: \.offset) { index, move in
-                                    let isSelected = index == selectedBidIndex
-                                    Button {
-                                        withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) {
-                                            selectedBidIndex = index
-                                            proxy.scrollTo(index, anchor: .center)
-                                        }
-                                    } label: {
-                                        Text(move.label.replacingOccurrences(of: "Bid ", with: ""))
-                                            .font(.system(.subheadline, design: .rounded).weight(.bold))
-                                            .foregroundStyle(isSelected ? .white : .primary)
-                                            .padding(.horizontal, 16)
-                                            .frame(height: 44)
-                                            .background {
-                                                Capsule(style: .continuous).fill(isSelected ? Color.blue : Color.secondary.opacity(0.15))
+                    if !bidMoves.isEmpty {
+                        ScrollViewReader { proxy in
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                HStack(spacing: 12) {
+                                    ForEach(Array(bidMoves.enumerated()), id: \.offset) { index, move in
+                                        let isSelected = index == safeBidIndex
+                                        Button {
+                                            withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) {
+                                                selectedBidIndex = index
+                                                proxy.scrollTo(index, anchor: .center)
                                             }
-                                            .scaleEffect(isSelected ? 1.05 : 0.95)
+                                        } label: {
+                                            Text(move.label.replacingOccurrences(of: "Bid ", with: ""))
+                                                .font(.system(.subheadline, design: .rounded).weight(.bold))
+                                                .foregroundStyle(isSelected ? .white : .primary)
+                                                .padding(.horizontal, 16)
+                                                .frame(height: 44)
+                                                .background {
+                                                    Capsule(style: .continuous).fill(isSelected ? Color.blue : Color.secondary.opacity(0.15))
+                                                }
+                                                .scaleEffect(isSelected ? 1.05 : 0.95)
+                                        }
+                                        .buttonStyle(.plain)
+                                        .id(index)
                                     }
-                                    .buttonStyle(.plain)
-                                    .id(index)
                                 }
+                                .padding(.horizontal)
+                                .padding(.vertical, 4)
                             }
-                            .padding(.horizontal)
-                            .padding(.vertical, 4)
+                            .frame(height: 58)
                         }
-                        .frame(height: 58)
                     }
 
                     HStack(spacing: 10) {
@@ -492,15 +493,17 @@ struct GameBody: View {
                             }
                             .buttonStyle(.plain)
                         }
-                        Button { submit(bidMoves[selectedBidIndex]) } label: {
-                            Text("Bid \(bidMoves[selectedBidIndex].label.replacingOccurrences(of: "Bid ", with: ""))")
-                                .font(.system(.subheadline, design: .rounded).weight(.bold))
-                                .foregroundStyle(.white)
-                                .frame(maxWidth: .infinity)
-                                .frame(height: 42)
-                                .background(Capsule(style: .continuous).fill(Color.blue))
+                        if !bidMoves.isEmpty {
+                            Button { submit(bidMoves[safeBidIndex]) } label: {
+                                Text("Bid \(bidMoves[safeBidIndex].label.replacingOccurrences(of: "Bid ", with: ""))")
+                                    .font(.system(.subheadline, design: .rounded).weight(.bold))
+                                    .foregroundStyle(.white)
+                                    .frame(maxWidth: .infinity)
+                                    .frame(height: 42)
+                                    .background(Capsule(style: .continuous).fill(Color.blue))
+                            }
+                            .buttonStyle(.plain)
                         }
-                        .buttonStyle(.plain)
                     }
                     .padding(.horizontal)
                 }
@@ -606,6 +609,16 @@ struct GameBody: View {
                 !$0.isSpecial && $0.effectiveColor(trump: trump) != trump
             }
             return safePool.count < 3
+        }
+        if card.isMoney {
+            let safeNonMoney = view.myHand.filter { candidate in
+                guard !candidate.isSpecial, !candidate.isMoney else { return false }
+                if let trump = view.trump {
+                    return candidate.effectiveColor(trump: trump) != trump
+                }
+                return true
+            }
+            return safeNonMoney.count < 3
         }
         return true
     }

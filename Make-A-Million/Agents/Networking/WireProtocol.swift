@@ -32,7 +32,7 @@
 import Foundation
 
 /// Messages the host sends to one client.
-enum HostMessage: Codable, Sendable {
+nonisolated enum HostMessage: Codable, Sendable {
 
     /// Sent once after the client connects. Tells the client which seat
     /// they hold and the names for all four seats (so they can label the
@@ -73,12 +73,12 @@ enum HostMessage: Codable, Sendable {
     case resumeGame
 }
 
-enum PauseReason: Codable, Sendable, Equatable {
+nonisolated enum PauseReason: Codable, Sendable, Equatable {
     case playerDisconnected(seat: PlayerID, name: String)
 }
 
 /// Messages the client sends to the host.
-enum ClientMessage: Codable, Sendable {
+nonisolated enum ClientMessage: Codable, Sendable {
 
     /// First message after the transport connects. The host uses the
     /// name in lobby UI and to decide which seat the peer should hold.

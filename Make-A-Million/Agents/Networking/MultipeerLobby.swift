@@ -2,7 +2,7 @@
 //  Make-a-Million
 //
 //  Real cross-device transport. The headless engine plumbing (RemoteSeat,
-//  RemoteAgent, NetSession, ClientSession) was written against the
+//  NetSession, ClientSession) was written against the
 //  abstract HostToClientTransport / ClientToHostTransport pair, so this
 //  file's job is small in API surface even though it carries the most
 //  device-edge weight:
@@ -33,10 +33,8 @@
 //  CONCURRENCY: MCSession delegate callbacks land on a background
 //  queue. We bridge into actor-isolated state via Task { @MainActor }
 //  for UI-visible publishers, and via AsyncStream continuations (which
-//  are thread-safe) for the transport message streams. Same drain-from-
-//  Task pattern as InMemoryTransport: the iterator never lives in
-//  actor state, so the "mutating-async on isolated property" trap from
-//  earlier doesn't apply here either.
+//  are thread-safe) for the transport message streams. Receive state is
+//  handed into actor buffers rather than shared across awaits.
 //
 
 import Foundation
@@ -73,6 +71,7 @@ final class MultipeerHost: NSObject, ObservableObject {
     @Published private(set) var isAdvertising: Bool = false
 
     let localPeerID: MCPeerID
+    var maxConnectedPeers: Int = Seats.count - 1
 
     private let session: MCSession
     private let advertiser: MCNearbyServiceAdvertiser
@@ -189,7 +188,7 @@ extension MultipeerHost: MCNearbyServiceAdvertiserDelegate {
                                 withContext context: Data?,
                                 invitationHandler: @escaping (Bool, MCSession?) -> Void) {
         Task { @MainActor in
-            let accept = self.connectedPeers.count < Seats.count - 1
+            let accept = self.connectedPeers.count < self.maxConnectedPeers
             invitationHandler(accept, accept ? self.session : nil)
         }
     }
@@ -369,13 +368,12 @@ extension MultipeerClient: MCNearbyServiceBrowserDelegate {
 // MARK: - Transports
 
 /// Host-side per-peer transport. Held by MultipeerHost; exposed to
-/// NetSession via `transport(for:)`. Uses the same drain-Task pattern
-/// as InMemoryTransport (iterator stays inside a Task, never in actor
-/// state) so the strict-concurrency rules are happy.
+/// NetSession via `transport(for:)`. Delegate callbacks hand received
+/// messages into actor state so the strict-concurrency rules are happy.
 actor MultipeerHostTransport: HostToClientTransport {
 
-    private let session: MCSession
-    private let peer: MCPeerID
+    private nonisolated(unsafe) let session: MCSession
+    private nonisolated(unsafe) let peer: MCPeerID
 
     private var inboundBuffer: [ClientMessage] = []
     private var waiter: CheckedContinuation<ClientMessage, Error>?
@@ -441,8 +439,8 @@ actor MultipeerHostTransport: HostToClientTransport {
 /// Mirror of MultipeerHostTransport.
 actor MultipeerClientTransport: ClientToHostTransport {
 
-    private let session: MCSession
-    private let host: MCPeerID
+    private nonisolated(unsafe) let session: MCSession
+    private nonisolated(unsafe) let host: MCPeerID
 
     private var inboundBuffer: [HostMessage] = []
     private var waiter: CheckedContinuation<HostMessage, Error>?

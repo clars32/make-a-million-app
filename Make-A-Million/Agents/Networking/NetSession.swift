@@ -2,8 +2,8 @@
 //  Make-a-Million
 //
 //  The host's networked counterpart to GameSession. Owns the runner, the
-//  agents (one HumanAgent for the host, one RemoteAgent per connected
-//  remote player, MonteCarloAgents in any empty seat), and the per-seat
+//  agents (one HumanAgent for the host, one pause-aware remote agent per
+//  connected remote player, MonteCarloAgents in any empty seat), and the per-seat
 //  RemoteSeat channels. Drives the same GameRunner that single-device
 //  play uses — the engine is unchanged.
 //
@@ -342,6 +342,15 @@ final class NetSession: ObservableObject, RemoteSeatDelegate {
         }
     }
 
+    fileprivate func fallbackBotMoveIfNeeded(for seat: PlayerID, view: PlayerView) async -> Move? {
+        guard let assn = assignments[seat], assn.kind == .bot else { return nil }
+        let bot = MonteCarloAgent(
+            name: assn.name,
+            difficulty: botDifficulty,
+            seed: assn.botSeed ?? UInt64(seat.raw &+ 1))
+        return await bot.chooseMove(from: view)
+    }
+
     /// UI affordance for v1: convert the dropped seat into a bot and
     /// continue. The runner's suspended chooseMove resumes; the new agent
     /// is consulted from this move forward.
@@ -423,11 +432,6 @@ final class NetSession: ObservableObject, RemoteSeatDelegate {
 
 // MARK: - PauseAwareRemoteAgent
 //
-// The plain RemoteAgent (RemoteAgent.swift) traps on transport error
-// because its agent contract has no notion of "wait, the table is
-// paused." That trap exists deliberately — it's the loud failure that
-// says "the layer above me should have intervened." This is that layer.
-//
 // PauseAwareRemoteAgent catches .disconnected from the channel, hands
 // control to NetSession.awaitResume, and acts on the resolution:
 //
@@ -460,6 +464,9 @@ private struct PauseAwareRemoteAgent: PlayerAgent {
         precondition(!view.legalMoves.isEmpty,
                      "PauseAwareRemoteAgent asked to move with no legal moves")
         while true {
+            if let move = await session?.fallbackBotMoveIfNeeded(for: seat, view: view) {
+                return move
+            }
             do {
                 return try await channel.requestMove(view: view)
             } catch {
@@ -469,11 +476,10 @@ private struct PauseAwareRemoteAgent: PlayerAgent {
                 case .reconnected:
                     continue  // retry the same channel
                 case .filledWithBot:
-                    let bot = MonteCarloAgent(
-                        name: "fill-bot",
-                        difficulty: .medium,
-                        seed: UInt64(seat.raw &+ 1) &* 6_148_914_691_236_517_205)
-                    return await bot.chooseMove(from: view)
+                    if let move = await session.fallbackBotMoveIfNeeded(for: seat, view: view) {
+                        return move
+                    }
+                    return view.legalMoves[0]
                 case .sessionCancelled:
                     return view.legalMoves.first { $0.isPass } ?? view.legalMoves[0]
                 }

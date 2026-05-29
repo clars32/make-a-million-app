@@ -101,8 +101,7 @@ final class GameEngineTests: XCTestCase {
         g = try g.applying(.bid(.pass), by: PlayerID(0))
         let v = g.view(for: PlayerID(1))
         XCTAssertEqual(v.highBidder, PlayerID(1))
-        // Either misdeal decision or straight to widow discard.
-        XCTAssertTrue(v.phase == .widowDiscard || v.phase == .misdealDecision)
+        XCTAssertEqual(v.phase, .namingTrump)
     }
 
     func testBidHistoryKeepsTableOrder() throws {
@@ -176,14 +175,11 @@ final class GameEngineTests: XCTestCase {
         g = try g.applying(.bid(.pass), by: PlayerID(2))
         g = try g.applying(.bid(.pass), by: PlayerID(3))
         g = try g.applying(.bid(.pass), by: PlayerID(0))
-        if g.view(for: PlayerID(1)).phase == .misdealDecision {
-            g = try g.applying(.declineMisdeal, by: PlayerID(1))
-        }
+        g = try g.applying(.nameTrump(.red), by: PlayerID(1))
         let d = g.legalMoves(for: PlayerID(1)).first {
             if case .discardWidow = $0 { return true }; return false
         }!
         g = try g.applying(d, by: PlayerID(1))
-        g = try g.applying(.nameTrump(.red), by: PlayerID(1))
 
         // Drive the whole hand with first-legal-move; the invariant under
         // test is simply that nobody on turn is ever stranded.
@@ -278,7 +274,7 @@ final class GameEngineTests: XCTestCase {
         let hand: [Card] = [.tiger, .colored(.red, .two), .colored(.red, .three),
                             .colored(.green, .four)]
         XCTAssertFalse(GameState.isLegalWidowDiscard(
-            [.tiger, .colored(.red, .two), .colored(.red, .three)], from: hand))
+            [.tiger, .colored(.red, .two), .colored(.red, .three)], from: hand, trump: .black))
     }
 
     func testCannotDiscardMoneyWhenNonMoneyAvailable() {
@@ -288,11 +284,21 @@ final class GameEngineTests: XCTestCase {
         // Non-money alternatives exist (2,3,4,7) so dumping the $40k is illegal.
         XCTAssertFalse(GameState.isLegalWidowDiscard(
             [.colored(.red, .money40k), .colored(.red, .two), .colored(.red, .three)],
-            from: hand))
+            from: hand, trump: .black))
         // An all-non-money discard is fine.
         XCTAssertTrue(GameState.isLegalWidowDiscard(
             [.colored(.red, .two), .colored(.red, .three), .colored(.green, .four)],
-            from: hand))
+            from: hand, trump: .black))
+    }
+
+    func testDecliningAutoMisdealIsIllegal() {
+        let g = GameState.newHand(
+            dealer: PlayerID(0),
+            seed: 1,
+            misdealRule: MisdealRule(enabled: true, threshold: Deck.totalMoneyInDeck))
+
+        XCTAssertEqual(g.view(for: PlayerID(0)).phase, .misdealDecision)
+        XCTAssertThrowsError(try g.applying(.declineMisdeal, by: g.view(for: PlayerID(0)).toAct))
     }
 
     // MARK: Set-back scoring
@@ -318,10 +324,11 @@ final class GameEngineTests: XCTestCase {
         g = try g.applying(.bid(.pass), by: PlayerID(3))
         g = try g.applying(.bid(.pass), by: PlayerID(0))
 
-        // --- Misdeal branch, if the deal triggered eligibility.
-        if g.view(for: PlayerID(1)).phase == .misdealDecision {
-            g = try g.applying(.declineMisdeal, by: PlayerID(1))
-        }
+        // --- Name trump before discarding; the bidder should know which
+        // color is protected before choosing three cards to throw away.
+        XCTAssertEqual(g.view(for: PlayerID(1)).phase, .namingTrump)
+        g = try g.applying(.nameTrump(.red), by: PlayerID(1))
+        XCTAssertEqual(g.view(for: PlayerID(1)).trump, .red)
 
         // --- Widow discard: pick the first legal discard the engine offers.
         XCTAssertEqual(g.view(for: PlayerID(1)).phase, .widowDiscard)
@@ -333,11 +340,6 @@ final class GameEngineTests: XCTestCase {
 
         // High bidder's hand is back to 13 after taking 3 and discarding 3.
         XCTAssertEqual(g.view(for: PlayerID(1)).myHand.count, 13)
-
-        // --- Name trump.
-        XCTAssertEqual(g.view(for: PlayerID(1)).phase, .namingTrump)
-        g = try g.applying(.nameTrump(.red), by: PlayerID(1))
-        XCTAssertEqual(g.view(for: PlayerID(1)).trump, .red)
 
         // --- Play out all 13 tricks by always taking the first legal move.
         var safety = 0

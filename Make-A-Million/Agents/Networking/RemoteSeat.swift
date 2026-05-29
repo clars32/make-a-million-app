@@ -123,7 +123,8 @@ actor RemoteSeat {
         while !Task.isCancelled {
             do {
                 let msg = try await transport.receive()
-                handle(msg)
+                let shouldContinue = await handle(msg)
+                if !shouldContinue { return }
             } catch {
                 failPendingMove(with: error)
                 await delegate?.remoteSeatDisconnected(self, error: error)
@@ -132,22 +133,25 @@ actor RemoteSeat {
         }
     }
 
-    private func handle(_ msg: ClientMessage) {
+    private func handle(_ msg: ClientMessage) async -> Bool {
         switch msg {
         case .hello:
             // Hello is a lobby concern; once a match is running it's
             // noise (or a duplicate from a reconnect). Either way, ignore.
-            break
+            return true
         case .moveResponse(let id, let move):
             // Stale or unmatched response — silently drop. The host may
             // have cancelled the round trip (pause/reset) and the client
             // didn't know yet.
-            guard id == pendingRequestID, let cont = pendingMove else { return }
+            guard id == pendingRequestID, let cont = pendingMove else { return true }
             pendingMove = nil
             pendingRequestID = nil
             cont.resume(returning: move)
+            return true
         case .goodbye:
             failPendingMove(with: TransportError.disconnected)
+            await delegate?.remoteSeatDisconnected(self, error: TransportError.disconnected)
+            return false
         }
     }
 

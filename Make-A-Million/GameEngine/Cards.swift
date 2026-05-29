@@ -12,7 +12,7 @@ import Foundation
 
 // MARK: - Color (the four suits)
 
-enum CardColor: Int, Codable, CaseIterable, Hashable {
+nonisolated enum CardColor: Int, Codable, CaseIterable, Hashable {
     case red, yellow, black, green
 }
 
@@ -26,7 +26,7 @@ enum CardColor: Int, Codable, CaseIterable, Hashable {
 /// We store an explicit `captureRank` so trick resolution never has to
 /// reason about the gap at 6 or the interleaving of Money cards. Higher
 /// `captureRank` beats lower within the same color.
-enum Card: Hashable, Codable {
+nonisolated enum Card: Hashable, Codable {
 
     case colored(CardColor, Rank)
     case tiger      // always the highest trump
@@ -104,7 +104,7 @@ enum Card: Hashable, Codable {
 
 // MARK: - The 55-card deck
 
-enum Deck {
+nonisolated enum Deck {
     /// The full, ordered 55-card deck before shuffling.
     /// 4 colors × 13 ranks = 52, plus Tiger, Bull, Bear.
     static let full: [Card] = {

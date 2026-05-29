@@ -4,13 +4,8 @@
 //
 //  Abstract channel between host and ONE client. The host holds one of
 //  these per remote seat; the client holds exactly one (its connection
-//  to the host). Implementations:
-//
-//   • MultipeerTransport — real cross-device transport over
-//     MultipeerConnectivity (next slice).
-//   • InMemoryTransport  — two paired endpoints in one process. Used for
-//     tests and for headless verification that the engine plumbing is
-//     right before turning on the radio.
+//  to the host). The current implementation is backed by
+//  MultipeerConnectivity.
 //
 //  The protocol is deliberately tiny. Anything richer — request/response
 //  matching, reconnect, pause/resume — lives one layer up, in RemoteSeat

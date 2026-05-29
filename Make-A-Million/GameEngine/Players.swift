@@ -14,12 +14,12 @@ import Foundation
 
 /// Stable seat identity, 0..<4 clockwise. Independent of device/connection so
 /// it survives reconnects in a later milestone.
-struct PlayerID: Hashable, Codable {
+nonisolated struct PlayerID: Hashable, Codable {
     let raw: Int
     init(_ raw: Int) { self.raw = raw }
 }
 
-enum Seats {
+nonisolated enum Seats {
     static let count = 4
     static let all = (0..<count).map(PlayerID.init)
 
@@ -35,12 +35,12 @@ enum Seats {
 
 /// A bid is a dollar amount. Opening minimum $175,000; each raise at least
 /// $10,000 above the standing high bid. A player may pass instead.
-enum BidAction: Codable, Hashable {
+nonisolated enum BidAction: Codable, Hashable {
     case bid(Int)
     case pass
 }
 
-enum Bidding {
+nonisolated enum Bidding {
     static let openingMinimum = 175_000
     static let raiseIncrement = 10_000
     static let bidIncrement = 5_000
@@ -52,7 +52,7 @@ enum Bidding {
 // Codable, tiny — it crosses the UI boundary now and the network boundary
 // later, unchanged.
 
-enum Move: Codable, Hashable {
+nonisolated enum Move: Codable, Hashable {
     /// During the bidding phase: place a bid or pass.
     case bid(BidAction)
 
@@ -61,7 +61,8 @@ enum Move: Codable, Hashable {
     /// the optional rule lives in the state machine, not in UI glue.
     case callMisdeal
 
-    /// High bidder declining misdeal and proceeding (only legal when eligible).
+    /// Legacy wire case from the earlier vote-style misdeal rule. Auto-misdeal
+    /// hands now redeal through `callMisdeal`; this is intentionally never legal.
     case declineMisdeal
 
     /// High bidder discarding three cards after taking the widow.
@@ -78,7 +79,7 @@ enum Move: Codable, Hashable {
 
 /// Small deterministic PRNG (SplitMix64). The deal is the only randomness in
 /// the engine; seeding it means (seed, [moves]) fully reconstructs any hand.
-struct SeededRNG: RandomNumberGenerator {
+nonisolated struct SeededRNG: RandomNumberGenerator {
     private var state: UInt64
     init(seed: UInt64) { state = seed }
 

@@ -43,11 +43,9 @@
 				"Agents/GameRunner+Multi.swift",
 				Agents/HumanAgent.swift,
 				Agents/Networking/ClientSession.swift,
-				Agents/Networking/InMemoryTransport.swift,
 				Agents/Networking/MultipeerLobby.swift,
 				Agents/Networking/NetSession.swift,
 				"Agents/Networking/NetSession+HostSession.swift",
-				Agents/Networking/RemoteAgent.swift,
 				Agents/Networking/RemoteSeat.swift,
 				Agents/Networking/Transport.swift,
 				Agents/Networking/WireProtocol.swift,
@@ -88,11 +86,9 @@
 				"Agents/GameRunner+Multi.swift",
 				Agents/HumanAgent.swift,
 				Agents/Networking/ClientSession.swift,
-				Agents/Networking/InMemoryTransport.swift,
 				Agents/Networking/MultipeerLobby.swift,
 				Agents/Networking/NetSession.swift,
 				"Agents/Networking/NetSession+HostSession.swift",
-				Agents/Networking/RemoteAgent.swift,
 				Agents/Networking/RemoteSeat.swift,
 				Agents/Networking/Transport.swift,
 				Agents/Networking/WireProtocol.swift,
@@ -584,7 +580,7 @@
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Make-A-Million.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Make-A-Million";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Make-A-Million Mobile.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Make-A-Million Mobile";
 			};
 			name = Debug;
 		};
@@ -607,7 +603,7 @@
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Make-A-Million.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Make-A-Million";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Make-A-Million Mobile.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Make-A-Million Mobile";
 			};
 			name = Release;
 		};

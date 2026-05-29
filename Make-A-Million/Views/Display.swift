@@ -79,7 +79,7 @@ extension Phase {
     var headline: String {
         switch self {
         case .bidding: "Bidding"
-        case .misdealDecision: "Misdeal decision"
+        case .misdealDecision: "Misdeal"
         case .widowDiscard: "Discard three from the widow"
         case .namingTrump: "Name the trump color"
         case .trickPlay: "Trick play"

@@ -68,7 +68,7 @@ import Foundation
 
 struct MonteCarloAgent: PlayerAgent {
 
-    struct Difficulty {
+    nonisolated struct Difficulty {
         /// Determinized worlds sampled per trick-play decision. More =
         /// stronger but slower. With the new tactical playout 12-30 is
         /// often enough; old version needed 40+.
@@ -123,7 +123,7 @@ struct MonteCarloAgent: PlayerAgent {
 
         switch view.phase {
         case .bidding:         return decideBid(view, legal: legal)
-        case .misdealDecision: return decideMisdeal(view, legal: legal)
+        case .misdealDecision: return legal[0]
         case .widowDiscard:    return decideDiscard(view, legal: legal)
         case .namingTrump:     return decideTrump(view, legal: legal)
         case .trickPlay:       return decideTrickPlay(view, legal: legal)
@@ -203,8 +203,6 @@ struct MonteCarloAgent: PlayerAgent {
         let myTeam = Seats.team(of: view.me)
         let mine = Double(view.matchScore[myTeam] ?? 0)
         let theirs = Double(view.matchScore[1 - myTeam] ?? 0)
-        let goal: Double = 1_000_000
-
         // Conservative if we're close to winning.
         if mine >= 750_000 {
             let progress = min(1.0, (mine - 750_000) / 250_000)
@@ -223,30 +221,6 @@ struct MonteCarloAgent: PlayerAgent {
     private func shouldJumpBid() -> Bool {
         // 35% chance, so jump bids are an occasional flavour, not standard.
         seedBox.nextInt(upperBound: 100) < 35
-    }
-
-    // MARK: - Misdeal
-
-    private func decideMisdeal(_ view: PlayerView, legal: [Move]) -> Move {
-        // I won a bid; should I redeal? Two reasons to call it:
-        //  (a) my hand is structurally dead (low money, no Tiger).
-        //  (b) HandEvaluator says I'll miss my bid by a lot.
-        let myMoney = view.myHand.reduce(0) { $0 + $1.moneyValue }
-        let hasTiger = view.myHand.contains { if case .tiger = $0 { return true }; return false }
-        let dead = myMoney <= 15_000 && !hasTiger
-
-        if dead { return .callMisdeal }
-
-        // Estimate: I'll have the widow soon. Add a slack widow EV to the
-        // hand-only valuation and compare to my bid.
-        if let bid = view.highBid {
-            let v = HandEvaluator.bestValuation(view: view, hand: view.myHand)
-            let expected = Double(v.expectedGross)
-            if expected < Double(bid) * 0.80 {
-                return .callMisdeal
-            }
-        }
-        return .declineMisdeal
     }
 
     // MARK: - Widow discard (trump already known)

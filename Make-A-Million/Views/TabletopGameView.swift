@@ -260,7 +260,7 @@ struct TabletopGameView: View {
                 .font(.system(.title3, design: .rounded).bold())
                 .foregroundStyle(.secondary)
             HStack(spacing: 16) {
-                ForEach(widow, id: \.shortLabel) { card in
+                ForEach(Array(widow.enumerated()), id: \.offset) { _, card in
                     largeCardChip(card)
                 }
             }
@@ -290,8 +290,8 @@ struct TabletopGameView: View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Bidding").font(.headline).foregroundStyle(.secondary)
             HStack(spacing: 8) {
-                ForEach(records.suffix(6), id: \.player.raw) { record in // Show last 6 bids
-                    Text("\(seatShort(record.player)): \(record.action == .pass ? "Pass" : "$\( (record.action == .pass ? 0 : 15) )k")") // simplified bid label
+                ForEach(Array(records.suffix(6).enumerated()), id: \.offset) { _, record in
+                    Text("\(seatShort(record.player)): \(bidHistoryLabel(record.action))")
                         .font(.subheadline)
                         .padding(8)
                         .background(RoundedRectangle(cornerRadius: 8).fill(Color.blue.opacity(0.1)))
@@ -326,5 +326,12 @@ struct TabletopGameView: View {
     
     private func seatShort(_ p: PlayerID) -> String {
         String(seatName(p).prefix(3)).uppercased()
+    }
+
+    private func bidHistoryLabel(_ action: BidAction) -> String {
+        switch action {
+        case .pass: return "Pass"
+        case .bid(let amount): return "$\(amount / 1000)k"
+        }
     }
 }

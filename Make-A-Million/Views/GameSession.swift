@@ -178,7 +178,7 @@ final class GameSession: ObservableObject {
                     carryScore: carry,
                     spectator: spectator,
                     onView: { [weak self] view in
-                        await self?.receivePublicFrame(view)
+                        self?.receivePublicFrame(view)
                     })
                 await MainActor.run {
                     self.finishHand(final)
