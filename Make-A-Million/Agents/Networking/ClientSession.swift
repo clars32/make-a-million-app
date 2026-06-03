@@ -96,6 +96,9 @@ final class ClientSession: ObservableObject {
     private var queue: [QueueItem] = []
     private var drainTask: Task<Void, Never>? = nil
     private var draining = false
+    /// When the most recent frame was published, so the drain can space
+    /// frames by elapsed time rather than only when the next is buffered.
+    private var lastPublishAt: ContinuousClock.Instant? = nil
     private var holdPresentation = false
     private var pendingRequestID: UUID? = nil
 
@@ -356,6 +359,17 @@ final class ClientSession: ObservableObject {
         withAnimation(.spring(response: 0.34, dampingFraction: 0.80)) {
             displayView = view
         }
+        lastPublishAt = ContinuousClock.now
+    }
+
+    /// Sleep until at least `frameInterval` has elapsed since the last
+    /// published frame, so frames trickling in one at a time are paced the
+    /// same as a buffered burst.
+    private func paceSinceLastFrame() async {
+        guard let last = lastPublishAt else { return }
+        let target = last + frameInterval
+        let clock = ContinuousClock()
+        if clock.now < target { try? await clock.sleep(until: target) }
     }
 
     private func startDrainIfNeeded() {
@@ -371,12 +385,11 @@ final class ClientSession: ObservableObject {
                 switch queue.removeFirst() {
 
                 case .show(let view):
+                    // Pace before showing, so frames are evenly spaced whether
+                    // they were buffered or arrived one at a time.
+                    await paceSinceLastFrame()
+                    if Task.isCancelled { return }
                     publishFrame(view)
-                    let nextIsSettlePause =
-                        if case .pauseTrickSettle = queue.first { true } else { false }
-                    if !queue.isEmpty && !nextIsSettlePause {
-                        try? await Task.sleep(for: frameInterval)
-                    }
 
                 case .decision(let view, let id):
                     publishFrame(view)

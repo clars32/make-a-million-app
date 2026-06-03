@@ -52,6 +52,30 @@ enum MultipeerConfig {
     /// Encryption level. `.required` is the right default — it costs
     /// little on local Wi-Fi and a family game shouldn't run in cleartext.
     static let encryption: MCEncryptionPreference = .required
+
+    /// A stable MCPeerID for this display name, persisted across launches.
+    ///
+    /// `MCPeerID(displayName:)` mints a NEW underlying identity every call,
+    /// even with the same name. When the identity changes between launches
+    /// (e.g. after a fresh build), the other device's cached discovery and
+    /// the encryption handshake can disagree, which surfaces as "connects
+    /// once, then never." Apple's guidance is to archive one MCPeerID and
+    /// reuse it — that's what this does.
+    static func persistentPeerID(for displayName: String) -> MCPeerID {
+        let key = "mpc.peerID.\(displayName)"
+        let defaults = UserDefaults.standard
+        if let data = defaults.data(forKey: key),
+           let peer = try? NSKeyedUnarchiver.unarchivedObject(
+               ofClass: MCPeerID.self, from: data) {
+            return peer
+        }
+        let peer = MCPeerID(displayName: displayName)
+        if let data = try? NSKeyedArchiver.archivedData(
+            withRootObject: peer, requiringSecureCoding: true) {
+            defaults.set(data, forKey: key)
+        }
+        return peer
+    }
 }
 
 // MARK: - MultipeerHost
@@ -73,15 +97,23 @@ final class MultipeerHost: NSObject, ObservableObject {
     let localPeerID: MCPeerID
     var maxConnectedPeers: Int = Seats.count - 1
 
-    private let session: MCSession
-    private let advertiser: MCNearbyServiceAdvertiser
+    /// All three are rebuilt together by `resetStack()`. MultipeerConnectivity
+    /// retains stale per-peer state tied to the MCPeerID + session once a
+    /// connection has completed, which makes the *next* handshake fail
+    /// ("connects once, then never until a restart"). Swapping only the
+    /// session isn't enough — the identity the framework keys on must change
+    /// too — so we recreate peerID, session, and advertiser as a unit.
+    private let displayName: String
+    private var session: MCSession
+    private var advertiser: MCNearbyServiceAdvertiser
 
     /// Per-peer transport. Created when the peer connects; receives
     /// decoded ClientMessages routed by the session delegate.
     private var transports: [MCPeerID: MultipeerHostTransport] = [:]
 
     init(displayName: String) {
-        self.localPeerID = MCPeerID(displayName: displayName)
+        self.displayName = displayName
+        self.localPeerID = MultipeerConfig.persistentPeerID(for: displayName)
         self.session = MCSession(
             peer: localPeerID,
             securityIdentity: nil,
@@ -93,6 +125,32 @@ final class MultipeerHost: NSObject, ObservableObject {
         super.init()
         session.delegate = self
         advertiser.delegate = self
+    }
+
+    /// Tear the whole MPC stack down and build a fresh session + advertiser,
+    /// reusing the persistent peer identity. Called when the table returns to
+    /// empty, so the next joiner handshakes against a clean session. Safe
+    /// only when no peers are connected — it abandons existing connections.
+    private func resetStack() {
+        let wasAdvertising = isAdvertising
+        advertiser.stopAdvertisingPeer()
+        advertiser.delegate = nil
+        session.delegate = nil
+        session.disconnect()
+        for t in transports.values { t.markDisconnected() }
+        transports.removeAll()
+
+        session = MCSession(
+            peer: localPeerID,
+            securityIdentity: nil,
+            encryptionPreference: MultipeerConfig.encryption)
+        advertiser = MCNearbyServiceAdvertiser(
+            peer: localPeerID,
+            discoveryInfo: ["name": displayName],
+            serviceType: MultipeerConfig.serviceType)
+        session.delegate = self
+        advertiser.delegate = self
+        if wasAdvertising { advertiser.startAdvertisingPeer() }
     }
 
     func start() {
@@ -137,6 +195,12 @@ extension MultipeerHost: MCSessionDelegate {
                 self.transports[peerID]?.markDisconnected()
                 self.transports[peerID] = nil
                 self.connectedPeers.removeAll { $0.id == peerID }
+                // Table is empty again — rebuild the whole stack with a
+                // fresh identity so the next joiner isn't blocked by the
+                // stale per-peer state MPC keeps after a completed session.
+                if self.connectedPeers.isEmpty {
+                    self.resetStack()
+                }
             case .connecting:
                 break
             @unknown default:
@@ -231,12 +295,17 @@ final class MultipeerClient: NSObject, ObservableObject {
 
     let localPeerID: MCPeerID
 
-    private let session: MCSession
-    private let browser: MCNearbyServiceBrowser
+    /// peerID, session, and browser are rebuilt together by `resetStack()`.
+    /// See MultipeerHost.resetStack for why a fresh identity (not just a
+    /// fresh session) is required to connect more than once per launch.
+    private let displayName: String
+    private var session: MCSession
+    private var browser: MCNearbyServiceBrowser
     private var clientTransport: MultipeerClientTransport? = nil
 
     init(displayName: String) {
-        self.localPeerID = MCPeerID(displayName: displayName)
+        self.displayName = displayName
+        self.localPeerID = MultipeerConfig.persistentPeerID(for: displayName)
         self.session = MCSession(
             peer: localPeerID,
             securityIdentity: nil,
@@ -249,8 +318,36 @@ final class MultipeerClient: NSObject, ObservableObject {
         browser.delegate = self
     }
 
+    /// Tear down and rebuild the session + browser, reusing the persistent
+    /// peer identity. Run at the start of every browse cycle so each
+    /// connection attempt handshakes against a clean session.
+    private func resetStack() {
+        browser.stopBrowsingForPeers()
+        browser.delegate = nil
+        session.delegate = nil
+        session.disconnect()
+        clientTransport?.markDisconnected()
+        clientTransport = nil
+        transport = nil
+        discovered.removeAll()
+
+        session = MCSession(
+            peer: localPeerID,
+            securityIdentity: nil,
+            encryptionPreference: MultipeerConfig.encryption)
+        browser = MCNearbyServiceBrowser(
+            peer: localPeerID,
+            serviceType: MultipeerConfig.serviceType)
+        session.delegate = self
+        browser.delegate = self
+    }
+
     func startBrowsing() {
-        guard state == .idle || state == .browsing else { return }
+        // Don't disturb a live or in-flight connection.
+        if case .connected = state { return }
+        if case .connecting = state { return }
+        // Fresh identity for each browse cycle.
+        resetStack()
         browser.startBrowsingForPeers()
         state = .browsing
     }
@@ -270,6 +367,7 @@ final class MultipeerClient: NSObject, ObservableObject {
     /// state going to .notConnected (which we report as .failed).
     func join(_ host: DiscoveredHost) {
         guard discovered.contains(where: { $0.id == host.id }) else { return }
+        // The stack is already fresh from startBrowsing(); invite directly.
         browser.invitePeer(host.id, to: session,
                            withContext: nil, timeout: 15)
         state = .connecting(to: host.id)

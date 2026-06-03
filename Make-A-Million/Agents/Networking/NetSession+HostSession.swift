@@ -81,6 +81,15 @@ extension NetSession {
         gs.receiveFrameFromNet(view)
     }
 
+    /// Internal hook NetSession calls when a new hand is about to start, so the
+    /// host board clears its end-of-hand panel and presentation buffer before
+    /// the new deal's frames arrive.
+    @MainActor
+    func forwardHostHandStarting() {
+        guard let gs = hostObservationToken?.session else { return }
+        gs.beginNetHand()
+    }
+
     /// Internal hook NetSession calls when its runner returns. The host
     /// GameSession's own runner doesn't exist in multiplayer (the engine
     /// lives on NetSession), so the end-of-hand transition that GameSession

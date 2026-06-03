@@ -93,6 +93,12 @@ final class NetSession: ObservableObject, RemoteSeatDelegate {
     private var hostRole: HostRole
     private let botDifficulty: MonteCarloAgent.Difficulty
 
+    // Match progression, carried across hands.
+    private var currentDealer: PlayerID = PlayerID(0)
+    private var carryScore: [Int: Int] = [0: 0, 1: 0]
+    private var handSeedBase: UInt64 = 0
+    private var handIndex: UInt64 = 0
+
     // MARK: - Per-seat wiring (filled by `seat(_:as:)`)
 
     private struct SeatAssignment {
@@ -103,6 +109,11 @@ final class NetSession: ObservableObject, RemoteSeatDelegate {
         var botSeed: UInt64?           // set for .bot, also kept for fail-over
     }
     private var assignments: [PlayerID: SeatAssignment] = [:]
+
+    /// Latest observation dispatched to each seat, so a reconnecting client
+    /// can be re-primed with the current table immediately instead of
+    /// staring at a blank board until the next move produces a frame.
+    private var lastViews: [PlayerID: PlayerView] = [:]
 
     // MARK: - Pause coordination
 
@@ -187,13 +198,42 @@ final class NetSession: ObservableObject, RemoteSeatDelegate {
     /// RemoteSeat is started and told its assignment + seat names.
     func start(dealSeed: UInt64, dealer: PlayerID = PlayerID(0)) {
         guard runTask == nil else { return }
-        fillEmptySeatsWithBots(seedBase: dealSeed)
+        // Begin a fresh match.
+        handSeedBase = dealSeed
+        handIndex = 0
+        currentDealer = dealer
+        carryScore = [0: 0, 1: 0]
+        runHand()
+    }
 
+    /// Continue the match into the next hand: carry the running score forward,
+    /// rotate the dealer left, and re-deal. No-op while a hand is still running
+    /// or once the match has been decided.
+    func startNextHand() {
+        guard runTask == nil else { return }
+        if case .finished(let winner) = phase, winner != nil { return }
+        currentDealer = Seats.next(currentDealer)
+        handIndex &+= 1
+        runHand()
+    }
+
+    /// Launch one hand with the current match-progression state. Shared by
+    /// both `start` (fresh match) and `startNextHand` (continuation).
+    private func runHand() {
+        guard runTask == nil else { return }
+        fillEmptySeatsWithBots(seedBase: handSeedBase)
+        lastViews.removeAll()
         phase = .running
+        // Clear the host board's end-of-hand state for the new deal.
+        forwardHostHandStarting()
+
+        let dealer = currentDealer
+        let carry = carryScore
+        let handSeed = handSeedBase &+ handIndex
 
         runTask = Task { [weak self] in
             guard let self else { return }
-            
+
             // 1. DETACH the receive loops so they don't freeze the host setup!
             for assn in self.assignments.values where assn.kind == .remote {
                 if let r = assn.remote {
@@ -217,11 +257,11 @@ final class NetSession: ObservableObject, RemoteSeatDelegate {
 
             // 3. Safely start the engine. The clients are now fully prepared.
             let agents = self.buildAgents()
-            
+
             var spectatorSeats = self.assignments.values
                 .filter { $0.kind == .remote }
                 .map(\.seat)
-                
+
             switch self.hostRole {
             case .player(let seat, _, _):
                 spectatorSeats.append(seat) // Host needs their own frames
@@ -236,7 +276,8 @@ final class NetSession: ObservableObject, RemoteSeatDelegate {
             do {
                 let final = try await runner.playHand(
                     dealer: dealer,
-                    dealSeed: dealSeed,
+                    dealSeed: handSeed,
+                    carryScore: carry,
                     spectators: spectatorSeats,
                     onSeatView: { [weak self] seat, view in
                         await self?.dispatchObservation(seat: seat, view: view)
@@ -264,6 +305,9 @@ final class NetSession: ObservableObject, RemoteSeatDelegate {
     // MARK: - Frame dispatch
 
     private func dispatchObservation(seat: PlayerID, view: PlayerView) async {
+        // Remember the freshest frame per seat for reconnect re-priming.
+        lastViews[seat] = view
+
         // Handle local host UI observation
         switch hostRole {
         case .player(let hostSeat, _, _):
@@ -307,7 +351,10 @@ final class NetSession: ObservableObject, RemoteSeatDelegate {
                 return PauseAwareRemoteAgent(
                     name: assn.name, seat: seat, channel: r, session: self)
             case .bot:
-                let seed = assn.botSeed ?? UInt64(seat.raw &+ 1)
+                // Mix in the hand index so bots don't replay identical
+                // "random" decisions hand after hand.
+                let base = assn.botSeed ?? UInt64(seat.raw &+ 1)
+                let seed = base &+ handIndex &* 0x9E3779B97F4A7C15
                 return MonteCarloAgent(
                     name: assn.name, difficulty: botDifficulty, seed: seed)
             }
@@ -351,6 +398,39 @@ final class NetSession: ObservableObject, RemoteSeatDelegate {
         return await bot.chooseMove(from: view)
     }
 
+    /// A previously-dropped remote seat's peer has reconnected on a fresh
+    /// transport. Rebind the seat's channel, re-prime the new client with
+    /// the current table, then resume the paused table. Ordering matters:
+    /// the rebind must finish before we resolve the pause, or the resumed
+    /// agent would re-issue its decision on the dead transport.
+    func reconnect(seat: PlayerID, transport: HostToClientTransport) {
+        guard runTask != nil,
+              let assn = assignments[seat], assn.kind == .remote,
+              let r = assn.remote else { return }
+
+        let names = seatNamesArray()
+        let lastView = lastViews[seat]
+
+        Task { [weak self] in
+            guard let self else { return }
+            await r.rebind(transport: transport, delegate: self)
+            await r.sendSeatAssignment(seatNames: names)
+            await r.sendHandStarted()
+            if let v = lastView { await r.sendObservation(v) }
+            await self.resumeAfterReconnect()
+        }
+    }
+
+    private func resumeAfterReconnect() {
+        guard case .paused = phase else { return }
+        phase = .running
+        publishSeats()
+        for assn in assignments.values where assn.kind == .remote {
+            if let r = assn.remote { Task { await r.sendResume() } }
+        }
+        resolveAllPauseWaiters(with: .reconnected)
+    }
+
     /// UI affordance for v1: convert the dropped seat into a bot and
     /// continue. The runner's suspended chooseMove resumes; the new agent
     /// is consulted from this move forward.
@@ -384,6 +464,8 @@ final class NetSession: ObservableObject, RemoteSeatDelegate {
 
     private func handFinished(_ final: GameState) async {
         runTask = nil
+        // Carry the settled score into the next hand.
+        carryScore = final.matchScore
         phase = .finished(matchWinner: final.matchWinner)
         // Transition the host's bound GameSession to its end-of-hand
         // state. The host's GameSession has no runner of its own in this

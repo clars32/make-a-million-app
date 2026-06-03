@@ -2,84 +2,66 @@
 //  ClientGameView.swift
 //  Make-a-Million
 //
+//  The player's phone. Held in landscape like a real hand of cards: the screen
+//  is just the fanned hand. All shared/public information (scores, trump, the
+//  trick in play, whose turn it is) lives on the tabletop, not here.
+//
+//  Idle = cards only. When it's this player's turn:
+//   • trick play   — legal cards highlight and are tappable to play.
+//   • bid / trump / discard — a compact action bar slides up over the hand,
+//     then collapses back to cards-only once the move is made.
+//
 
 import SwiftUI
 
 struct ClientGameView: View {
 
     let playerName: String
-    let hostName: String // Track who the host is
+    let hostName: String
     @ObservedObject var session: ClientSession
     let onExit: () -> Void
 
     @State private var lastView: PlayerView? = nil
+    @State private var discardSelection: Set<Card> = []
+    @State private var selectedBidIndex: Int = 0
+    @Namespace private var cardNS
 
-    private var tableView: PlayerView? {
-        session.displayView ?? session.pending ?? lastView
-    }
-    private var decisionView: PlayerView? {
+    // Card sizing for a phone held in landscape.
+    private let cardW: CGFloat = 96
+    private let cardH: CGFloat = 136
+
+    /// The hand to render. `pending` (a decision frame) takes priority so legal
+    /// moves are accurate on this player's turn; otherwise the paced frame.
+    private var handView: PlayerView? {
         session.pending ?? session.displayView ?? lastView
     }
-    private var isInteractive: Bool { session.pending != nil }
+    private var isMyTurn: Bool { session.pending != nil }
 
-    private var pendingTick: Int {
-        guard let p = session.pending else { return -1 }
-        return GameBody.animationToken(p)
-    }
     private var displayTick: Int {
         guard let d = session.displayView else { return -1 }
         return GameBody.animationToken(d)
     }
-
-    // AUTOMATIC DETECTION: If the host isn't playing at seat 0, it's a tabletop game!
-    private var isControllerMode: Bool {
-        guard let firstSeatName = session.seatNames.first else { return false }
-        return firstSeatName != hostName
+    private var pendingTick: Int {
+        guard let p = session.pending else { return -1 }
+        return GameBody.animationToken(p)
     }
 
     var body: some View {
         ZStack {
-            GameBody(
-                tableView: tableView,
-                decisionView: decisionView ?? tableView,
-                isInteractive: isInteractive,
-                caughtUp: session.caughtUp,
-                endOfHandSnapshot: nil,
-                pendingTick: pendingTick,
-                displayTick: displayTick,
-                seatNames: session.seatNames.isEmpty ? ["South", "West", "North", "East"] : session.seatNames,
-                isControllerMode: isControllerMode, // Pass auto-detected state
-                submit: { move in session.submit(move) },
-                startAction: nil,
-                dealAnother: nil,
-                dealSeed: 0,
-                onCaptureLastView: { lastView = $0 })
-            .padding(.top, isControllerMode ? 20 : 0) // Visual comfort padding for landscape layout
+            feltBackground
 
-            // Sleek utility overlay top bar
-            VStack {
-                HStack {
-                    if isControllerMode {
-                        Text("🎮 Controller Mode")
-                            .font(.caption).bold()
-                            .foregroundStyle(.secondary)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 5)
-                            .background(.ultraThinMaterial, in: Capsule())
-                    }
-                    
-                    Spacer()
-                    
-                    Button("Leave") {
-                        session.stop()
-                        onExit()
-                    }
-                    .buttonStyle(.bordered)
-                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8))
+            if let view = handView {
+                VStack(spacing: 8) {
+                    Spacer(minLength: 0)
+                    if isMyTurn { actionBar(view) }   // only for bid/trump/discard
+                    handArea(view)
                 }
-                .padding()
-                Spacer()
+                .padding(.bottom, 6)
+            } else {
+                waitingView
             }
+
+            topBar
 
             if case .paused(let reason) = session.phase {
                 pausedOverlay(reason: reason)
@@ -87,85 +69,308 @@ struct ClientGameView: View {
                 disconnectedOverlay
             }
         }
-        // Force Landscape Orientation when playing on a Tabletop
         .onAppear {
-            if isControllerMode {
-                setOrientation(.landscapeRight)
-            }
+            setOrientation(.landscape)
+            lastView = handView
         }
-        .onDisappear {
-            if isControllerMode {
-                setOrientation(.portrait)
-            }
+        .onDisappear { setOrientation(.portrait) }
+        .onChange(of: displayTick) { _, _ in
+            guard let d = session.displayView else { return }
+            DispatchQueue.main.async { lastView = d }
         }
-    }
-
-    // Native geometry request handler for orientation management
-    private func setOrientation(_ orientation: UIInterfaceOrientationMask) {
-        if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene {
-            windowScene.requestGeometryUpdate(.iOS(interfaceOrientations: orientation))
+        .onChange(of: pendingTick) { _, _ in
+            // New decision arrived — clear any stale discard selection.
+            DispatchQueue.main.async { discardSelection = [] }
         }
     }
 
-    // MARK: Overlays
+    // MARK: - Hand
+
+    private func handArea(_ view: PlayerView) -> some View {
+        FannedHand(cards: view.myHand,
+                   cardWidth: cardW,
+                   rotationPad: 120,
+                   preferredOverlap: cardW * 0.45,
+                   liftedCards: discardSelection) { card, total in
+            handCard(card, view: view, total: total)
+        }
+        .frame(height: cardH + 60)
+        .frame(maxWidth: .infinity)
+    }
+
+    @ViewBuilder
+    private func handCard(_ card: Card, view: PlayerView, total: Int) -> some View {
+        let playable = isMyTurn && view.phase == .trickPlay && isLegalPlay(card, in: view)
+        let selectable = isMyTurn && view.phase == .widowDiscard && isDiscardSelectable(card, in: view)
+        let selected = discardSelection.contains(card)
+
+        Group {
+            if playable {
+                Button { session.submit(.play(card)) } label: {
+                    CardFace(card: card, highlighted: true,
+                             width: cardW, height: cardH, dense: total > 12)
+                }
+                .buttonStyle(.plain)
+            } else if selectable {
+                Button { toggleDiscard(card) } label: {
+                    CardFace(card: card, selected: selected, highlighted: true,
+                             width: cardW, height: cardH, dense: total > 12)
+                }
+                .buttonStyle(.plain)
+            } else {
+                CardFace(card: card, selected: selected,
+                         width: cardW, height: cardH, dense: total > 12)
+            }
+        }
+        .matchedGeometryEffect(id: cardKey(card), in: cardNS)
+    }
+
+    // MARK: - Action bar (bid / trump / discard only)
+
+    @ViewBuilder
+    private func actionBar(_ view: PlayerView) -> some View {
+        switch view.phase {
+        case .bidding:      biddingBar(view)
+        case .namingTrump:  trumpBar(view)
+        case .widowDiscard: discardBar(view)
+        default:            EmptyView()
+        }
+    }
+
+    private func biddingBar(_ view: PlayerView) -> some View {
+        let passMove = view.legalMoves.first { $0.isPass }
+        let bidMoves = view.legalMoves.filter { $0.bidAmount != nil }
+        let safeIndex = min(selectedBidIndex, max(0, bidMoves.count - 1))
+
+        return HStack(spacing: 10) {
+            if !bidMoves.isEmpty {
+                ScrollViewReader { proxy in
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            ForEach(Array(bidMoves.enumerated()), id: \.offset) { index, move in
+                                let isSel = index == safeIndex
+                                Button {
+                                    withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) {
+                                        selectedBidIndex = index
+                                        proxy.scrollTo(index, anchor: .center)
+                                    }
+                                } label: {
+                                    Text(move.label.replacingOccurrences(of: "Bid ", with: ""))
+                                        .font(.system(.subheadline, design: .rounded).weight(.bold))
+                                        .foregroundStyle(isSel ? .white : .primary)
+                                        .padding(.horizontal, 14).frame(height: 40)
+                                        .background(Capsule().fill(isSel ? Color.blue : Color.secondary.opacity(0.18)))
+                                        .scaleEffect(isSel ? 1.05 : 0.95)
+                                }
+                                .buttonStyle(.plain)
+                                .id(index)
+                            }
+                        }
+                        .padding(.horizontal, 4)
+                    }
+                    .frame(maxWidth: 360)
+                }
+            }
+            if let passMove {
+                actionButton("Pass", tint: .gray) { session.submit(passMove) }
+            }
+            if !bidMoves.isEmpty {
+                actionButton("Bid", tint: .blue) { session.submit(bidMoves[safeIndex]) }
+            }
+        }
+        .barChrome()
+        .transition(.move(edge: .bottom).combined(with: .opacity))
+    }
+
+    private func trumpBar(_ view: PlayerView) -> some View {
+        let trumpMoves: [(CardColor, Move)] = view.legalMoves.compactMap { move in
+            if case .nameTrump(let c) = move { return (c, move) }
+            return nil
+        }
+        return HStack(spacing: 10) {
+            Text("Trump:").font(.subheadline.weight(.semibold)).foregroundStyle(.white.opacity(0.9))
+            ForEach(trumpMoves, id: \.0) { color, move in
+                let swatch: Color = (color == .black) ? .black : color.swatch
+                Button { session.submit(move) } label: {
+                    HStack(spacing: 6) {
+                        Circle().fill(swatch).frame(width: 16, height: 16)
+                            .overlay(Circle().stroke(.white.opacity(0.8), lineWidth: 1))
+                        Text(color.displayName).font(.system(.subheadline, design: .rounded).weight(.bold))
+                            .foregroundStyle(.white)
+                    }
+                    .padding(.horizontal, 12).frame(height: 40)
+                    .background(Capsule().fill(swatch.opacity(0.85)))
+                    .overlay(Capsule().stroke(swatch, lineWidth: 1))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .barChrome()
+        .transition(.move(edge: .bottom).combined(with: .opacity))
+    }
+
+    private func discardBar(_ view: PlayerView) -> some View {
+        let ready = discardSelection.count == 3
+        let move = ready ? matchingDiscardMove(in: view) : nil
+        return HStack(spacing: 12) {
+            Text("Discard 3 — tap your cards")
+                .font(.subheadline.weight(.semibold)).foregroundStyle(.white.opacity(0.9))
+            Text("\(discardSelection.count)/3")
+                .font(.system(.subheadline, design: .rounded).bold().monospacedDigit())
+                .foregroundStyle(.white)
+            actionButton("Discard", tint: move == nil ? .gray : .blue) {
+                if let move { session.submit(move); discardSelection = [] }
+            }
+            .disabled(move == nil)
+            .opacity(move == nil ? 0.5 : 1)
+        }
+        .barChrome()
+        .transition(.move(edge: .bottom).combined(with: .opacity))
+    }
+
+    private func actionButton(_ title: String, tint: Color, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(.subheadline, design: .rounded).weight(.bold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 18).frame(height: 40)
+                .background(Capsule().fill(tint))
+        }
+        .buttonStyle(.plain)
+    }
+
+    // MARK: - Chrome
+
+    private var feltBackground: some View {
+        LinearGradient(colors: [Color(red: 0.05, green: 0.25, blue: 0.15),
+                                Color(red: 0.03, green: 0.16, blue: 0.10)],
+                       startPoint: .top, endPoint: .bottom)
+            .ignoresSafeArea()
+    }
+
+    private var topBar: some View {
+        VStack {
+            HStack {
+                Spacer()
+                Button {
+                    session.stop()
+                    onExit()
+                } label: {
+                    Image(systemName: "rectangle.portrait.and.arrow.right")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.white.opacity(0.85))
+                        .padding(8)
+                        .background(.ultraThinMaterial, in: Circle())
+                }
+            }
+            Spacer()
+        }
+        .padding(.horizontal, 14)
+        .padding(.top, 6)
+    }
+
+    private var waitingView: some View {
+        VStack(spacing: 12) {
+            ProgressView().tint(.white).scaleEffect(1.3)
+            Text("Waiting for the table…")
+                .font(.callout).foregroundStyle(.white.opacity(0.8))
+        }
+    }
+
+    // MARK: - Overlays
 
     private func pausedOverlay(reason: PauseReason) -> some View {
-        ZStack {
-            Color.black.opacity(0.35).ignoresSafeArea()
-            VStack(spacing: 12) {
-                Image(systemName: "pause.circle.fill")
-                    .font(.system(size: 48))
-                    .foregroundStyle(.orange)
-                Text("Table paused")
-                    .font(.title3).bold().foregroundStyle(.primary)
-                Text(messageFor(reason))
-                    .multilineTextAlignment(.center)
-                    .foregroundStyle(.secondary)
-                Text("Waiting for the host…")
-                    .font(.caption).foregroundStyle(.tertiary)
-                    .padding(.top, 4)
-            }
-            .padding(22)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .strokeBorder(.primary.opacity(0.1), lineWidth: 0.5)
-            )
-            .padding(.horizontal, 28)
+        overlayCard {
+            Image(systemName: "pause.circle.fill").font(.system(size: 48)).foregroundStyle(.orange)
+            Text("Table paused").font(.title3).bold()
+            Text(messageFor(reason)).multilineTextAlignment(.center).foregroundStyle(.secondary)
+            Text("Waiting for the host…").font(.caption).foregroundStyle(.tertiary).padding(.top, 4)
         }
     }
 
     private var disconnectedOverlay: some View {
+        overlayCard {
+            Image(systemName: "wifi.slash").font(.system(size: 44)).foregroundStyle(.red)
+            Text("Disconnected").font(.title3).bold()
+            Text("Lost connection to the host.").foregroundStyle(.secondary)
+            Button("Back to menu") { session.stop(); onExit() }
+                .buttonStyle(.borderedProminent).padding(.top, 6)
+        }
+    }
+
+    private func overlayCard<C: View>(@ViewBuilder _ content: () -> C) -> some View {
         ZStack {
-            Color.black.opacity(0.35).ignoresSafeArea()
-            VStack(spacing: 14) {
-                Image(systemName: "wifi.slash")
-                    .font(.system(size: 44))
-                    .foregroundStyle(.red)
-                Text("Disconnected").font(.title3).bold().foregroundStyle(.primary)
-                Text("Lost connection to the host.")
-                    .foregroundStyle(.secondary)
-                Button("Back to menu") {
-                    session.stop()
-                    onExit()
-                }
-                .buttonStyle(.borderedProminent)
-                .padding(.top, 6)
-            }
-            .padding(22)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .strokeBorder(.primary.opacity(0.1), lineWidth: 0.5)
-            )
-            .padding(.horizontal, 28)
+            Color.black.opacity(0.45).ignoresSafeArea()
+            VStack(spacing: 12) { content() }
+                .padding(24)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                .padding(.horizontal, 40)
         }
     }
 
     private func messageFor(_ reason: PauseReason) -> String {
         switch reason {
-        case .playerDisconnected(_, let name):
-            return "\(name) lost connection."
+        case .playerDisconnected(_, let name): return "\(name) lost connection."
         }
+    }
+
+    // MARK: - Move helpers
+
+    private func isLegalPlay(_ card: Card, in view: PlayerView) -> Bool {
+        view.legalMoves.contains { if case .play(let c) = $0 { return c == card }; return false }
+    }
+
+    private func matchingDiscardMove(in view: PlayerView) -> Move? {
+        view.legalMoves.first { move in
+            guard case .discardWidow(let cards) = move else { return false }
+            return Set(cards) == discardSelection
+        }
+    }
+
+    private func toggleDiscard(_ card: Card) {
+        if discardSelection.contains(card) { discardSelection.remove(card) }
+        else if discardSelection.count < 3 { discardSelection.insert(card) }
+    }
+
+    /// Mirror of GameBody.isDiscardSelectable — keeps the UI from offering taps
+    /// the engine would reject. (Tiger/Bull/Bear and trump are protected unless
+    /// the hand can't otherwise fill three discards.)
+    private func isDiscardSelectable(_ card: Card, in view: PlayerView) -> Bool {
+        guard view.phase == .widowDiscard else { return false }
+        if card.isSpecial { return false }
+        if let trump = view.trump, card.effectiveColor(trump: trump) == trump {
+            let safePool = view.myHand.filter {
+                !$0.isSpecial && $0.effectiveColor(trump: trump) != trump
+            }
+            return safePool.count < 3
+        }
+        if card.isMoney {
+            let safeNonMoney = view.myHand.filter { candidate in
+                guard !candidate.isSpecial, !candidate.isMoney else { return false }
+                if let trump = view.trump { return candidate.effectiveColor(trump: trump) != trump }
+                return true
+            }
+            return safeNonMoney.count < 3
+        }
+        return true
+    }
+
+    // MARK: - Orientation
+
+    private func setOrientation(_ mask: UIInterfaceOrientationMask) {
+        if let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene {
+            scene.requestGeometryUpdate(.iOS(interfaceOrientations: mask))
+        }
+    }
+}
+
+private extension View {
+    /// Shared pill chrome for the compact action bar.
+    func barChrome() -> some View {
+        self
+            .padding(.horizontal, 16).padding(.vertical, 10)
+            .background(.ultraThinMaterial, in: Capsule())
+            .overlay(Capsule().stroke(.white.opacity(0.15), lineWidth: 1))
+            .shadow(color: .black.opacity(0.3), radius: 8, y: 3)
     }
 }

@@ -107,6 +107,10 @@ final class GameSession: ObservableObject {
     private var runTask: Task<Void, Never>? = nil
     private var drainTask: Task<Void, Never>? = nil
 
+    /// When the most recent frame was published, so the drain can space
+    /// frames by elapsed time rather than only when the next is buffered.
+    private var lastPublishAt: ContinuousClock.Instant? = nil
+
     init() {
         human = HumanAgent(name: "You")
         human.coordinator = self
@@ -207,6 +211,24 @@ final class GameSession: ObservableObject {
         handIndex = 0
         currentDealer = PlayerID(0)
         currentCarry = [0: 0, 1: 0]
+    }
+
+    /// Reset only the presentation buffer for a NetSession-driven next hand —
+    /// clears the end-of-hand panel and queued frames so the new deal renders
+    /// cleanly. Unlike `reset()`, this leaves match-progression state alone
+    /// (the networked flow owns dealer/score on NetSession, not here).
+    func beginNetHand() {
+        drainTask?.cancel(); drainTask = nil
+        queue.removeAll()
+        draining = false
+        holdPresentation = false
+        pauseBotFramesUntil = nil
+        pendingFinal = nil
+        lastPublishAt = nil
+        displayView = nil
+        finished = nil
+        running = false
+        caughtUp = true
     }
 
     // MARK: - Buffer
@@ -320,6 +342,17 @@ final class GameSession: ObservableObject {
         withAnimation(.spring(response: 0.34, dampingFraction: 0.80)) {
             displayView = view
         }
+        lastPublishAt = ContinuousClock.now
+    }
+
+    /// Sleep until at least `frameInterval` has elapsed since the last
+    /// published frame. This paces frames that trickle in one at a time
+    /// (e.g. a remote host streaming bot plays) the same as a buffered burst.
+    private func paceSinceLastFrame() async {
+        guard let last = lastPublishAt else { return }
+        let target = last + frameInterval
+        let clock = ContinuousClock()
+        if clock.now < target { try? await clock.sleep(until: target) }
     }
 
     /// Mark the hand finished and transition the UI through the end-of-
@@ -365,11 +398,11 @@ final class GameSession: ObservableObject {
                 guard !queue.isEmpty else { break }
                 switch queue.removeFirst() {
                 case .show(let view):
+                    // Pace before showing, so frames are evenly spaced whether
+                    // they were buffered or arrived one at a time.
+                    await paceSinceLastFrame()
+                    if Task.isCancelled { return }
                     publishFrame(view)
-                    let nextIsSettlePause = if case .pauseTrickSettle = queue.first { true } else { false }
-                    if !queue.isEmpty && !nextIsSettlePause {
-                        try? await Task.sleep(for: frameInterval)
-                    }
                 case .pauseTrickSettle:
                     try? await Task.sleep(for: trickSettleInterval)
                 case .handFinishedMarker(let final):

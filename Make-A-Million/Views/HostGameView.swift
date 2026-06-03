@@ -55,7 +55,13 @@ struct HostGameView: View {
                 seatNames: netSession.seats.map(\.name), // NEW: Networked Names
                 submit: { move in human.submit(move) },
                 startAction: nil,
-                dealAnother: nil,
+                dealAnother: {
+                    if let s = gameSession.finished, s.matchWinner != nil {
+                        netSession.start(dealSeed: .random(in: .min ... .max))
+                    } else {
+                        netSession.startNextHand()
+                    }
+                },
                 dealSeed: 0,
                 onCaptureLastView: { lastView = $0 })
 

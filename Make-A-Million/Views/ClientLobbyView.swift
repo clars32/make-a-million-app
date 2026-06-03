@@ -26,8 +26,14 @@ struct ClientLobbyView: View {
 
     var body: some View {
         Group {
-            // Check if we are connected and have an active game frame
-            if case .connected(let peerName) = multipeer.state, let session = clientSession, session.displayView != nil {
+            // Once connected with a live session, hand off to the game
+            // view. Don't gate on session.displayView here: clientSession
+            // is held in @State, which does NOT observe the session's
+            // @Published properties, so a displayView change would never
+            // re-render this view and we'd stay stuck on the lobby.
+            // ClientGameView (@ObservedObject) shows its own "Waiting for
+            // the table…" state until the first frame arrives.
+            if case .connected(let peerName) = multipeer.state, let session = clientSession {
                 ClientGameView(
                     playerName: playerName,
                     hostName: peerName.displayName, // Pass the host's peer name here
@@ -54,6 +60,25 @@ struct ClientLobbyView: View {
         }
         .onAppear { multipeer.startBrowsing() }
         .onDisappear { multipeer.stop() }
+        .onChange(of: multipeer.state) { _, newState in
+            switch newState {
+            case .connected:
+                // Bind a fresh ClientSession to the (possibly brand-new,
+                // post-reconnect) transport. The old session, if any, is
+                // tied to a dead transport, so replace it outright.
+                guard let t = multipeer.transport else { return }
+                clientSession?.stop()
+                let session = ClientSession(transport: t)
+                clientSession = session
+                session.start()
+                session.introduce(name: playerName)
+            case .failed, .idle:
+                clientSession?.stop()
+                clientSession = nil
+            case .browsing, .connecting:
+                break
+            }
+        }
     }
 
     private var background: some View {
@@ -186,13 +211,6 @@ struct ClientLobbyView: View {
         }
         .frame(maxWidth: .infinity)
         .padding(20)
-        .onAppear {
-            guard clientSession == nil, let t = multipeer.transport else { return }
-            let session = ClientSession(transport: t)
-            clientSession = session
-            session.start()
-            session.introduce(name: playerName)
-        }
     }
 
     private func failedView(message: String) -> some View {

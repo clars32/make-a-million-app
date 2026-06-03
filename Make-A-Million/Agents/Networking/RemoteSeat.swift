@@ -33,7 +33,7 @@ actor RemoteSeat {
 
     let seat: PlayerID
     private(set) var name: String
-    private let transport: HostToClientTransport
+    private var transport: HostToClientTransport
 
     private var pendingMove: CheckedContinuation<Move, Error>?
     private var pendingRequestID: UUID?
@@ -61,6 +61,21 @@ actor RemoteSeat {
         receiveTask?.cancel()
         receiveTask = nil
         failPendingMove(with: TransportError.cancelled)
+    }
+
+    /// Swap in a fresh transport after the peer reconnects, and restart the
+    /// receive loop on it. The previous transport is already dead and its
+    /// pending request was failed at disconnect, so there is nothing to
+    /// preserve here — NetSession re-issues the decision after it resumes.
+    func rebind(transport: HostToClientTransport, delegate: RemoteSeatDelegate?) {
+        receiveTask?.cancel()
+        pendingMove = nil
+        pendingRequestID = nil
+        self.transport = transport
+        self.delegate = delegate
+        receiveTask = Task { [weak self] in
+            await self?.runReceiveLoop()
+        }
     }
 
     // MARK: - High-level operations used by the host

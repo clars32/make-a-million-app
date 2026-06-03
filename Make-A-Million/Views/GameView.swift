@@ -97,9 +97,7 @@ struct GameBody: View {
     
     // NEW: Dynamic Names
     let seatNames: [String]
-    
-    var isControllerMode: Bool = false
-    
+
     let submit: (Move) -> Void
     let startAction: (() -> Void)?
     let dealAnother: (() -> Void)?
@@ -145,13 +143,18 @@ struct GameBody: View {
             }
             .padding()
             .onChange(of: pendingTick) { _, _ in
-                if let v = decisionView, isInteractive {
+                guard let v = decisionView, isInteractive else { return }
+                // Defer the captures off this frame: a burst of frames can
+                // tick more than once per update, and writing @State inline
+                // here cascades into SwiftUI's "multiple updates per frame".
+                DispatchQueue.main.async {
                     onCaptureLastView?(v)
                     if v.phase != .widowDiscard { discardSelection = [] }
                 }
             }
             .onChange(of: displayTick) { _, _ in
-                if let d = tableView { onCaptureLastView?(d) }
+                guard let d = tableView else { return }
+                DispatchQueue.main.async { onCaptureLastView?(d) }
             }
             .onChange(of: tableView?.phase) { _, newPhase in
                 guard let newPhase else { return }
@@ -186,82 +189,41 @@ struct GameBody: View {
     // MARK: Active hand
 
     private func activeView(table: PlayerView, decision: PlayerView, interactive: Bool) -> some View {
-        // Wrap in a ScrollView when in landscape controller mode to protect vertical space safety
-        ScrollView(isControllerMode ? .vertical : []) {
+        ScrollView([]) {
             VStack(alignment: .leading, spacing: 12) {
-                
+
                 statusLine(table) // Crucial instructions stay fully visible
 
                 if table.phase == .misdealDecision {
                     misdealBanner(table)
                 }
 
-                if !isControllerMode {
-                    scoreBar(table)
-                    
-                    if table.phase == .bidding || !table.bidHistory.isEmpty {
-                        bidHistoryPanel(records: table.bidHistory, opener: table.opener)
-                    }
-                    
-                    if let widow = table.widow, !widow.isEmpty {
-                        widowPanel(widow, highBidder: table.highBidder)
-                    }
-                    
-                    if let last = table.lastTrick {
-                        lastTrickPanel(last)
-                    }
-                    
-                    if let trick = table.currentTrick, !trick.plays.isEmpty {
-                        trickInProgress(trick)
-                    }
-                    
-                    Divider()
+                scoreBar(table)
+
+                if table.phase == .bidding || !table.bidHistory.isEmpty {
+                    bidHistoryPanel(records: table.bidHistory, opener: table.opener)
                 }
-                
+
+                if let widow = table.widow, !widow.isEmpty {
+                    widowPanel(widow, highBidder: table.highBidder)
+                }
+
+                if let last = table.lastTrick {
+                    lastTrickPanel(last)
+                }
+
+                if let trick = table.currentTrick, !trick.plays.isEmpty {
+                    trickInProgress(trick)
+                }
+
+                Divider()
+
                 // Hands and Action buttons remain completely unobstructed below
                 Text("Your hand (\(table.myHand.count))")
                     .font(.caption).foregroundStyle(.secondary)
                 
-                let hand = keyedHand(table.myHand)
-                
-                GeometryReader { proxy in
-                    let n = hand.count
-                    let cardWidth: CGFloat = 60
-                    // Reserve enough horizontal margin for the rotated corners
-                    // of the outer cards to live inside the ScrollView's clip.
-                    // 80pt covers both the 13-card hand and the 16-card hand
-                    // the bidder holds during trump-naming and widow-discard.
-                    let rotationPad: CGFloat = 80
-                    let usable = max(cardWidth, proxy.size.width - rotationPad)
-                    let preferredOverlap: CGFloat = 30
-                    let naturalWidth = CGFloat(n) * cardWidth - CGFloat(max(0, n - 1)) * preferredOverlap
-                    let spacing: CGFloat = (n <= 1 || naturalWidth <= usable)
-                    ? -preferredOverlap
-                    : (usable - CGFloat(n) * cardWidth) / CGFloat(n - 1)
-                    let centerIndex = Double(n - 1) / 2.0
-                    
-                    let anglePerCard: Double = 3.5
-                    let maxAngle = anglePerCard * centerIndex
-                    let outerDip: CGFloat = 12
-                    let radius: CGFloat = maxAngle > 0
-                    ? outerDip / CGFloat(1 - cos(maxAngle * .pi / 180))
-                    : 1
-                    
-                    HStack(spacing: spacing) {
-                        ForEach(Array(hand.enumerated()), id: \.element.key) { index, entry in
-                            let offset = Double(index) - centerIndex
-                            let angleDeg = offset * anglePerCard
-                            let angleRad = angleDeg * .pi / 180
-                            let dip = radius * CGFloat(1 - cos(angleRad))
-                            
-                            handCard(entry.card, decision: decision, interactive: interactive, totalCards: n)
-                                .rotationEffect(.degrees(angleDeg), anchor: .bottom)
-                                .offset(y: dip)
-                                .offset(y: discardSelection.contains(entry.card) ? -8 : 0)
-                                .zIndex(Double(index))
-                        }
-                    }
-                    .frame(width: proxy.size.width, height: proxy.size.height)
+                FannedHand(cards: table.myHand, liftedCards: discardSelection) { card, n in
+                    handCard(card, decision: decision, interactive: interactive, totalCards: n)
                 }
                 .padding(.top, 25)
                 .padding(.bottom, 45)
@@ -785,38 +747,6 @@ struct GameBody: View {
         }
     }
 
-    private func sortedHand(_ hand: [Card]) -> [Card] {
-        hand.sorted { lhs, rhs in
-            let l = handSortKey(lhs)
-            let r = handSortKey(rhs)
-            if l.group != r.group { return l.group > r.group }
-            if l.color != r.color { return l.color > r.color }
-            return l.rank > r.rank
-        }
-    }
-
-    private func handSortKey(_ card: Card) -> (group: Int, color: Int, rank: Int) {
-        switch card {
-        case .colored(let color, let rank): return (0, color.rawValue, rank.rawValue)
-        case .tiger: return (1, 0, 0)
-        case .bull: return (1, 0, 1)
-        case .bear: return (1, 0, 2)
-        }
-    }
-
-    private func cardKey(_ card: Card) -> CardKey {
-        let k = handSortKey(card)
-        return CardKey(g: k.group, c: k.color, r: k.rank)
-    }
-
-    private func keyedHand(_ hand: [Card]) -> [(key: CardKey, card: Card)] {
-        sortedHand(hand).map { (cardKey($0), $0) }
-    }
-
-    private func keyedPlays(_ plays: [PlayedCard]) -> [(key: CardKey, play: PlayedCard)] {
-        plays.map { (cardKey($0.card), $0) }
-    }
-
     static func animationToken(_ v: PlayerView) -> Int {
         var token = v.myHand.count &* 1000
         token &+= (v.currentTrick?.plays.count ?? 0) &* 13
@@ -826,67 +756,13 @@ struct GameBody: View {
     }
 
     private func cardChip(_ card: Card, faded: Bool, selected: Bool = false, highlighted: Bool = false, totalCards: Int = 1) -> some View {
-        let safeTint = card.tint == .primary ? Color.black : card.tint
-        let isDense = totalCards > 12
-
-        return RoundedRectangle(cornerRadius: 12, style: .continuous)
-            .fill(Color.white)
-            .overlay(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .stroke(
-                        selected ? Color.accentColor
-                            : (highlighted ? Color.green : Color.gray.opacity(0.3)),
-                        lineWidth: (selected || highlighted) ? 2.5 : 0.5))
-            .overlay(
-                VStack(alignment: .leading, spacing: 0) {
-                    Text(card.shortLabel)
-                        .font(.system(size: isDense ? 10 : 13, weight: .heavy, design: .rounded))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.5)
-                    Circle()
-                        .fill(safeTint)
-                        .frame(width: 6, height: 6)
-                }
-                .padding(.top, 6)
-                .padding(.leading, 6)
-                .foregroundStyle(safeTint),
-                alignment: .topLeading)
-            .shadow(
-                color: .black.opacity(selected ? 0.3 : 0.15),
-                radius: selected ? 8 : 2,
-                y: selected ? 4 : 1)
-            .frame(width: 60, height: 85)
-            .opacity(faded ? 0.5 : 1.0)
-            .scaleEffect(selected ? 1.1 : 1.0)
-            .animation(.spring(response: 0.3, dampingFraction: 0.6), value: selected)
+        CardFace(card: card, faded: faded, selected: selected,
+                 highlighted: highlighted, dense: totalCards > 12)
     }
 
     private func miniCardChip(_ card: Card, faded: Bool = false) -> some View {
-        let safeTint = card.tint == .primary ? Color.black : card.tint
-        return RoundedRectangle(cornerRadius: 6, style: .continuous)
-            .fill(Color.white)
-            .overlay(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .stroke(Color.gray.opacity(0.3), lineWidth: 0.5))
-            .overlay(
-                HStack(spacing: 2) {
-                    Text(card.shortLabel)
-                        .font(.system(size: 9, weight: .heavy, design: .rounded))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.6)
-                    Circle().fill(safeTint).frame(width: 4, height: 4)
-                }
-                .padding(.horizontal, 4)
-                .foregroundStyle(safeTint))
-            .frame(width: 38, height: 26)
-            .opacity(faded ? 0.5 : 1.0)
+        MiniCardFace(card: card, faded: faded)
     }
-}
-
-struct CardKey: Hashable {
-    let g: Int
-    let c: Int
-    let r: Int
 }
 
 struct FlowRow: Layout {

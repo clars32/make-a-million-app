@@ -22,6 +22,12 @@ struct HostLobbyView: View {
     @State private var isTabletopMode: Bool = false
     @State private var seatAssignments: [Int: AnyHashable] = [:]
 
+    /// seat → peerID for seats wired into the running hand. Unlike
+    /// seatAssignments (a lobby concern that's cleared when a peer drops),
+    /// this survives a disconnect, so a returning peer can be matched back
+    /// to its seat and rebound for reconnect.
+    @State private var liveSeatPeers: [Int: AnyHashable] = [:]
+
     init(playerName: String, onExit: @escaping () -> Void) {
         self.playerName = playerName
         self.onExit = onExit
@@ -70,8 +76,22 @@ struct HostLobbyView: View {
             multipeer.start()
         }
         .onDisappear { multipeer.stop() }
-        .onChange(of: multipeer.connectedPeers.count) { _, _ in
-            maintainSeatAssignments()
+        .onChange(of: multipeer.connectedPeers) { old, new in
+            if didStartHand {
+                // Mid-game: a seat's original peer reappearing is a
+                // reconnect. Rebind it to its seat and resume the table.
+                let oldIDs = Set(old.map { AnyHashable($0.id) })
+                for peer in new where !oldIDs.contains(AnyHashable(peer.id)) {
+                    if let seatRaw = liveSeatPeers.first(
+                        where: { $0.value == AnyHashable(peer.id) })?.key,
+                       let transport = multipeer.transport(for: peer.id) {
+                        netSession.reconnect(
+                            seat: PlayerID(seatRaw), transport: transport)
+                    }
+                }
+            } else {
+                maintainSeatAssignments()
+            }
         }
         .onChange(of: isTabletopMode) { _, isTabletop in
             multipeer.maxConnectedPeers = isTabletop ? Seats.count : Seats.count - 1
@@ -274,6 +294,7 @@ struct HostLobbyView: View {
                let transport = multipeer.transport(for: peer.id) {
                 let remote = RemoteSeat(seat: seat, name: peer.displayName, transport: transport)
                 netSession.seat(seat, asRemote: remote, name: peer.displayName)
+                liveSeatPeers[seatRaw] = peerID
             }
         }
         bridgeToken = netSession.bindHostSession(gameSession)

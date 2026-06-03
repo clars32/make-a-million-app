@@ -24,4 +24,12 @@ struct HandCompleteSnapshot {
     let bidHistory: [BidRecord]
     let opener: PlayerID
     let debugReveal: DebugReveal?
+
+    // Optional end-of-hand bid recap (populated host-side, where the full
+    // result is known). bidAmount/bidder identify the winning bid;
+    // biddingTeamPoints is what that team actually captured this hand, so the
+    // view can show "made it" vs "set".
+    var bidAmount: Int? = nil
+    var bidder: PlayerID? = nil
+    var biddingTeamPoints: Int? = nil
 }
