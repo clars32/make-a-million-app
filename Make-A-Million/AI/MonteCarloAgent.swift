@@ -465,6 +465,10 @@ struct MonteCarloAgent: PlayerAgent {
         let partnerWinning = Seats.team(of: winner) == Seats.team(of: view.me)
                           && winner != view.me
         let moneyOnTable = onTable.reduce(0) { $0 + $1.card.moneyValue }
+        // EFFECTIVE worth (Bull/Bear applied): a trick already Beared is worth
+        // 0, so we must never bank money into it or fight to take it.
+        let effValue = PlayoutPolicy.tableValue(onTable)
+        let beared = PlayoutPolicy.tableIsBeared(onTable)
         let led = provisional.ledColor(trump: trump)
         let amLastToPlay = onTable.count == Seats.count - 1
 
@@ -493,17 +497,20 @@ struct MonteCarloAgent: PlayerAgent {
                                      trump: trump, inference: inference,
                                      view: view)
             if safe {
-                // VALUE-SAFETY: if a loose Bear can still legally land on this
-                // trick from a yet-to-play opponent, any money we add is fed
-                // straight to the Bear. Under that threat, offer ONLY the
-                // low non-money shed to the search — no money-dump candidate.
+                // A Bull doubles a partner-winning money trick, and flips an
+                // already-Beared one back to base×2 for us — a candidate even
+                // when the trick is currently Beared.
+                if !mustFollow, let bull = plays.first(where: { if case .bull = $0 { return true }; return false }),
+                   moneyOnTable > 0 {
+                    picks.append(bull)
+                }
+                // VALUE-SAFETY: if the trick is already Beared (worth 0), or a
+                // loose Bear can still land on it from a yet-to-play opponent,
+                // any money we add is wasted/fed to the Bear. In that case
+                // offer ONLY the low non-money shed — no money-dump candidate.
                 let bearThreat = !amLastToPlay
                     && inference.opponentCanBearTrick(led: led, currentTrick: trick)
-                if !bearThreat {
-                    if !mustFollow, let bull = plays.first(where: { if case .bull = $0 { return true }; return false }),
-                       moneyOnTable > 0 {
-                        picks.append(bull)
-                    }
+                if !beared && !bearThreat {
                     // Cards that are MY highest of their color are future
                     // controllers — try not to dump them.
                     let myTops = topOfEachColorInMyHand(view.myHand, trump: trump)
@@ -529,9 +536,10 @@ struct MonteCarloAgent: PlayerAgent {
             }
         }
 
-        // B. I can take it.
+        // B. I can take it. A Beared trick is worth 0 — never fight for it or
+        //    bank money into it; use effective value, not the raw money sum.
         let winners = pool.filter(wouldWin)
-        let worthTaking = moneyOnTable >= 5_000 || !partnerWinning
+        let worthTaking = !beared && (effValue >= 5_000 || !partnerWinning)
         if !winners.isEmpty && worthTaking {
             // Cheapest winner — and the most expensive (a Tiger smash on a
             // big money trick is sometimes right; let MCTS decide).
@@ -564,7 +572,9 @@ struct MonteCarloAgent: PlayerAgent {
         // loose Bull could still double the pot for their side.
         if !partnerWinning && !mustFollow {
             let bullDoubles = inference.opponentCanBullTrick(led: led, currentTrick: trick)
-            if moneyOnTable >= 10_000 || (bullDoubles && moneyOnTable > 0) {
+            // effValue is 0 if the trick is already Beared, so we never line up
+            // a second, wasted Bear.
+            if effValue >= 10_000 || (bullDoubles && moneyOnTable > 0) {
                 if let bear = plays.first(where: { if case .bear = $0 { return true }; return false }) {
                     picks.append(bear)
                 }

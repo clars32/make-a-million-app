@@ -61,6 +61,9 @@ final class GameSettings: ObservableObject {
     @Published var misdealThreshold: Int { didSet { persist() } }
     /// Who wins when both teams finish at or over the million in one hand.
     @Published var endgameTiebreak: EndgameTiebreak { didSet { persist() } }
+    /// Append a full-information trace of every completed hand to a file you
+    /// can export for AI review. Reveals hidden hands — debug/tuning only.
+    @Published var logHandsToFile: Bool { didSet { persist() } }
 
     private enum Key {
         static let revealAll      = "settings.revealAllCardsAfterHand"
@@ -70,6 +73,7 @@ final class GameSettings: ObservableObject {
         static let misdealEnabled = "settings.misdealEnabled"
         static let misdealAmount  = "settings.misdealThreshold"
         static let endgame        = "settings.endgameTiebreak"
+        static let logHands       = "settings.logHandsToFile"
     }
 
     private init() {
@@ -84,6 +88,7 @@ final class GameSettings: ObservableObject {
         misdealThreshold         = d.object(forKey: Key.misdealAmount) as? Int ?? 15_000
         endgameTiebreak = (d.string(forKey: Key.endgame)
             .flatMap(EndgameTiebreak.init(rawValue:))) ?? .standard
+        logHandsToFile           = d.object(forKey: Key.logHands) as? Bool ?? false
     }
 
     private func persist() {
@@ -95,6 +100,7 @@ final class GameSettings: ObservableObject {
         d.set(misdealEnabled,           forKey: Key.misdealEnabled)
         d.set(misdealThreshold,         forKey: Key.misdealAmount)
         d.set(endgameTiebreak.rawValue, forKey: Key.endgame)
+        d.set(logHandsToFile,           forKey: Key.logHands)
     }
 
     /// The engine's misdeal configuration built from the current toggles.
@@ -281,6 +287,20 @@ struct SettingsView: View {
                     }
                 }
                 .disabled(rulesLocked)
+
+                Section {
+                    Toggle("Log full hands to a file", isOn: $settings.logHandsToFile)
+                    if settings.logHandsToFile && HandLog.fileExists {
+                        ShareLink("Export hand log", item: HandLog.fileURL)
+                        Button("Clear hand log", role: .destructive) {
+                            HandLog.clear()
+                        }
+                    }
+                } header: {
+                    Text("AI debug log")
+                } footer: {
+                    Text("Writes a full-information trace of every completed hand — all four hands, the widow, every play, and the money flow — to a file you can share for AI review. Reveals hidden information; for tuning only.")
+                }
             }
             .navigationTitle("Settings")
             #if os(iOS)

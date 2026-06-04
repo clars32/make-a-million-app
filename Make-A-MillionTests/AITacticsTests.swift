@@ -155,6 +155,42 @@ final class AITacticsTests: XCTestCase {
         XCTAssertEqual(PlayoutPolicy.move(in: state, seat: P(0)), .play(y(.two)))
     }
 
+    // MARK: - Bear already on the table: the trick is worth $0
+
+    func testDoesNotBankMoneyIntoAnAlreadyBearedTrick() {
+        // The Bear is already on the table (seat 3), so this trick is worth $0.
+        // I am last to play and COULD win it with my $30k — but banking money
+        // into a Beared trick just burns it. Shed the 2 and keep the $30k.
+        let hands: [PlayerID: [Card]] = [
+            P(0): [y(.money30k), y(.two)],
+            P(1): [grn(.one)],
+            P(2): [grn(.two)],
+            P(3): [grn(.three)],
+        ]
+        let state = trickState(
+            hands: hands, trump: .red, leader: P(1),
+            onTable: [(P(1), y(.money10k)), (P(2), y(.three)), (P(3), .bear)],
+            toAct: P(0))
+        XCTAssertEqual(PlayoutPolicy.move(in: state, seat: P(0)), .play(y(.two)))
+    }
+
+    func testDoesNotDumpMoneyOntoPartnersAlreadyBearedTrick() {
+        // Partner (seat 2) "wins" the trick by rank, but an opponent already
+        // dropped the Bear, so it is worth $0. Adding my $10k is wasted — shed
+        // the low card and keep the money for a live trick.
+        let hands: [PlayerID: [Card]] = [
+            P(0): [blk(.money10k), grn(.one)],   // void in yellow
+            P(1): [grn(.two), grn(.three)],
+            P(2): [grn(.four)],
+            P(3): [grn(.seven)],
+        ]
+        let state = trickState(
+            hands: hands, trump: .red, leader: P(2),
+            onTable: [(P(2), y(.money40k)), (P(3), .bear)],
+            toAct: P(0))
+        XCTAssertEqual(PlayoutPolicy.move(in: state, seat: P(0)), .play(grn(.one)))
+    }
+
     func testBearsAnOpponentsBigMoneyTrick() {
         // Opponent (seat 3) is winning a $40k trick; I'm void in yellow and
         // hold the Bear — cancel the trick to zero.

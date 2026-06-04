@@ -373,6 +373,15 @@ final class GameSession: ObservableObject {
     /// deciding trick. We append a marker; the drain processes it last
     /// and flips `finished` then.
     func finishHand(_ final: GameState) {
+        // Debug capture: a full-information trace for AI review. Off by default;
+        // reveals hidden hands, so it's for tuning only. Rendered from the
+        // final state (no engine plumbing, nothing leaks mid-hand).
+        if GameSettings.shared.logHandsToFile, final.phase == .handComplete {
+            let labels = ["South (You · human)", "West (AI)", "North (AI)", "East (AI)"]
+            let log = HandLog.render(final, handIndex: Int(handIndex), seatLabels: labels)
+            HandLog.append(log)
+            print(log)
+        }
         pendingFinal = final
         enqueue(.handFinishedMarker(final))
     }

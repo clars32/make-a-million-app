@@ -279,6 +279,11 @@ enum PlayoutPolicy {
         let partnerWinning = Seats.team(of: currentWinner) == Seats.team(of: seat)
                           && currentWinner != seat
         let moneyOnTable = onTable.reduce(0) { $0 + $1.card.moneyValue }
+        // EFFECTIVE worth: a Bear already on the table makes the trick worth 0,
+        // a Bull doubles it. Decisions about whether to fight for or bank into
+        // this trick must use this, NOT the raw money sum.
+        let effValue = tableValue(onTable)
+        let beared = tableIsBeared(onTable)
         let led = provisional.ledColor(trump: trump)
         let amLastToPlay = onTable.count == Seats.count - 1
 
@@ -308,23 +313,22 @@ enum PlayoutPolicy {
                                                        onTable: onTable,
                                                        trump: trump)
             if safe {
-                // VALUE-SAFETY (not just rank-safety): a loose Bear in a
-                // yet-to-play opponent zeroes the trick's money even though
-                // it never out-ranks partner. Dumping our money onto a trick
-                // that is about to be Beared just feeds the Bear. When that
-                // threat exists, add the LEAST value possible.
-                let bearThreat = !amLastToPlay
-                    && opponentCanPlayBear(state: state, seat: seat,
-                                           onTable: onTable, led: led, trump: trump)
-                if bearThreat {
-                    // Shed cheapest non-money, non-special — never our money,
-                    // and never the Bear (it would cancel partner ourselves).
-                    return cheapestShed(followingPool, led: led, trump: trump)
-                }
-                // BULL doubles a money trick. Play it if we can.
+                // A Bull doubles a partner-winning money trick — and flips an
+                // already-Beared one back to base×2 for us. Worth it whenever
+                // real base money is present, so try it first.
                 if !mustFollow, let bull = plays.first(where: { if case .bull = $0 { return true }; return false }),
                    moneyOnTable > 0 {
                     return bull
+                }
+                // VALUE-SAFETY (not just rank-safety): adding money is pointless
+                // if the trick is ALREADY Beared (worth 0), or if a yet-to-play
+                // opponent can still Bear it. In both cases shed the LEAST value
+                // possible — never our money, never the Bear itself.
+                let bearThreat = !amLastToPlay
+                    && opponentCanPlayBear(state: state, seat: seat,
+                                           onTable: onTable, led: led, trump: trump)
+                if beared || bearThreat {
+                    return cheapestShed(followingPool, led: led, trump: trump)
                 }
                 // Dump money — but PRESERVE secondary controllers
                 // (principle 8: don't dump $30k on partner's $40k; keep
@@ -352,12 +356,15 @@ enum PlayoutPolicy {
         }
 
         // ---- I can take the trick AND it's worth taking.
+        // A Beared trick is worth 0 — never fight for it, and above all never
+        // bank money into it. Use the EFFECTIVE value, not the raw money sum.
         let winners = followingPool.filter(wouldWin)
-        let worthTaking = moneyOnTable >= 5_000 || !partnerWinning
+        let worthTaking = !beared && (effValue >= 5_000 || !partnerWinning)
         if !winners.isEmpty && worthTaking {
             // BANK MONEY when last to play: I am certain to win (no one plays
             // after me), so capture WITH a money card rather than shedding a
             // low one and stranding money that the other team may take later.
+            // (Only reached when the trick is NOT Beared, so the money counts.)
             if amLastToPlay {
                 let moneyWinners = winners.filter { $0.isMoney }
                 if let bank = moneyWinners.max(by: { $0.moneyValue < $1.moneyValue }) {
@@ -374,12 +381,13 @@ enum PlayoutPolicy {
         // ---- Can't / shouldn't win. Bear off an opponent's money trick.
         // Lower the threshold when an opponent can still drop a loose Bull
         // (which DOUBLES the money heading to their side): even a modest pot
-        // is worth cancelling then.
+        // is worth cancelling then. effValue is 0 if already Beared, so we
+        // never waste a second Bear.
         if !partnerWinning, !mustFollow,
            let bear = plays.first(where: { if case .bear = $0 { return true }; return false }) {
             let bullDoubles = opponentCanPlayBull(state: state, seat: seat,
                                                   onTable: onTable, led: led, trump: trump)
-            if moneyOnTable >= 10_000 || (bullDoubles && moneyOnTable > 0) {
+            if effValue >= 10_000 || (bullDoubles && moneyOnTable > 0) {
                 return bear
             }
         }
@@ -465,6 +473,30 @@ enum PlayoutPolicy {
                 && hand.contains { $0.effectiveColor(trump: trump) == led }
             if !canFollow || hand.count == 1 { return true }
         }
+        return false
+    }
+
+    /// Effective money value of the cards already on the table, applying the
+    /// Bull/Bear modifier present (mirrors `GameState.trickValue`). A trick
+    /// currently Beared is worth 0; a Bull-doubled one is worth base×2. Shared
+    /// with the agent shortlist so both reason about real worth, not raw money.
+    static func tableValue(_ onTable: [PlayedCard]) -> Int {
+        guard let first = onTable.first else { return 0 }
+        return GameState.trickValue(Trick(leader: first.player, plays: onTable))
+    }
+
+    /// True when the last special on the table is a Bear — the trick is worth
+    /// 0 right now and any money added to it is wasted (unless a later Bull
+    /// flips it back, which is handled separately).
+    static func tableIsBeared(_ onTable: [PlayedCard]) -> Bool {
+        var last: Card? = nil
+        for pc in onTable {
+            switch pc.card {
+            case .bull, .bear: last = pc.card
+            default: break
+            }
+        }
+        if case .bear = last { return true }
         return false
     }
 
