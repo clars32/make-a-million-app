@@ -35,19 +35,21 @@ set -euo pipefail
 SCHEME="Make-A-Million"
 BUNDLE_ID="com.truebluedev.Make-A-Million"
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=scripts/xcode-env.sh
+source "$PROJECT_DIR/scripts/xcode-env.sh"
 cd "$PROJECT_DIR"
 
 find_udid() {  # exact device name -> UDID (empty if none)
-  xcrun simctl list devices \
+  mam_xcrun simctl list devices \
     | awk -v n="$1" '$0 ~ ("(^| )" n " \\(") { if (match($0, /[0-9A-Fa-f-]{36}/)) { print substr($0, RSTART, RLENGTH); exit } }'
 }
 
 # `clean` subcommand: remove every MAM-* sim and exit.
 if [[ "${1:-}" == "clean" ]]; then
   echo "==> Deleting MAM-* simulators…"
-  for udid in $(xcrun simctl list devices \
+  for udid in $(mam_xcrun simctl list devices \
     | awk '/ MAM-[A-Za-z0-9]+-[0-9]+ \(/ { if (match($0, /[0-9A-Fa-f-]{36}/)) print substr($0, RSTART, RLENGTH) }'); do
-    xcrun simctl delete "$udid" >/dev/null 2>&1 || true
+    mam_xcrun simctl delete "$udid" >/dev/null 2>&1 || true
   done
   echo "Done."
   exit 0
@@ -58,25 +60,27 @@ SPECS=("$@")
 [[ ${#SPECS[@]} -eq 0 ]] && SPECS=("3:iPhone")
 
 echo "==> Building $SCHEME for the simulator…"
-xcodebuild build -project "$SCHEME.xcodeproj" -scheme "$SCHEME" \
-  -destination 'generic/platform=iOS Simulator' -configuration Debug -quiet
-
-APP="$(xcodebuild -project "$SCHEME.xcodeproj" -scheme "$SCHEME" \
+mam_xcodebuild build -project "$SCHEME.xcodeproj" -scheme "$SCHEME" \
   -destination 'generic/platform=iOS Simulator' -configuration Debug \
+  -derivedDataPath "$PROJECT_DIR/.derivedData" -quiet
+
+APP="$(mam_xcodebuild -project "$SCHEME.xcodeproj" -scheme "$SCHEME" \
+  -destination 'generic/platform=iOS Simulator' -configuration Debug \
+  -derivedDataPath "$PROJECT_DIR/.derivedData" \
   -showBuildSettings 2>/dev/null \
   | awk -F' = ' '/ BUILT_PRODUCTS_DIR/{d=$2} / FULL_PRODUCT_NAME/{n=$2} END{print d"/"n}')"
 [[ -d "$APP" ]] || { echo "error: built .app not found at: $APP" >&2; exit 1; }
 echo "==> App: $APP"
 
 # Newest available iOS runtime.
-RT_ID="$(xcrun simctl list runtimes | grep -E '^iOS ' | grep -vi unavailable \
+RT_ID="$(mam_xcrun simctl list runtimes | grep -E '^iOS ' | grep -vi unavailable \
   | grep -oE 'com\.apple\.CoreSimulator\.SimRuntime\.iOS[-0-9]+' | tail -1)"
 [[ -n "$RT_ID" ]] || { echo "error: no available iOS runtime (install one in Xcode ▸ Settings ▸ Components)" >&2; exit 1; }
 echo "==> Runtime: $RT_ID"
 
 # Newest device type matching a filter. simctl lists newest-first, legacy last.
 resolve_device_type() {
-  xcrun simctl list devicetypes | grep -iE "$1" \
+  mam_xcrun simctl list devicetypes | grep -iE "$1" \
     | grep -oE 'com\.apple\.CoreSimulator\.SimDeviceType\.[A-Za-z0-9-]+' | head -1
 }
 
@@ -113,7 +117,7 @@ for spec in "${SPECS[@]}"; do
   [[ "$COUNT" =~ ^[0-9]+$ && "$COUNT" -ge 1 ]] || { echo "error: bad count in spec '$spec'" >&2; exit 1; }
 
   DT_ID="$(resolve_device_type "$FILTER")"
-  [[ -n "$DT_ID" ]] || { echo "error: no device type matching '$FILTER'." >&2; xcrun simctl list devicetypes >&2; exit 1; }
+  [[ -n "$DT_ID" ]] || { echo "error: no device type matching '$FILTER'." >&2; mam_xcrun simctl list devicetypes >&2; exit 1; }
   TOKEN="$(printf '%s' "$FILTER" | tr -cd '[:alnum:]')"
   echo "==> $COUNT × $FILTER  ($DT_ID)"
 
@@ -122,13 +126,13 @@ for spec in "${SPECS[@]}"; do
     NAME="MAM-${TOKEN}-${IDX}"
     UDID="$(find_udid "$NAME")"
     if [[ -z "$UDID" ]]; then
-      UDID="$(xcrun simctl create "$NAME" "$DT_ID" "$RT_ID")"
+      UDID="$(mam_xcrun simctl create "$NAME" "$DT_ID" "$RT_ID")"
       echo "    created $NAME"
     fi
-    xcrun simctl bootstatus "$UDID" -b >/dev/null 2>&1 || true   # boots only if not already booted
-    xcrun simctl install "$UDID" "$APP"
-    xcrun simctl terminate "$UDID" "$BUNDLE_ID" >/dev/null 2>&1 || true
-    xcrun simctl launch "$UDID" "$BUNDLE_ID" >/dev/null
+    mam_xcrun simctl bootstatus "$UDID" -b >/dev/null 2>&1 || true   # boots only if not already booted
+    mam_xcrun simctl install "$UDID" "$APP"
+    mam_xcrun simctl terminate "$UDID" "$BUNDLE_ID" >/dev/null 2>&1 || true
+    mam_xcrun simctl launch "$UDID" "$BUNDLE_ID" >/dev/null
     echo "    $NAME ($UDID) ready"
     UDIDS+=("$UDID")
   done

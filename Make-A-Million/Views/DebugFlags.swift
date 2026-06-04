@@ -221,6 +221,8 @@ struct SettingsView: View {
     /// True while a hand is in progress: rule controls are disabled, display
     /// controls remain live. The home-screen entry passes `false`.
     var rulesLocked: Bool = false
+    /// Optional solo match seed, shown only by the solo in-game settings sheet.
+    var dealSeed: UInt64? = nil
     let onClose: () -> Void
 
     /// Misdeal threshold is edited in $1,000 steps over a sensible range.
@@ -244,6 +246,23 @@ struct SettingsView: View {
                     Text("Display")
                 } footer: {
                     Text("These change only what your table shows — they reveal no hidden information to the bots, and apply to the current hand immediately.")
+                }
+
+                if let dealSeed {
+                    Section {
+                        HStack {
+                            Text("Match seed")
+                            Spacer()
+                            Text(String(dealSeed))
+                                .font(.system(.footnote, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                                .textSelection(.enabled)
+                        }
+                    } header: {
+                        Text("Solo")
+                    } footer: {
+                        Text("This seed identifies the current solo match and can be used to reproduce the deal sequence.")
+                    }
                 }
 
                 Section {

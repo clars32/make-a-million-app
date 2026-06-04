@@ -366,6 +366,17 @@ final class GameSession: ObservableObject {
         if clock.now < target { try? await clock.sleep(until: target) }
     }
 
+    /// After the human previews a card, hold before the first bot frame even
+    /// if that frame is drained through the "catch up before my turn" path.
+    private func waitForPostHumanPreviewIfNeeded() async {
+        guard let until = pauseBotFramesUntil else { return }
+        let clock = ContinuousClock()
+        if clock.now < until {
+            try? await clock.sleep(until: until)
+        }
+        pauseBotFramesUntil = nil
+    }
+
     /// Mark the hand finished and transition the UI through the end-of-
     /// hand settle. Called locally by GameSession's own runner in the
     /// solo flow, and called externally by NetSession's bridge when the
@@ -401,18 +412,12 @@ final class GameSession: ObservableObject {
         drainTask = Task { @MainActor in
             while !queue.isEmpty && !holdPresentation {
                 if Task.isCancelled { return }
-                if let until = pauseBotFramesUntil {
-                    let clock = ContinuousClock()
-                    if clock.now < until {
-                        try? await clock.sleep(until: until)
-                    }
-                    pauseBotFramesUntil = nil
-                    // The sleep above suspended the main actor. finishHand,
-                    // reset, or another start can have run during the gap
-                    // and emptied the queue. Re-check before we touch it.
-                    if Task.isCancelled { return }
-                    if queue.isEmpty || holdPresentation { break }
-                }
+                await waitForPostHumanPreviewIfNeeded()
+                // The sleep above suspended the main actor. finishHand,
+                // reset, or another start can have run during the gap
+                // and emptied the queue. Re-check before we touch it.
+                if Task.isCancelled { return }
+                if queue.isEmpty || holdPresentation { break }
 
                 // Belt-and-braces guard — any future await above this line
                 // could also empty the queue, so make removeFirst() honest.
@@ -452,13 +457,13 @@ final class GameSession: ObservableObject {
 
     private func drainQueueOnMainActor() async {
         while !queue.isEmpty {
+            await waitForPostHumanPreviewIfNeeded()
+            await paceSinceLastFrame()
+
             guard !queue.isEmpty else { break }
             switch queue.removeFirst() {
             case .show(let view):
                 publishFrame(view)
-                if !queue.isEmpty {
-                    try? await Task.sleep(for: frameInterval)
-                }
             case .pauseTrickSettle:
                 try? await Task.sleep(for: trickSettleInterval)
             case .handFinishedMarker(let final):
@@ -502,7 +507,7 @@ extension GameSession: PresentationCoordinator {
 
     func humanTurnDidEnd() {
         holdPresentation = false
-        caughtUp = queue.isEmpty
+        caughtUp = queue.isEmpty && pauseBotFramesUntil == nil
         startDrainIfNeeded()
     }
 }
