@@ -22,21 +22,7 @@ struct TabletopGameView: View {
     let onExit: () -> Void
 
     @State private var lastView: PlayerView? = nil
-    @State private var sweep: SweepState? = nil
     @State private var showingSettings = false
-
-    /// A just-completed trick animating out toward its winner.
-    private struct SweepState: Equatable {
-        let index: Int
-        let plays: [PlayedCard]
-        let winner: PlayerID
-        var arrived: Bool
-    }
-
-    // Tabletop card size (was a hard-to-read 110pt).
-    private let trickCardW: CGFloat = 82
-    private let trickCardH: CGFloat = 115
-    private let centerSpread: CGFloat = 104  // how far each card sits from center
 
     private var tableView: PlayerView? { gameSession.displayView ?? lastView }
 
@@ -234,103 +220,17 @@ struct TabletopGameView: View {
 
     // MARK: Center trick
 
+    /// Tabletop is an absolute board: seat 0 sits at the bottom, so we pass
+    /// `viewer: PlayerID(0)`. The geometry and animations live in the shared
+    /// CenterTrickView (also used by the phone-sized GameBody board).
     private func trickCenter(_ table: PlayerView) -> some View {
-        let plays = table.currentTrick?.plays ?? []
-        let idle = plays.isEmpty && sweep == nil
-        return ZStack {
-            Circle()
-                .fill(Color.white.opacity(0.04))
-                .frame(width: 300, height: 300)
-
-            // Led-suit reminder at dead center (cards rest out toward the edges).
-            if let trump = table.trump,
-               let led = table.currentTrick?.ledColor(trump: trump),
-               !plays.isEmpty {
-                VStack(spacing: 3) {
-                    Circle().fill(colorSwatch(led)).frame(width: 22, height: 22)
-                        .overlay(Circle().stroke(.white.opacity(0.7), lineWidth: 1))
-                    Text("Led").font(.caption2).foregroundStyle(.white.opacity(0.6))
-                }
-            }
-
-            // In-progress trick — each card flies in from its player's side.
-            ForEach(keyedPlays(plays), id: \.key) { entry in
-                trickCard(entry.play)
-                    .offset(centerOffset(for: entry.play.player))
-                    .transition(flyIn(for: entry.play.player))
-            }
-
-            // Just-completed trick sweeping out to the winner.
-            if let s = sweep {
-                ForEach(keyedPlays(s.plays), id: \.key) { entry in
-                    trickCard(entry.play)
-                        .offset(s.arrived ? sweptOffset(for: s.winner)
-                                          : centerOffset(for: entry.play.player))
-                        .opacity(s.arrived ? 0 : 1)
-                }
-            }
-
-            if idle {
-                if let last = table.lastTrick {
-                    Text("\(seatName(last.winner)) won $\(last.value / 1000)k")
-                        .font(.system(.title3, design: .rounded).bold())
-                        .foregroundStyle(.white.opacity(0.85))
-                } else {
-                    Text("Waiting for the lead…")
-                        .font(.title3).foregroundStyle(.white.opacity(0.5))
-                }
-            }
-        }
-        .frame(width: 380, height: 380)
-        .animation(.spring(response: 0.34, dampingFraction: 0.8), value: plays.count)
-        .onChange(of: table.completedTricks.count) { _, count in
-            guard count > 0, let last = table.lastTrick else { sweep = nil; return }
-            startSweep(last, index: count)
-        }
-    }
-
-    private func trickCard(_ play: PlayedCard) -> some View {
-        CardFace(card: play.card, width: trickCardW, height: trickCardH)
-            .shadow(color: .black.opacity(0.4), radius: 5, y: 3)
-    }
-
-    /// Animate the four just-played cards toward the winner, then clear.
-    private func startSweep(_ last: CompletedTrickInfo, index: Int) {
-        sweep = SweepState(index: index, plays: last.plays, winner: last.winner, arrived: false)
-        withAnimation(.easeIn(duration: 0.55)) {
-            sweep?.arrived = true
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) {
-            if sweep?.index == index { sweep = nil }
-        }
-    }
-
-    /// Where a seat's card rests relative to center (toward that player's edge).
-    private func centerOffset(for seat: PlayerID) -> CGSize {
-        switch seat.raw {
-        case 0: return CGSize(width: 0, height: centerSpread)   // South
-        case 1: return CGSize(width: -centerSpread, height: 0)  // West
-        case 2: return CGSize(width: 0, height: -centerSpread)  // North
-        case 3: return CGSize(width: centerSpread, height: 0)   // East
-        default: return .zero
-        }
-    }
-
-    /// Off-table position toward a seat — used as both the fly-in start and the
-    /// sweep-out destination.
-    private func sweptOffset(for seat: PlayerID) -> CGSize {
-        let c = centerOffset(for: seat)
-        return CGSize(width: c.width * 2.8, height: c.height * 2.8)
-    }
-
-    /// Insertion transition: slide in from the player's edge; instant removal
-    /// (the sweep overlay handles the visible exit).
-    private func flyIn(for seat: PlayerID) -> AnyTransition {
-        let c = centerOffset(for: seat)
-        let delta = CGSize(width: c.width * 1.8, height: c.height * 1.8)
-        return .asymmetric(
-            insertion: .offset(delta).combined(with: .opacity),
-            removal: .identity)
+        CenterTrickView(
+            currentTrick: table.currentTrick,
+            completedTricks: table.completedTricks,
+            trump: table.trump,
+            viewer: PlayerID(0),
+            metrics: .tabletop,
+            seatName: seatName)
     }
 
     // MARK: Footer (last trick / widow)
@@ -523,10 +423,6 @@ struct TabletopGameView: View {
     /// The dealer sits one seat right of the opener (opener leads the bidding).
     private func dealerSeat(_ table: PlayerView) -> PlayerID {
         PlayerID((table.opener.raw + Seats.count - 1) % Seats.count)
-    }
-
-    private func colorSwatch(_ color: CardColor) -> Color {
-        color == .black ? .black : color.swatch
     }
 
     private func teamName(_ team: Int) -> String {

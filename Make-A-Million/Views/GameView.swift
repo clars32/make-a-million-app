@@ -108,7 +108,29 @@ private struct SoloGameBody: View {
             },
             dealSeed: dealSeed,
             onCaptureLastView: { lastView = $0 })
+        #if DEBUG
+        .onAppear {
+            if ProcessInfo.processInfo.environment["MAM_AUTOSTART"] != nil,
+               session.finished == nil, !session.running, !didAutoStart {
+                didAutoStart = true
+                session.startNewMatch(dealSeed: dealSeed)
+            }
+        }
+        .onChange(of: pendingTick) { _, _ in
+            guard ProcessInfo.processInfo.environment["MAM_AUTOPLAY"] != nil,
+                  let p = human.pending, p.phase != .trickPlay else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+                guard let cur = human.pending, cur.phase != .trickPlay else { return }
+                if let move = cur.legalMoves.first(where: { $0.isPass }) ?? cur.legalMoves.first {
+                    human.submit(move)
+                }
+            }
+        }
+        #endif
     }
+    #if DEBUG
+    @State private var didAutoStart = false
+    #endif
 }
 
 // MARK: - Shared body
@@ -150,27 +172,22 @@ struct GameBody: View {
 
     var body: some View {
         ZStack {
-            LinearGradient(
-                colors: [Color.teal.opacity(0.2), Color.blue.opacity(0.05)],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing)
-                .ignoresSafeArea()
+            feltBackground
 
             Group {
                 if let snapshot = endOfHandSnapshot {
-                    handCompleteView(snapshot)
+                    handCompleteView(snapshot).padding()
                 } else if let table = tableView {
                     activeView(
                         table: table,
                         decision: decisionView ?? table,
                         interactive: isInteractive)
                 } else if let startAction {
-                    startView(action: startAction)
+                    startView(action: startAction).padding()
                 } else {
-                    waitingView
+                    waitingView.padding()
                 }
             }
-            .padding()
             .onChange(of: pendingTick) { _, _ in
                 guard let v = decisionView, isInteractive else { return }
                 // Defer the captures off this frame: a burst of frames can
@@ -196,84 +213,77 @@ struct GameBody: View {
 
     private func startView(action: @escaping () -> Void) -> some View {
         VStack(spacing: 16) {
-            Text("Make-a-Million").font(.system(.largeTitle, design: .rounded)).bold()
+            Text("Make-a-Million")
+                .font(.system(.largeTitle, design: .rounded)).bold()
+                .foregroundStyle(.white)
             Text("You are South. West, North, and East are bots.")
-                .font(.subheadline).foregroundStyle(.secondary)
+                .font(.subheadline).foregroundStyle(.white.opacity(0.75))
                 .multilineTextAlignment(.center)
             Button("Deal a hand", action: action)
                 .buttonStyle(.borderedProminent)
             Text("deal seed \(dealSeed)")
-                .font(.caption).foregroundStyle(.tertiary)
+                .font(.caption).foregroundStyle(.white.opacity(0.4))
         }
     }
 
     private var waitingView: some View {
         VStack(spacing: 12) {
-            ProgressView().scaleEffect(1.2)
+            ProgressView().tint(.white).scaleEffect(1.2)
             Text("Waiting for the table…")
-                .font(.callout).foregroundStyle(.secondary)
+                .font(.callout).foregroundStyle(.white.opacity(0.8))
         }
     }
 
     // MARK: Active hand
 
+    /// The phone "mini tabletop": scores + phase up top, the four-direction
+    /// trick board in the middle (the local player at the bottom edge), the
+    /// fanned hand below. During the pre-trick action phases (bid / name trump /
+    /// discard) the center is empty anyway, so the action panel floats over it
+    /// while the opponent chips and hand stay put.
     private func activeView(table: PlayerView, decision: PlayerView, interactive: Bool) -> some View {
-        ScrollView([]) {
-            VStack(alignment: .leading, spacing: 12) {
-
-                statusLine(table) // Crucial instructions stay fully visible
+        let actionActive = interactive && isActionPhase(decision.phase)
+        return ZStack {
+            VStack(spacing: 8) {
+                boardHeader(table)
 
                 if table.phase == .misdealDecision {
                     misdealBanner(table)
                 }
 
-                scoreBar(table)
+                Spacer(minLength: 0)
 
-                // During bidding the record is always shown (you're acting on
-                // it); after bidding ends it stays only if the player opted in.
-                if table.phase == .bidding
-                    || (settings.showBidHistoryDuringHand && !table.bidHistory.isEmpty) {
-                    bidHistoryPanel(records: table.bidHistory, opener: table.opener)
+                boardArea(table)
+                    .scaleEffect(actionActive ? 0.92 : 1.0, anchor: .top)
+
+                Spacer(minLength: 0)
+
+                footerStrip(table)
+
+                if !actionActive {
+                    if interactive && decision.phase == .trickPlay {
+                        hintText("Tap a card in your hand to play it.")
+                    } else if !interactive {
+                        hintText(caughtUp ? "Waiting for other players…" : "Watching play…")
+                    }
                 }
 
-                if let widow = table.widow, !widow.isEmpty {
-                    widowPanel(widow, highBidder: table.highBidder)
-                }
-
-                if settings.showLastTrick, let last = table.lastTrick {
-                    lastTrickPanel(last)
-                }
-
-                if let trick = table.currentTrick, !trick.plays.isEmpty {
-                    trickInProgress(trick)
-                }
-
-                Divider()
-
-                // Hands and Action buttons remain completely unobstructed below
-                Text("Your hand (\(table.myHand.count))")
-                    .font(.caption).foregroundStyle(.secondary)
-                
-                FannedHand(cards: table.myHand, liftedCards: discardSelection) { card, n in
-                    handCard(card, decision: decision, interactive: interactive, totalCards: n)
-                }
-                .padding(.top, 25)
-                .padding(.bottom, 45)
-                .frame(height: 130)
-                .frame(maxWidth: .infinity)
-                
-                Divider()
-                
-                movePanel(decision, interactive: interactive)
-                
-                Spacer(minLength: 4)
-                
-                if settings.showFullTrickHistory && !table.completedTricks.isEmpty {
-                    historyPanel(table)
-                }
+                handSection(table: table, decision: decision, interactive: interactive)
             }
-            .opacity(interactive ? 1.0 : 0.97)
+            .padding(.horizontal, 12)
+            .padding(.top, 64)   // clear the floating gear / Back buttons
+            .padding(.bottom, 6)
+
+            if actionActive {
+                actionPanel(decision)
+                    .padding(.horizontal, 16)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+                    .padding(.bottom, 70)   // bias up, clear of the hand
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .zIndex(1)
+            }
         }
+        .animation(.spring(response: 0.36, dampingFraction: 0.85), value: actionActive)
     }
 
     @ViewBuilder
@@ -305,45 +315,251 @@ struct GameBody: View {
 
     // MARK: Score bar
 
-    private func scoreBar(_ view: PlayerView) -> some View {
-        let live = view.liveHandScore
-        let myTeam = Seats.team(of: view.me)
-        return HStack {
-            teamScoreColumn(teamAName, live: live[0, default: 0], match: view.matchScore[0, default: 0], alignment: .leading, isHighlighted: myTeam == 0)
-            Spacer()
-            Text("vs").font(.caption2).foregroundStyle(.tertiary)
-            Spacer()
-            teamScoreColumn(teamBName, live: live[1, default: 0], match: view.matchScore[1, default: 0], alignment: .trailing, isHighlighted: myTeam == 1)
+    // MARK: Board header (scores + phase + trump / high bid)
+
+    private func boardHeader(_ table: PlayerView) -> some View {
+        HStack(alignment: .top, spacing: 6) {
+            teamScorePill(team: 0, table)
+            Spacer(minLength: 2)
+            VStack(spacing: 6) {
+                Text(table.phase.headline)
+                    .font(.system(.headline, design: .rounded).bold())
+                    .foregroundStyle(.white)
+                    .lineLimit(1).minimumScaleFactor(0.7)
+                // Trump + high bid; wraps to a second row rather than truncating
+                // the labels when both are present on a narrow screen.
+                FlowRow(spacing: 6) {
+                    if let t = table.trump { trumpBadge(t) }
+                    if let bid = table.highBid, let bidder = table.highBidder {
+                        bidBadge(bidder: bidder, amount: bid)
+                    }
+                }
+                .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 2)
+            teamScorePill(team: 1, table)
         }
-        .padding(12)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
-    private func teamScoreColumn(_ name: String, live: Int, match: Int, alignment: HorizontalAlignment, isHighlighted: Bool) -> some View {
-        return VStack(alignment: alignment, spacing: 2) {
-            Text(name)
-                .font(.caption)
-                .bold()
-                .foregroundStyle(isHighlighted ? .blue : .secondary)
-            
-            Text("Hand $\(live / 1000)k")
-                .font(.system(.title3, design: .rounded).bold().monospacedDigit())
-            
-            Text("Match $\(match / 1000)k")
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(.tertiary)
+    private func teamScorePill(team: Int, _ table: PlayerView) -> some View {
+        let tint = team == 0 ? Color.cyan : Color.orange
+        let isMine = Seats.team(of: table.me) == team
+        let hand = table.liveHandScore[team, default: 0]
+        let match = table.matchScore[team, default: 0]
+        return VStack(alignment: .leading, spacing: 2) {
+            Text(team == 0 ? teamAName : teamBName)
+                .font(.caption2.bold()).foregroundStyle(tint)
+                .lineLimit(1).minimumScaleFactor(0.7)
+            Text("$\(hand / 1000)k")
+                .font(.system(.callout, design: .rounded).bold().monospacedDigit())
+                .foregroundStyle(.white)
+            Text("$\(match / 1000)k")
+                .font(.caption2.monospacedDigit()).foregroundStyle(.white.opacity(0.65))
         }
-        .padding(8)
-        .background(isHighlighted ? Color.blue.opacity(0.1) : Color.clear, in: RoundedRectangle(cornerRadius: 8))
+        .padding(.horizontal, 9).padding(.vertical, 7)
+        .frame(width: 88, alignment: .leading)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
+            .stroke(tint.opacity(isMine ? 0.9 : 0.4), lineWidth: isMine ? 2 : 1))
     }
-    
-    private func statusLine(_ view: PlayerView) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(view.phase.headline).font(.system(.title3, design: .rounded)).bold()
-            if let t = view.trump { trumpBadge(t, prominent: view.phase == .trickPlay) }
+
+    private func trumpBadge(_ color: CardColor) -> some View {
+        let swatch: Color = (color == .black) ? .black : color.swatch
+        return HStack(spacing: 5) {
+            Circle().fill(swatch).frame(width: 12, height: 12)
+                .overlay(Circle().stroke(.white.opacity(0.7), lineWidth: 1))
+            Text(color.displayName)
+                .font(.caption.weight(.bold)).foregroundStyle(.white)
+                .lineLimit(1).fixedSize()
+        }
+        .padding(.horizontal, 9).padding(.vertical, 4)
+        .background(Capsule().fill(swatch.opacity(0.3)))
+        .overlay(Capsule().stroke(swatch.opacity(0.8), lineWidth: 1))
+        .accessibilityLabel("Trump: \(color.displayName)")
+    }
+
+    private func bidBadge(bidder: PlayerID, amount: Int) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: "crown.fill").font(.caption2).foregroundStyle(.yellow)
+            Text("\(seatShort(bidder)) $\(amount / 1000)k")
+                .font(.caption.weight(.bold)).foregroundStyle(.white)
+                .lineLimit(1).fixedSize()
+        }
+        .padding(.horizontal, 9).padding(.vertical, 4)
+        .background(Capsule().fill(Color.yellow.opacity(0.18)))
+        .overlay(Capsule().stroke(Color.yellow.opacity(0.6), lineWidth: 1))
+    }
+
+    // MARK: Board (opponent seats + center trick)
+
+    private func boardArea(_ table: PlayerView) -> some View {
+        ZStack {
+            CenterTrickView(
+                currentTrick: table.currentTrick,
+                completedTricks: table.completedTricks,
+                trump: table.trump,
+                viewer: table.me,
+                metrics: .phone,
+                seatName: seatName,
+                cardNS: cardNS)
+
+            // All four seats are marked, relative to the local player: bottom
+            // (you), left, top (partner), right — mirroring the tabletop board.
+            VStack {
+                seatChip(relativeSeat(2, from: table.me), table)
+                    .offset(y: -25)
+                Spacer()
+                seatChip(table.me, table)
+                    .offset(y: 25)
+            }
+            HStack {
+                seatChip(relativeSeat(1, from: table.me), table)
+                Spacer()
+                seatChip(relativeSeat(3, from: table.me), table)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: 264)
+    }
+
+    private func seatChip(_ seat: PlayerID, _ table: PlayerView) -> some View {
+        let toAct = table.toAct == seat && isLivePhase(table.phase)
+        let tint = Seats.team(of: seat) == 0 ? Color.cyan : Color.orange
+        return VStack(spacing: 2) {
+            HStack(spacing: 4) {
+                if dealerSeat(table) == seat {
+                    Text("D").font(.caption2.bold()).foregroundStyle(.black)
+                        .frame(width: 16, height: 16)
+                        .background(Circle().fill(.white.opacity(0.9)))
+                }
+                Text(seatName(seat))
+                    .font(.system(.subheadline, design: .rounded).bold())
+                    .foregroundStyle(.white).lineLimit(1)
+            }
+            seatSubtitle(seat, table)
+        }
+        .padding(.horizontal, 12).padding(.vertical, 6)
+        .background(.ultraThinMaterial, in: Capsule())
+        .overlay(Capsule().stroke(toAct ? Color.yellow : tint.opacity(0.55),
+                                  lineWidth: toAct ? 2.5 : 1.5))
+        .shadow(color: toAct ? Color.yellow.opacity(0.5) : .black.opacity(0.25),
+                radius: toAct ? 8 : 3, y: 2)
+        .scaleEffect(toAct ? 1.06 : 1.0)
+        .animation(.spring(response: 0.3, dampingFraction: 0.7), value: toAct)
+    }
+
+    @ViewBuilder
+    private func seatSubtitle(_ seat: PlayerID, _ table: PlayerView) -> some View {
+        if table.phase == .bidding {
+            if table.passed.contains(seat) {
+                Text("Passed").font(.caption2).foregroundStyle(.white.opacity(0.55))
+            } else if let last = table.bidHistory.last(where: { $0.player == seat }) {
+                Text(bidHistoryLabel(last.action))
+                    .font(.system(.caption2, design: .rounded).bold().monospacedDigit())
+                    .foregroundStyle(.white)
+            } else {
+                Text("…").font(.caption2).foregroundStyle(.white.opacity(0.4))
+            }
+        } else {
+            let tricks = table.completedTricks.filter { $0.winner == seat }.count
+            HStack(spacing: 3) {
+                if table.highBidder == seat {
+                    Image(systemName: "crown.fill").font(.system(size: 8)).foregroundStyle(.yellow)
+                }
+                Text("\(tricks) trick\(tricks == 1 ? "" : "s")")
+                    .font(.caption2).foregroundStyle(.white.opacity(0.85))
+            }
         }
     }
-    
+
+    // MARK: Footer (widow + last trick)
+
+    @ViewBuilder
+    private func footerStrip(_ table: PlayerView) -> some View {
+        let widow = table.widow ?? []
+        let showLast = settings.showLastTrick && table.lastTrick != nil
+        if !widow.isEmpty || showLast {
+            HStack(spacing: 14) {
+                if !widow.isEmpty {
+                    HStack(spacing: 5) {
+                        Text("Widow").font(.caption2).foregroundStyle(.white.opacity(0.7))
+                        ForEach(keyedHand(widow), id: \.key) { entry in
+                            MiniCardFace(card: entry.card)
+                        }
+                    }
+                }
+                Spacer(minLength: 0)
+                if showLast, let last = table.lastTrick {
+                    HStack(spacing: 5) {
+                        Text("Last").font(.caption2).foregroundStyle(.white.opacity(0.7))
+                        ForEach(keyedPlays(last.plays), id: \.key) { entry in
+                            MiniCardFace(card: entry.play.card,
+                                         faded: entry.play.player != last.winner)
+                        }
+                        Text("\(seatShort(last.winner)) $\(last.value / 1000)k")
+                            .font(.caption2.monospacedDigit().bold())
+                            .foregroundStyle(.white.opacity(0.85))
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 4)
+        }
+    }
+
+    private func hintText(_ s: String) -> some View {
+        Text(s).font(.caption).italic().foregroundStyle(.white.opacity(0.7))
+    }
+
+    // MARK: Hand
+
+    private func handSection(table: PlayerView, decision: PlayerView, interactive: Bool) -> some View {
+        VStack(spacing: 2) {
+            Text("Your hand (\(table.myHand.count))")
+                .font(.caption2).foregroundStyle(.white.opacity(0.6))
+            FannedHand(cards: table.myHand, liftedCards: discardSelection) { card, n in
+                handCard(card, decision: decision, interactive: interactive, totalCards: n)
+            }
+            .padding(.top, 18)
+            .padding(.bottom, 30)
+            .frame(height: 120)
+            .frame(maxWidth: .infinity)
+        }
+    }
+
+    // MARK: Board helpers
+
+    private func isActionPhase(_ p: Phase) -> Bool {
+        switch p {
+        case .bidding, .namingTrump, .widowDiscard: return true
+        default: return false
+        }
+    }
+
+    private func isLivePhase(_ p: Phase) -> Bool {
+        switch p {
+        case .bidding, .namingTrump, .widowDiscard, .trickPlay: return true
+        default: return false
+        }
+    }
+
+    /// The dealer sits one seat right of the opener (opener leads the bidding).
+    private func dealerSeat(_ table: PlayerView) -> PlayerID {
+        PlayerID((table.opener.raw + Seats.count - 1) % Seats.count)
+    }
+
+    /// The seat `dir` clockwise steps from `viewer` (1 left, 2 across, 3 right).
+    private func relativeSeat(_ dir: Int, from viewer: PlayerID) -> PlayerID {
+        PlayerID((viewer.raw + dir) % Seats.count)
+    }
+
+    private var feltBackground: some View {
+        LinearGradient(colors: [Color(red: 0.06, green: 0.30, blue: 0.18),
+                                Color(red: 0.03, green: 0.17, blue: 0.11)],
+                       startPoint: .top, endPoint: .bottom)
+            .ignoresSafeArea()
+    }
+
     private func misdealBanner(_ view: PlayerView) -> some View {
         let myMoney = view.myHand.reduce(0) { $0 + $1.moneyValue }
         return HStack(spacing: 12) {
@@ -364,81 +580,31 @@ struct GameBody: View {
         .overlay(RoundedRectangle(cornerRadius: 10).stroke(.orange.opacity(0.5), lineWidth: 1))
     }
 
-    private func trumpBadge(_ color: CardColor, prominent: Bool) -> some View {
-        HStack(spacing: 6) {
-            Circle().fill(color.swatch).frame(width: prominent ? 14 : 10, height: prominent ? 14 : 10)
-            Text(color.displayName)
-                .font(prominent ? .subheadline : .caption)
-                .fontWeight(prominent ? .bold : .semibold)
-                .foregroundStyle(color.swatch)
-        }
-        .padding(.horizontal, prominent ? 10 : 7)
-        .padding(.vertical, prominent ? 6 : 4)
-        .background(RoundedRectangle(cornerRadius: 8).fill(color.swatch.opacity(prominent ? 0.22 : 0.14)))
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(color.swatch.opacity(prominent ? 0.75 : 0.5), lineWidth: prominent ? 2 : 1))
-        .accessibilityLabel("Trump: \(color.displayName)")
-    }
+    // MARK: Action panel (bid / name trump / discard)
 
-    // MARK: Last completed trick
-
-    private func lastTrickPanel(_ last: CompletedTrickInfo) -> some View {
-        HStack(spacing: 8) {
-            Text("Last trick").font(.caption).foregroundStyle(.secondary)
-            ForEach(keyedPlays(last.plays), id: \.key) { entry in
-                VStack(spacing: 2) {
-                    Text(seatShort(entry.play.player))
-                        .font(.system(size: 9))
-                        .foregroundStyle(entry.play.player == last.winner ? AnyShapeStyle(.primary) : AnyShapeStyle(.tertiary))
-                    miniCardChip(entry.play.card, faded: entry.play.player != last.winner)
-                }
-            }
-            Spacer()
-            Text("\(seatShort(last.winner)) · $\(last.value / 1000)k")
-                .font(.system(.caption, design: .rounded).bold().monospacedDigit())
-                .foregroundStyle(last.winner.raw % 2 == 0 ? Color.green : Color.orange)
-        }
-        .padding(10)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-    }
-
-    private func trickInProgress(_ trick: Trick) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("Trick in progress").font(.caption).foregroundStyle(.secondary)
-            HStack(spacing: 8) {
-                ForEach(keyedPlays(trick.plays), id: \.key) { entry in
-                    VStack(spacing: 2) {
-                        Text(seatShort(entry.play.player))
-                            .font(.caption2).foregroundStyle(.tertiary)
-                        cardChip(entry.play.card, faded: false)
-                            .matchedGeometryEffect(id: cardKey(entry.play.card), in: cardNS)
-                            .transition(.asymmetric(insertion: .scale(scale: 0.6).combined(with: .opacity), removal: .opacity))
-                    }
-                }
+    /// Floats over the empty center during the pre-trick phases. Wrapped in a
+    /// felt-friendly material card so its controls read on the dark board.
+    @ViewBuilder
+    private func actionPanel(_ view: PlayerView) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            switch view.phase {
+            case .widowDiscard: widowDiscardPanel(view)
+            case .namingTrump:  trumpNamingPanel(view)
+            case .bidding:      biddingPanel(view)
+            default:            EmptyView()
             }
         }
+        .padding(14)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous)
+            .stroke(.white.opacity(0.15), lineWidth: 1))
+        .shadow(color: .black.opacity(0.35), radius: 12, y: 5)
     }
-
-    // MARK: Move panel
 
     @ViewBuilder
-    private func movePanel(_ view: PlayerView, interactive: Bool) -> some View {
+    private func biddingPanel(_ view: PlayerView) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Your move — \(view.phase.headline)").font(.caption).foregroundStyle(.secondary)
-
-            if view.phase == .handComplete {
-                Text("Hand complete.").font(.callout).foregroundStyle(.secondary)
-            } else if !interactive && !caughtUp {
-                Text("Watching play…").font(.callout).foregroundStyle(.secondary).italic()
-            } else if !interactive || view.legalMoves.isEmpty {
-                Text("Waiting for other players…").font(.callout).foregroundStyle(.secondary).italic()
-            } else if view.phase == .trickPlay {
-                Text("Tap a card in your hand to play it.").font(.caption).foregroundStyle(.secondary).italic()
-            } else if view.phase == .widowDiscard {
-                widowDiscardPanel(view)
-            } else if view.phase == .namingTrump {
-                trumpNamingPanel(view)
-            } else if view.phase == .bidding {
-                let passMove = view.legalMoves.first { $0.isPass }
+            let passMove = view.legalMoves.first { $0.isPass }
                 let bidMoves = view.legalMoves.filter { $0.bidAmount != nil }
                 let safeBidIndex = min(selectedBidIndex, max(0, bidMoves.count - 1))
 
@@ -457,11 +623,11 @@ struct GameBody: View {
                                         } label: {
                                             Text(move.label.replacingOccurrences(of: "Bid ", with: ""))
                                                 .font(.system(.subheadline, design: .rounded).weight(.bold))
-                                                .foregroundStyle(isSelected ? .white : .primary)
+                                                .foregroundStyle(isSelected ? .white : .white.opacity(0.85))
                                                 .padding(.horizontal, 16)
                                                 .frame(height: 44)
                                                 .background {
-                                                    Capsule(style: .continuous).fill(isSelected ? Color.blue : Color.secondary.opacity(0.15))
+                                                    Capsule(style: .continuous).fill(isSelected ? Color.blue : Color.white.opacity(0.15))
                                                 }
                                                 .scaleEffect(isSelected ? 1.05 : 0.95)
                                         }
@@ -502,10 +668,9 @@ struct GameBody: View {
                     .padding(.horizontal)
                 }
                 .padding(.horizontal)
-            }
         }
     }
-    
+
     private func trumpNamingPanel(_ view: PlayerView) -> some View {
         // Build the four color buttons from CardColor directly, not from
         // move.label — the bid panel's label-munging produced "Bid Trump: Red",
@@ -516,7 +681,7 @@ struct GameBody: View {
         }
         return VStack(alignment: .leading, spacing: 10) {
             Text("Pick the trump color for this hand. You'll discard three after.")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.caption).foregroundStyle(.white.opacity(0.8))
             LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
                 ForEach(trumpMoves, id: \.0) { color, move in
                     // `CardColor.black` maps to `Color.primary` in `swatch`, which
@@ -559,13 +724,15 @@ struct GameBody: View {
 
         return VStack(alignment: .leading, spacing: 8) {
             Text(discardHelpText(for: view))
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.caption).foregroundStyle(.white.opacity(0.8))
             if ready && legalMove == nil {
                 Text("That discard isn't legal — you can only discard money cards when you have no other choice.")
                     .font(.caption).foregroundStyle(.orange)
             }
             HStack(spacing: 8) {
-                Text("\(count) of 3 selected").font(.system(.callout, design: .rounded)).monospacedDigit()
+                Text("\(count) of 3 selected")
+                    .font(.system(.callout, design: .rounded)).monospacedDigit()
+                    .foregroundStyle(.white)
                 Spacer()
                 Button("Discard selected") {
                     if let move = legalMove { submit(move); discardSelection = [] }
@@ -625,30 +792,6 @@ struct GameBody: View {
         }
     }
 
-    // MARK: History
-
-    private func historyPanel(_ view: PlayerView) -> some View {
-        DisclosureGroup("Trick history (\(view.completedTricks.count))") {
-            VStack(alignment: .leading, spacing: 6) {
-                ForEach(Array(view.completedTricks.enumerated()), id: \.offset) { i, t in
-                    HStack(spacing: 6) {
-                        Text("#\(i + 1)").font(.caption2).foregroundStyle(.tertiary).frame(width: 26, alignment: .leading)
-                        ForEach(Array(t.plays.enumerated()), id: \.offset) { _, pc in
-                            Text(pc.card.shortLabel)
-                                .font(.caption2).foregroundStyle(pc.card.tint)
-                                .fontWeight(pc.player == t.winner ? .bold : .regular)
-                        }
-                        Spacer()
-                        Text("\(seatShort(t.winner)) $\(t.value/1000)k")
-                            .font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
-                    }
-                }
-            }
-            .padding(.top, 4)
-        }
-        .font(.caption)
-    }
-
     // MARK: Hand complete
 
     private func handCompleteView(_ s: HandCompleteSnapshot) -> some View {
@@ -656,13 +799,14 @@ struct GameBody: View {
         let b = s.matchScore[1, default: 0]
         let matchOver = s.matchWinner != nil
         return VStack(spacing: 14) {
-            Text(matchOver ? "Match complete" : "Hand complete").font(.title2).bold()
+            Text(matchOver ? "Match complete" : "Hand complete")
+                .font(.title2).bold().foregroundStyle(.white)
             if let winner = s.matchWinner {
                 Text("\(winner == 0 ? teamAName : teamBName) wins!")
                     .font(.headline).foregroundStyle(.green)
             }
-            Text("\(teamAName): $\(a / 1000)k")
-            Text("\(teamBName): $\(b / 1000)k").foregroundStyle(.secondary)
+            Text("\(teamAName): $\(a / 1000)k").foregroundStyle(.white)
+            Text("\(teamBName): $\(b / 1000)k").foregroundStyle(.white.opacity(0.7))
             if !s.bidHistory.isEmpty {
                 bidHistoryPanel(records: s.bidHistory, opener: s.opener)
             }
@@ -727,23 +871,6 @@ struct GameBody: View {
         }
     }
 
-    private func widowPanel(_ widow: [Card], highBidder: PlayerID?) -> some View {
-        HStack(spacing: 8) {
-            Text("Widow").font(.caption).foregroundStyle(.secondary)
-            ForEach(keyedHand(widow), id: \.key) { entry in
-                miniCardChip(entry.card)
-            }
-            Spacer()
-            if let bidder = highBidder {
-                Text(seatShort(bidder))
-                    .font(.caption).bold()
-                    .foregroundStyle(bidder.raw % 2 == 0 ? Color.green : Color.orange)
-            }
-        }
-        .padding(10)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-    }
-
     // MARK: Helpers - Dynamic Seat Naming
 
     private func seatName(_ p: PlayerID) -> String {
@@ -790,10 +917,6 @@ struct GameBody: View {
     private func cardChip(_ card: Card, faded: Bool, selected: Bool = false, highlighted: Bool = false, totalCards: Int = 1) -> some View {
         CardFace(card: card, faded: faded, selected: selected,
                  highlighted: highlighted, dense: totalCards > 12)
-    }
-
-    private func miniCardChip(_ card: Card, faded: Bool = false) -> some View {
-        MiniCardFace(card: card, faded: faded)
     }
 }
 

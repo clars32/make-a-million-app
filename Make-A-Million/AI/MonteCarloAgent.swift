@@ -320,8 +320,28 @@ struct MonteCarloAgent: PlayerAgent {
         let shortlist = trickShortlist(view: view,
                                        legal: legal,
                                        inference: inference)
-        // Singleton shortlist: skip MCTS.
-        if shortlist.count == 1 { return shortlist[0] }
+
+        // Table-read shared by both paths, built only when capturing. The
+        // legal-vs-shortlist line is what makes an OMISSION visible — when the
+        // strongest move never reaches MCTS because the heuristic gate dropped
+        // it, this is the only place that shows up.
+        let baseNotes: [String] = AIDecisionTrace.shared.isEnabled
+            ? shortlistNote(legal: legal, shortlist: shortlist)
+              + tracePlayNotes(view: view, inference: inference)
+            : []
+
+        // Singleton shortlist: the heuristic narrowed ≥2 legal moves to one, so
+        // MCTS is skipped. Still a real decision — record it (with no scores)
+        // so heuristically-forced plays aren't invisible to review.
+        if shortlist.count == 1 {
+            if AIDecisionTrace.shared.isEnabled, let card = shortlist[0].playedCard {
+                AIDecisionTrace.shared.record(.init(
+                    seat: view.me, chosen: card, blundered: false,
+                    candidates: [],
+                    notes: ["forced by shortlist (no MCTS)"] + baseNotes))
+            }
+            return shortlist[0]
+        }
 
         // MCTS over determinized worlds: for each candidate, sample
         // worlds, apply candidate, rollout via PlayoutPolicy, score by
@@ -372,10 +392,22 @@ struct MonteCarloAgent: PlayerAgent {
             AIDecisionTrace.shared.record(.init(
                 seat: view.me, chosen: card, blundered: blundered,
                 candidates: cands,
-                notes: tracePlayNotes(view: view, inference: inference)))
+                notes: baseNotes))
         }
 
         return chosen
+    }
+
+    /// One trace line showing the full legal play set and what survived the
+    /// heuristic shortlist gate. Makes omission failures (the right move never
+    /// reaching MCTS) legible. Built only when capture is on.
+    private func shortlistNote(legal: [Move], shortlist: [Move]) -> [String] {
+        let legalCards = legal.compactMap { $0.playedCard }
+        let shortCards = shortlist.compactMap { $0.playedCard }
+        guard !legalCards.isEmpty else { return [] }
+        return ["legal \(legalCards.count): \(legalCards.map(HandLog.token).joined(separator: " "))"
+                + "  →  shortlisted \(shortCards.count): "
+                + shortCards.map(HandLog.token).joined(separator: " ")]
     }
 
     /// A compact, human-readable table-read for the decision trace. Mirrors
@@ -479,6 +511,22 @@ struct MonteCarloAgent: PlayerAgent {
                 .filter { !$0.isMoney && !$0.isSpecial }
                 .min { rankOf($0) < rankOf($1) }
             if let c = lowTrump { picks.append(c) }
+
+            // Lead-high-to-pull: leading the LOWEST trump donates the round to
+            // any higher trump an opponent still holds (and any money they bank
+            // on it). When I hold the boss trump I can instead pull from the
+            // top — the round still WINS and I keep the lead. Offer the highest
+            // NON-special trump that commands the suit (keeping the Tiger in
+            // reserve to ruff); fall back to a commanding special (the Tiger)
+            // only when nothing else controls. MCTS then weighs high vs low.
+            let commanding = myTrump
+                .filter { inference.iControlColor($0) }
+                .sorted { rankOf($0) > rankOf($1) }
+            if let topNonSpecial = commanding.first(where: { !$0.isSpecial }) {
+                picks.append(topNonSpecial)
+            } else if let boss = commanding.first {
+                picks.append(boss)
+            }
         }
 
         // 2. $40k of a virgin (un-led) non-trump color.
