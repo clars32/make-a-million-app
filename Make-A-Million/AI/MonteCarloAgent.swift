@@ -162,50 +162,80 @@ struct MonteCarloAgent: PlayerAgent {
             base: rawGross * difficulty.bidAggression,
             view: view)
 
-        // ---- Forced opener: pass is not legal, must bid.
-        if passMove == nil {
-            // Bid the minimum legal amount. Forced openings happen on
-            // weak hands; we don't speculate higher than required.
-            return bidMoves.first?.0 ?? legal[0]
-        }
+        var notes: [String] = []
+        let partnerHighBidder = {
+            if let hb = view.highBidder, hb != view.me,
+               Seats.team(of: hb) == Seats.team(of: view.me) { return true }
+            return false
+        }()
 
-        guard let (cheapestBid, cheapestAmt) = bidMoves.first else {
-            return passMove!
-        }
+        // The decision itself, captured so we can trace it before returning.
+        let move: Move = {
+            // ---- Forced opener: pass is not legal, must bid.
+            if passMove == nil {
+                // Bid the minimum legal amount. Forced openings happen on
+                // weak hands; we don't speculate higher than required.
+                notes.append("forced opener — bidding the minimum")
+                return bidMoves.first?.0 ?? legal[0]
+            }
 
-        // ---- Partner is current high bidder: defer unless decisively stronger.
-        if let hb = view.highBidder, let hbAmount = view.highBid,
-           Seats.team(of: hb) == Seats.team(of: view.me), hb != view.me {
-            // Override threshold scales with partnerRespect.
-            // respect 1.0 → need rawGross >= hbAmount + $80k
-            // respect 0.0 → need rawGross >  hbAmount
-            let extraNeeded = Int(80_000.0 * difficulty.partnerRespect)
-            let threshold = hbAmount + extraNeeded
-            if valuation.expectedGross > threshold
-                && Double(cheapestAmt) <= ceiling {
+            guard let (cheapestBid, cheapestAmt) = bidMoves.first else {
+                return passMove!
+            }
+
+            // ---- Partner is current high bidder: defer unless decisively stronger.
+            if let hb = view.highBidder, let hbAmount = view.highBid,
+               Seats.team(of: hb) == Seats.team(of: view.me), hb != view.me {
+                // Override threshold scales with partnerRespect.
+                // respect 1.0 → need rawGross >= hbAmount + $80k
+                // respect 0.0 → need rawGross >  hbAmount
+                let extraNeeded = Int(80_000.0 * difficulty.partnerRespect)
+                let threshold = hbAmount + extraNeeded
+                notes.append("partner holds the bid ($\(hbAmount / 1000)k); "
+                             + "override needs valuation > $\(threshold / 1000)k")
+                if valuation.expectedGross > threshold
+                    && Double(cheapestAmt) <= ceiling {
+                    return cheapestBid
+                }
+                return passMove!
+            }
+
+            // ---- Opponent or no one has high bid: bid the minimum legal raise
+            // that fits the ceiling, otherwise pass. Strong players don't bid
+            // themselves up.
+            if Double(cheapestAmt) <= ceiling {
+                // Optional jump-bid on monster hands: if my estimate is FAR
+                // above the cheapest legal bid (≥ 1.5× the cheapest), and
+                // aggression is high, step up one tier to telegraph strength
+                // to partner. Most of the time we still bid the minimum.
+                if difficulty.bidAggression >= 0.85
+                    && rawGross >= Double(cheapestAmt) * 1.50
+                    && bidMoves.count >= 2
+                    && Double(bidMoves[1].1) <= ceiling
+                    && shouldJumpBid() {
+                    notes.append("jump-bid: valuation ≥ 1.5× the minimum raise")
+                    return bidMoves[1].0
+                }
                 return cheapestBid
             }
+            notes.append("cheapest legal bid $\(cheapestAmt / 1000)k exceeds ceiling — pass")
             return passMove!
+        }()
+
+        if AIDecisionTrace.shared.isEnabled {
+            if partnerHighBidder && notes.isEmpty {
+                notes.append("partner holds the bid")
+            }
+            let chosenText = move.isPass
+                ? "pass"
+                : move.bidAmount.map { "$\($0 / 1000)k" } ?? "?"
+            AIDecisionTrace.shared.record(.init(
+                seat: view.me, chosen: chosenText,
+                valuationGross: valuation.expectedGross,
+                ceiling: Int(ceiling), notes: notes))
         }
 
-        // ---- Opponent or no one has high bid: bid the minimum legal raise
-        // that fits the ceiling, otherwise pass. Strong players don't bid
-        // themselves up.
-        if Double(cheapestAmt) <= ceiling {
-            // Optional jump-bid on monster hands: if my estimate is FAR
-            // above the cheapest legal bid (≥ 1.5× the cheapest), and
-            // aggression is high, step up one tier to telegraph strength
-            // to partner. Most of the time we still bid the minimum.
-            if difficulty.bidAggression >= 0.85
-                && rawGross >= Double(cheapestAmt) * 1.50
-                && bidMoves.count >= 2
-                && Double(bidMoves[1].1) <= ceiling
-                && shouldJumpBid() {
-                return bidMoves[1].0
-            }
-            return cheapestBid
-        }
-        return passMove!
+        return move
     }
 
     /// Tighten the ceiling when our team is near the $1M finish line;
@@ -321,12 +351,84 @@ struct MonteCarloAgent: PlayerAgent {
             .sorted { $0.1 > $1.1 }
 
         guard let best = scored.first else { return shortlist[0] }
+
+        var blundered = false
+        var chosen = best.0
         if shouldBlunder(), scored.count > 1 {
             // Believable: pick a mid-pack move, never the worst.
             let idx = min(scored.count - 1, 1 + intRand(scored.count - 1))
-            return scored[idx].0
+            chosen = scored[idx].0
+            blundered = true
         }
-        return best.0
+
+        // Debug capture (off in normal play and self-play): record the scored
+        // shortlist and the table-read that picked the branch, so a reviewer
+        // can see WHY this move beat the alternatives.
+        if AIDecisionTrace.shared.isEnabled, let card = chosen.playedCard {
+            let cands = scored.compactMap { mv, mean -> AIDecisionTrace.Candidate? in
+                guard let c = mv.playedCard else { return nil }
+                return .init(card: c, meanNet: mean, samples: counts[mv] ?? 0)
+            }
+            AIDecisionTrace.shared.record(.init(
+                seat: view.me, chosen: card, blundered: blundered,
+                candidates: cands,
+                notes: tracePlayNotes(view: view, inference: inference)))
+        }
+
+        return chosen
+    }
+
+    /// A compact, human-readable table-read for the decision trace. Mirrors
+    /// the signals the shortlist branches actually key on — partner control,
+    /// whether the partner-dump was treated as contestable (the exact flag
+    /// behind "should I overtake my own partner?"), loose specials, and the
+    /// highest card still out in the relevant colors. Built only when the
+    /// trace is enabled.
+    private func tracePlayNotes(view: PlayerView,
+                                inference: TableInference) -> [String] {
+        guard let trump = view.trump else { return [] }
+        var n: [String] = []
+        n.append("tigerOut=\(inference.isTigerOut)"
+                 + " trumpOut=\(inference.trumpStillOutInOpponentsAndPartner)"
+                 + " bullOut=\(inference.isBullOut) bearOut=\(inference.isBearOut)")
+
+        guard let trick = view.currentTrick, !trick.plays.isEmpty else {
+            n.append("leading; amDeclarer=\(view.me == view.highBidder)")
+            if let hi = inference.highestOutInColor(trump) {
+                n.append("highest trump still out: \(HandLog.token(hi))")
+            }
+            return n
+        }
+
+        let led = trick.ledColor(trump: trump)
+        let winner = GameState.trickWinner(trick, trump: trump)
+        let partnerWinning = Seats.team(of: winner) == Seats.team(of: view.me)
+                          && winner != view.me
+        n.append("following  led=\(led.map { String($0.displayName.prefix(1)) } ?? "—")"
+                 + "  currentWinner=\(HandLog.short(winner))"
+                 + "  partnerWinning=\(partnerWinning)")
+
+        if partnerWinning {
+            // The crux flag: when the partner-dump is judged unsafe the agent
+            // drops into the "take it myself" branch, which is what makes it
+            // overtake its own partner (and can surface a Tiger smash).
+            let overturnable = canBeOverturned(
+                trick: trick, onTable: trick.plays,
+                trump: trump, inference: inference, view: view)
+            n.append(overturnable
+                ? "partner-dump UNSAFE — trick judged still overturnable, "
+                  + "so 'take it myself' candidates are in play"
+                : "partner-dump SAFE — partner's win is uncontested")
+        }
+        if let l = led, let hi = inference.highestOutInColor(l) {
+            n.append("highest \(l.displayName) still out (at someone else): \(HandLog.token(hi))")
+        }
+        let held = inference.knownDeclarerHoldings()
+        if !held.isEmpty {
+            n.append("declarer must still hold (from widow): "
+                     + held.map(HandLog.token).sorted().joined(separator: " "))
+        }
+        return n
     }
 
     /// Build the candidate list MCTS evaluates. This is where the human

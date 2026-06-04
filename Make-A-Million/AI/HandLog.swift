@@ -34,7 +34,10 @@ nonisolated enum HandLog {
     /// order 0…3. Safe to call only at `.handComplete`.
     static func render(_ final: GameState,
                        handIndex: Int,
-                       seatLabels: [String]) -> String {
+                       seatLabels: [String],
+                       decisions: (plays: [AIDecisionTrace.PlayDecision],
+                                   bids: [AIDecisionTrace.BidDecision])
+                                = (plays: [], bids: [])) -> String {
         let trump = final.trump ?? .red
         let declarer = final.highBidder
         var out: [String] = []
@@ -72,6 +75,15 @@ nonisolated enum HandLog {
                      + "   [reconstructed]")
             }
         }
+        if !decisions.bids.isEmpty {
+            line("  AI bid reasoning:")
+            for b in decisions.bids {
+                line("    \(short(b.seat)) → \(b.chosen)"
+                     + "   (valuation \(money(b.valuationGross)),"
+                     + " ceiling \(money(b.ceiling)))")
+                for n in b.notes { line("        · \(n)") }
+            }
+        }
         line()
 
         // ---- Tricks
@@ -90,6 +102,15 @@ nonisolated enum HandLog {
             line("  \(pad(i + 1))[\(ledChar)] \(plays)")
             line("       → \(short(winner)) wins   raw \(money(raw)) eff \(money(eff))"
                  + "   (T0 \(money(running[0])) / T1 \(money(running[1])))")
+
+            // AI reasoning for each play in this trick (when captured): the
+            // scored shortlist + the table-read that picked the branch.
+            for pc in t.plays {
+                guard let d = decisions.plays.first(where: {
+                    $0.seat == pc.player && $0.chosen == pc.card
+                }) else { continue }
+                for l in playDecisionLines(d) { line(l) }
+            }
 
             // High-confidence flag: money landed in a trick worth $0 (Beared).
             if eff == 0 && raw > 0 {
@@ -140,13 +161,16 @@ nonisolated enum HandLog {
     private static func name(_ p: PlayerID, _ labels: [String]) -> String {
         labels.indices.contains(p.raw) ? labels[p.raw] : "Seat \(p.raw)"
     }
-    private static func short(_ p: PlayerID) -> String {
+    /// Seat initial (S/W/N/E). Internal so the AI decision trace formats seats
+    /// the same way the trick lines do.
+    static func short(_ p: PlayerID) -> String {
         shortSeats.indices.contains(p.raw) ? shortSeats[p.raw] : "\(p.raw)"
     }
     /// Compact, UNAMBIGUOUS card token: color initial + rank (e.g. "B$40",
     /// "R11", "Y8", "G$30"), specials as "TGR"/"BUL"/"BER". The bare
     /// `shortLabel` omits the suit, which a full-information trace must show.
-    private static func token(_ c: Card) -> String {
+    /// Internal so the AI decision trace labels cards identically.
+    static func token(_ c: Card) -> String {
         switch c {
         case .colored(let col, let r):
             return ["R", "Y", "B", "G"][col.rawValue] + r.label
@@ -154,6 +178,31 @@ nonisolated enum HandLog {
         case .bull:  return "BUL"
         case .bear:  return "BER"
         }
+    }
+    /// Render one captured trick-play decision as indented trace lines:
+    /// the chosen card, the scored shortlist (mean team net per candidate,
+    /// `*` on the pick), and the table-read notes.
+    private static func playDecisionLines(_ d: AIDecisionTrace.PlayDecision) -> [String] {
+        var out: [String] = []
+        let mark = d.blundered ? "   ⚠ blunder (deliberate non-best)" : ""
+        out.append("       ↳ \(short(d.seat)) chose \(token(d.chosen))\(mark)")
+        if !d.candidates.isEmpty {
+            let cand = d.candidates.map { c -> String in
+                "\(token(c.card)) \(signedMoney(c.meanNet))"
+                    + (c.card == d.chosen ? "*" : "")
+            }.joined(separator: " · ")
+            out.append("           shortlist (mean team net/world): \(cand)")
+        }
+        for n in d.notes { out.append("           \(n)") }
+        return out
+    }
+
+    /// Signed money for a NET score, which can be negative (e.g. "+$12.3k",
+    /// "−$4.0k"). Kept to one decimal so close calls between candidates show.
+    private static func signedMoney(_ v: Double) -> String {
+        let k = v / 1000.0
+        let sign = k < 0 ? "−" : "+"
+        return String(format: "%@$%.1fk", sign, abs(k))
     }
     private static func bidText(_ a: BidAction) -> String {
         switch a {

@@ -159,6 +159,11 @@ final class GameSession: ObservableObject {
         // Hand-unique seed derived from the match base. Agents seed off it
         // too so their RNGs vary hand to hand (otherwise West would always
         // make the same "random" jump-bid decisions).
+        // Arm the AI decision trace for this hand iff file logging is on. This
+        // resets the per-hand buffer and gates whether the bots record their
+        // reasoning at all (no cost when off — normal play and self-play).
+        AIDecisionTrace.shared.beginHand(enabled: GameSettings.shared.logHandsToFile)
+
         let handSeed = matchSeedBase &+ handIndex
         let agents: [PlayerAgent] = [
             human,
@@ -378,7 +383,8 @@ final class GameSession: ObservableObject {
         // final state (no engine plumbing, nothing leaks mid-hand).
         if GameSettings.shared.logHandsToFile, final.phase == .handComplete {
             let labels = ["South (You · human)", "West (AI)", "North (AI)", "East (AI)"]
-            let log = HandLog.render(final, handIndex: Int(handIndex), seatLabels: labels)
+            let log = HandLog.render(final, handIndex: Int(handIndex), seatLabels: labels,
+                                     decisions: AIDecisionTrace.shared.snapshot())
             HandLog.append(log)
             print(log)
         }
