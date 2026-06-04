@@ -78,8 +78,8 @@ struct HostLobbyView: View {
         .onDisappear { multipeer.stop() }
         .onChange(of: multipeer.connectedPeers) { old, new in
             if didStartHand {
-                // Mid-game: a seat's original peer reappearing is a
-                // reconnect. Rebind it to its seat and resume the table.
+                // A seat's original peer reappearing — mid-hand or between
+                // hands — is a reconnect. Rebind it to its seat.
                 let oldIDs = Set(old.map { AnyHashable($0.id) })
                 for peer in new where !oldIDs.contains(AnyHashable(peer.id)) {
                     if let seatRaw = liveSeatPeers.first(

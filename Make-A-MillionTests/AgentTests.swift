@@ -7,7 +7,7 @@
 //
 
 import XCTest
-@testable import Make_A_Million
+@testable import Make_A_Million_Mobile
 
 final class AgentTests: XCTestCase {
 

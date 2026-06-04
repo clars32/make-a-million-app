@@ -40,7 +40,9 @@ struct AppRoot: View {
     }
 
     @State private var mode: Mode = .picking
+    @State private var showingSettings = false
     @AppStorage("playerName") private var playerName: String = ""
+    @EnvironmentObject private var settings: GameSettings
 
     var body: some View {
         Group {
@@ -50,15 +52,13 @@ struct AppRoot: View {
                     playerName: $playerName,
                     onPickSolo: { mode = .solo },
                     onPickHost: { mode = .hosting },
-                    onPickJoin: { mode = .joining })
+                    onPickJoin: { mode = .joining },
+                    onOpenSettings: { showingSettings = true })
 
             case .solo:
-                ZStack(alignment: .topTrailing) {
-                    GameView()
-                    Button("Back") { mode = .picking }
-                        .buttonStyle(.bordered)
-                        .padding()
-                }
+                // GameView owns its own gear/Back chrome so the in-game
+                // settings entry can lock rules while a hand is running.
+                GameView(onExit: { mode = .picking })
 
             case .hosting:
                 HostLobbyView(
@@ -69,6 +69,12 @@ struct AppRoot: View {
                 ClientLobbyView(
                     playerName: effectiveName,
                     onExit: { mode = .picking })
+            }
+        }
+        .sheet(isPresented: $showingSettings) {
+            // Home-screen entry: no hand in progress, so rules are editable.
+            SettingsView(settings: settings, rulesLocked: false) {
+                showingSettings = false
             }
         }
     }
@@ -87,9 +93,10 @@ private struct ModePickerView: View {
     let onPickSolo: () -> Void
     let onPickHost: () -> Void
     let onPickJoin: () -> Void
+    let onOpenSettings: () -> Void
 
     var body: some View {
-        ZStack {
+        ZStack(alignment: .topTrailing) {
             LinearGradient(
                 colors: [Color.teal.opacity(0.2), Color.blue.opacity(0.05)],
                 startPoint: .topLeading,
@@ -144,6 +151,16 @@ private struct ModePickerView: View {
                 Spacer()
             }
             .padding(.vertical)
+
+            Button(action: onOpenSettings) {
+                Image(systemName: "gearshape.fill")
+                    .font(.title3)
+                    .foregroundStyle(.secondary)
+                    .padding(10)
+                    .background(.ultraThinMaterial, in: Circle())
+            }
+            .padding()
+            .accessibilityLabel("Settings")
         }
     }
 }

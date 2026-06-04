@@ -230,6 +230,9 @@ final class NetSession: ObservableObject, RemoteSeatDelegate {
         let dealer = currentDealer
         let carry = carryScore
         let handSeed = handSeedBase &+ handIndex
+        // Snapshot the house rules at deal time (see GameSession.runHand).
+        let misdealRule = GameSettings.shared.misdealRule
+        let endgameRule = GameSettings.shared.endgameRule
 
         runTask = Task { [weak self] in
             guard let self else { return }
@@ -278,6 +281,8 @@ final class NetSession: ObservableObject, RemoteSeatDelegate {
                     dealer: dealer,
                     dealSeed: handSeed,
                     carryScore: carry,
+                    misdealRule: misdealRule,
+                    endgameRule: endgameRule,
                     spectators: spectatorSeats,
                     onSeatView: { [weak self] seat, view in
                         await self?.dispatchObservation(seat: seat, view: view)
@@ -368,6 +373,9 @@ final class NetSession: ObservableObject, RemoteSeatDelegate {
     }
 
     private func onRemoteDisconnected(seat: PlayerID) async {
+        // Between hands there's no live hand to pause; the seat is just rebound
+        // when the player returns (or filled when the next deal starts).
+        guard runTask != nil else { return }
         guard let assn = assignments[seat], assn.kind == .remote else { return }
         let reason: PauseReason = .playerDisconnected(seat: seat, name: assn.name)
         phase = .paused(reason: reason)
@@ -404,20 +412,24 @@ final class NetSession: ObservableObject, RemoteSeatDelegate {
     /// the rebind must finish before we resolve the pause, or the resumed
     /// agent would re-issue its decision on the dead transport.
     func reconnect(seat: PlayerID, transport: HostToClientTransport) {
-        guard runTask != nil,
-              let assn = assignments[seat], assn.kind == .remote,
+        guard let assn = assignments[seat], assn.kind == .remote,
               let r = assn.remote else { return }
 
         let names = seatNamesArray()
         let lastView = lastViews[seat]
+        // A hand may be in progress (rebind + resume it) or we may be between
+        // hands (just rebind, so the next deal reaches the returned client).
+        let resuming = (runTask != nil)
 
         Task { [weak self] in
             guard let self else { return }
             await r.rebind(transport: transport, delegate: self)
             await r.sendSeatAssignment(seatNames: names)
-            await r.sendHandStarted()
-            if let v = lastView { await r.sendObservation(v) }
-            await self.resumeAfterReconnect()
+            if resuming {
+                await r.sendHandStarted()
+                if let v = lastView { await r.sendObservation(v) }
+                self.resumeAfterReconnect()
+            }
         }
     }
 

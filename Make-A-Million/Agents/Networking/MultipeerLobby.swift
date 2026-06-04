@@ -293,6 +293,13 @@ final class MultipeerClient: NSObject, ObservableObject {
     /// this; nil before then.
     private(set) var transport: ClientToHostTransport? = nil
 
+    /// The peer we actually joined. MultipeerConnectivity meshes every peer in
+    /// a session, so when other clients join the host they also appear in our
+    /// session. We must ignore everyone except the host — otherwise a client
+    /// connecting to another client would clobber our transport and, worse,
+    /// make us tear down and send the host a spurious goodbye.
+    private var hostPeerID: MCPeerID? = nil
+
     let localPeerID: MCPeerID
 
     /// peerID, session, and browser are rebuilt together by `resetStack()`.
@@ -329,6 +336,7 @@ final class MultipeerClient: NSObject, ObservableObject {
         clientTransport?.markDisconnected()
         clientTransport = nil
         transport = nil
+        hostPeerID = nil
         discovered.removeAll()
 
         session = MCSession(
@@ -358,6 +366,7 @@ final class MultipeerClient: NSObject, ObservableObject {
         clientTransport?.markDisconnected()
         clientTransport = nil
         transport = nil
+        hostPeerID = nil
         discovered.removeAll()
         state = .idle
     }
@@ -368,6 +377,7 @@ final class MultipeerClient: NSObject, ObservableObject {
     func join(_ host: DiscoveredHost) {
         guard discovered.contains(where: { $0.id == host.id }) else { return }
         // The stack is already fresh from startBrowsing(); invite directly.
+        hostPeerID = host.id
         browser.invitePeer(host.id, to: session,
                            withContext: nil, timeout: 15)
         state = .connecting(to: host.id)
@@ -382,6 +392,9 @@ extension MultipeerClient: MCSessionDelegate {
                              peer peerID: MCPeerID,
                              didChange state: MCSessionState) {
         Task { @MainActor in
+            // Ignore mesh peers (other clients MPC connected us to). Only the
+            // host we invited drives our connection state.
+            guard peerID == self.hostPeerID else { return }
             switch state {
             case .connected:
                 let t = MultipeerClientTransport(session: session, host: peerID)
@@ -415,6 +428,8 @@ extension MultipeerClient: MCSessionDelegate {
         guard let msg = try? JSONDecoder().decode(HostMessage.self, from: data)
         else { return }
         Task { @MainActor in
+            // Only accept data from the host, never from a meshed client.
+            guard peerID == self.hostPeerID else { return }
             self.clientTransport?.ingest(msg)
         }
     }

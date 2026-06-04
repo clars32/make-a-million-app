@@ -47,14 +47,16 @@ extension GameRunner {
                   dealSeed: UInt64,
                   carryScore: [Int: Int] = [0: 0, 1: 0],
                   misdealRule: MisdealRule = .standard,
+                  endgameRule: EndgameTiebreak = .standard,
                   spectators: [PlayerID],
                   onSeatView: (@Sendable (PlayerID, PlayerView) async -> Void)?)
     async throws -> GameState {
-        
+
         var state = GameState.newHand(dealer: dealer,
                                       seed: dealSeed,
                                       carryScore: carryScore,
-                                      misdealRule: misdealRule)
+                                      misdealRule: misdealRule,
+                                      endgameRule: endgameRule)
         
         // Initial deal frame — one per spectator.
         if let sink = onSeatView {

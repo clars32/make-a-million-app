@@ -58,13 +58,15 @@ struct GameRunner {
                   dealSeed: UInt64,
                   carryScore: [Int: Int] = [0: 0, 1: 0],
                   misdealRule: MisdealRule = .standard,
+                  endgameRule: EndgameTiebreak = .standard,
                   spectator: PlayerID? = nil,
                   onView: (@Sendable @MainActor (PlayerView) async -> Void)? = nil) async throws -> GameState {
 
         var state = GameState.newHand(dealer: dealer,
                                       seed: dealSeed,
                                       carryScore: carryScore,
-                                      misdealRule: misdealRule)
+                                      misdealRule: misdealRule,
+                                      endgameRule: endgameRule)
 
         // Initial deal frame, so the consumer can show the dealt hand /
         // opening of bidding rather than starting one move in.
@@ -123,7 +125,8 @@ struct GameRunner {
     /// final state.
     func playMatch(firstDealer: PlayerID = PlayerID(0),
                        baseSeed: UInt64,
-                   misdealRule: MisdealRule = .standard) async throws -> (winner: Int, finalState: GameState) {
+                   misdealRule: MisdealRule = .standard,
+                   endgameRule: EndgameTiebreak = .standard) async throws -> (winner: Int, finalState: GameState) {
         var dealer = firstDealer
         var carry: [Int: Int] = [0: 0, 1: 0]
         var handIndex: UInt64 = 0
@@ -134,7 +137,8 @@ struct GameRunner {
                 dealer: dealer,
                 dealSeed: baseSeed &+ handIndex,
                 carryScore: carry,
-                misdealRule: misdealRule)
+                misdealRule: misdealRule,
+                endgameRule: endgameRule)
             if let winner = state.matchWinner {
                 return (winner, state)
             }

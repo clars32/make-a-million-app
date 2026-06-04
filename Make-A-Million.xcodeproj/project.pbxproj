@@ -35,94 +35,12 @@
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
-		4367CB2E2FBBC3DA0005A97E /* Exceptions for "Make-A-Million" folder in "Make-A-Million" target */ = {
+		433CAD062FD0BA090037CEB0 /* Exceptions for "Make-A-Million" folder in "Make-A-Million" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
-				Agents/Agent.swift,
-				Agents/GameRunner.swift,
-				"Agents/GameRunner+Multi.swift",
-				Agents/HumanAgent.swift,
-				Agents/Networking/ClientSession.swift,
-				Agents/Networking/MultipeerLobby.swift,
-				Agents/Networking/NetSession.swift,
-				"Agents/Networking/NetSession+HostSession.swift",
-				Agents/Networking/RemoteSeat.swift,
-				Agents/Networking/Transport.swift,
-				Agents/Networking/WireProtocol.swift,
-				Agents/RandomAgent.swift,
-				AI/AIArena.swift,
-				AI/AIMoveSupport.swift,
-				AI/AIWorld.swift,
-				AI/HandEvaluator.swift,
-				AI/MonteCarloAgent.swift,
-				AI/PlayoutPolicy.swift,
-				AI/TableInference.swift,
-				Assets.xcassets,
-				GameEngine/Cards.swift,
-				GameEngine/GameEngine.swift,
-				GameEngine/HandCompleteSnapshot.swift,
-				GameEngine/Players.swift,
-				Make_A_MillionApp.swift,
-				Views/AppRoot.swift,
-				Views/CardViews.swift,
-				Views/ClientGameView.swift,
-				Views/ClientLobbyView.swift,
-				Views/ContentView.swift,
-				Views/DebugFlags.swift,
-				Views/Display.swift,
-				Views/GameSession.swift,
-				Views/GameView.swift,
-				Views/HostGameView.swift,
-				Views/HostLobbyView.swift,
-				"Views/PlayerView+Spectator.swift",
-				Views/TabletopGameView.swift,
+				Info.plist,
 			);
 			target = 4367CAF12FBBBFE10005A97E /* Make-A-Million */;
-		};
-		4367CB2F2FBBC3DA0005A97E /* Exceptions for "Make-A-Million" folder in "Make-A-MillionUITests" target */ = {
-			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
-			membershipExceptions = (
-				Agents/Agent.swift,
-				Agents/GameRunner.swift,
-				"Agents/GameRunner+Multi.swift",
-				Agents/HumanAgent.swift,
-				Agents/Networking/ClientSession.swift,
-				Agents/Networking/MultipeerLobby.swift,
-				Agents/Networking/NetSession.swift,
-				"Agents/Networking/NetSession+HostSession.swift",
-				Agents/Networking/RemoteSeat.swift,
-				Agents/Networking/Transport.swift,
-				Agents/Networking/WireProtocol.swift,
-				Agents/RandomAgent.swift,
-				AI/AIArena.swift,
-				AI/AIMoveSupport.swift,
-				AI/AIWorld.swift,
-				AI/HandEvaluator.swift,
-				AI/MonteCarloAgent.swift,
-				AI/PlayoutPolicy.swift,
-				AI/TableInference.swift,
-				Assets.xcassets,
-				GameEngine/Cards.swift,
-				GameEngine/GameEngine.swift,
-				GameEngine/HandCompleteSnapshot.swift,
-				GameEngine/Players.swift,
-				Info.plist,
-				Make_A_MillionApp.swift,
-				Views/AppRoot.swift,
-				Views/CardViews.swift,
-				Views/ClientGameView.swift,
-				Views/ClientLobbyView.swift,
-				Views/ContentView.swift,
-				Views/DebugFlags.swift,
-				Views/Display.swift,
-				Views/GameSession.swift,
-				Views/GameView.swift,
-				Views/HostGameView.swift,
-				Views/HostLobbyView.swift,
-				"Views/PlayerView+Spectator.swift",
-				Views/TabletopGameView.swift,
-			);
-			target = 4367CB082FBBBFE30005A97E /* Make-A-MillionUITests */;
 		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
@@ -140,8 +58,7 @@
 		4367CB2A2FBBC3D90005A97E /* Make-A-Million */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
-				4367CB2E2FBBC3DA0005A97E /* Exceptions for "Make-A-Million" folder in "Make-A-Million" target */,
-				4367CB2F2FBBC3DA0005A97E /* Exceptions for "Make-A-Million" folder in "Make-A-MillionUITests" target */,
+				433CAD062FD0BA090037CEB0 /* Exceptions for "Make-A-Million" folder in "Make-A-Million" target */,
 			);
 			path = "Make-A-Million";
 			sourceTree = "<group>";
@@ -209,6 +126,9 @@
 			);
 			dependencies = (
 			);
+			fileSystemSynchronizedGroups = (
+				4367CB2A2FBBC3D90005A97E /* Make-A-Million */,
+			);
 			name = "Make-A-Million";
 			packageProductDependencies = (
 			);
@@ -254,7 +174,6 @@
 			);
 			fileSystemSynchronizedGroups = (
 				4367CB0C2FBBBFE30005A97E /* Make-A-MillionUITests */,
-				4367CB2A2FBBC3D90005A97E /* Make-A-Million */,
 			);
 			name = "Make-A-MillionUITests";
 			packageProductDependencies = (

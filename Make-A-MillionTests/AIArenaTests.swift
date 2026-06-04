@@ -25,9 +25,8 @@
 //
 
 import XCTest
-@testable import Make_A_Million   // ← if this won't resolve, it's whatever
-                                  //   your app target is named; Xcode will
-                                  //   autocomplete it after `@testable import`
+@testable import Make_A_Million_Mobile   // module name derives from the app's
+                                         //   PRODUCT_NAME ("Make-A-Million Mobile")
 
 final class AIArenaTests: XCTestCase {
 

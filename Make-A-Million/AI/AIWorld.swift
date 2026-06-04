@@ -272,6 +272,9 @@ struct Determinizer {
             bidHistory: view.bidHistory,
             trump: view.trump,
             misdealRule: .disabled,
+            // Rollouts never reach a match-deciding settle, so the endgame
+            // tiebreak is irrelevant here; the standard rule is a safe default.
+            endgameRule: .standard,
             currentTrick: view.currentTrick,
             completedTricks: completed,
             capturedByTeam: captured,

@@ -39,6 +39,21 @@ nonisolated struct MisdealRule: Codable, Hashable {
     static let disabled = MisdealRule(enabled: false, threshold: 0)
 }
 
+// MARK: - Endgame tiebreak configuration
+
+/// House rule for the rare hand where BOTH teams finish at or over the
+/// million. Carried on `GameState` alongside `misdealRule` so a redeal
+/// preserves it and `matchWinner` can apply it with no extra plumbing.
+nonisolated enum EndgameTiebreak: String, Codable, Hashable, CaseIterable {
+    /// The team that took the final (winning) bid wins the tie.
+    case bidder
+    /// The team with the strictly higher score wins the tie.
+    case highestScore
+
+    /// House default: the bidding team wins a double-over-the-million finish.
+    static let standard = EndgameTiebreak.bidder
+}
+
 // MARK: - A trick in progress / completed
 
 nonisolated struct PlayedCard: Codable, Hashable {
@@ -96,6 +111,10 @@ nonisolated struct GameState: Codable {
     /// state so a redeal carries the same rule forward, and so `legalMoves`
     /// in `.misdealDecision` can reason about it.
     let misdealRule: MisdealRule
+    /// House rule for deciding a hand in which both teams cross the million.
+    /// Stored alongside `misdealRule` so it carries through redeals and is
+    /// available to `matchWinner` without threading it separately.
+    let endgameRule: EndgameTiebreak
 
     // Trick play
     private(set) var currentTrick: Trick?
@@ -118,7 +137,8 @@ nonisolated struct GameState: Codable {
     static func newHand(dealer: PlayerID,
                         seed: UInt64,
                         carryScore: [Int: Int] = [0: 0, 1: 0],
-                        misdealRule: MisdealRule = .standard) -> GameState {
+                        misdealRule: MisdealRule = .standard,
+                        endgameRule: EndgameTiebreak = .standard) -> GameState {
         var rng = SeededRNG(seed: seed)
         var deck = Deck.full
         // Fisher–Yates with the seeded RNG.
@@ -160,6 +180,7 @@ nonisolated struct GameState: Codable {
             bidHistory: [],
             trump: nil,
             misdealRule: misdealRule,
+            endgameRule: endgameRule,
             currentTrick: nil,
             completedTricks: [],
             capturedByTeam: [0: [], 1: []],
@@ -354,7 +375,8 @@ extension GameState {
                 return GameState.newHand(dealer: s.dealer,
                                          seed: s.dealSeed &+ 1,
                                          carryScore: s.matchScore,
-                                         misdealRule: s.misdealRule)
+                                         misdealRule: s.misdealRule,
+                                         endgameRule: s.endgameRule)
 
         // MARK: Widow discard
         case (.widowDiscard, .discardWidow(let cards)):
@@ -563,8 +585,23 @@ extension GameState {
         guard phase == .handComplete else { return nil }
         let s0 = matchScore[0] ?? 0
         let s1 = matchScore[1] ?? 0
-        guard s0 >= 1_000_000 || s1 >= 1_000_000 else { return nil }
-        return s0 >= s1 ? 0 : 1     // ties on/over a million: higher wins
+        let over0 = s0 >= 1_000_000
+        let over1 = s1 >= 1_000_000
+        guard over0 || over1 else { return nil }
+
+        // Only one side crossed the million this hand: it wins outright.
+        if over0 != over1 { return over0 ? 0 : 1 }
+
+        // Both crossed in the same hand — apply the house tiebreak rule.
+        switch endgameRule {
+        case .bidder:
+            // The team that took the final bid wins. If somehow there's no
+            // bidder on record, fall back to the higher score.
+            if let bidder = highBidder { return Seats.team(of: bidder) }
+            return s0 >= s1 ? 0 : 1
+        case .highestScore:
+            return s0 >= s1 ? 0 : 1
+        }
     }
 }
 

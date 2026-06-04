@@ -173,6 +173,10 @@ final class GameSession: ObservableObject {
         let spectator = self.spectator
         let dealer = currentDealer
         let carry = currentCarry
+        // Snapshot the house rules at deal time so a mid-hand settings change
+        // can't alter the hand in progress.
+        let misdealRule = GameSettings.shared.misdealRule
+        let endgameRule = GameSettings.shared.endgameRule
 
         runTask = Task {
             do {
@@ -180,6 +184,8 @@ final class GameSession: ObservableObject {
                     dealer: dealer,
                     dealSeed: handSeed,
                     carryScore: carry,
+                    misdealRule: misdealRule,
+                    endgameRule: endgameRule,
                     spectator: spectator,
                     onView: { [weak self] view in
                         self?.receivePublicFrame(view)

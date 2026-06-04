@@ -18,10 +18,12 @@ struct TabletopGameView: View {
 
     @ObservedObject var netSession: NetSession
     @ObservedObject var gameSession: GameSession
+    @EnvironmentObject private var settings: GameSettings
     let onExit: () -> Void
 
     @State private var lastView: PlayerView? = nil
     @State private var sweep: SweepState? = nil
+    @State private var showingSettings = false
 
     /// A just-completed trick animating out toward its winner.
     private struct SweepState: Equatable {
@@ -84,6 +86,13 @@ struct TabletopGameView: View {
         .onChange(of: displayTick) { _, _ in
             guard let d = tableView else { return }
             DispatchQueue.main.async { lastView = d }
+        }
+        .sheet(isPresented: $showingSettings) {
+            // Rules lock while a hand is being played; display toggles stay live.
+            SettingsView(settings: .shared,
+                         rulesLocked: netSession.phase == .running) {
+                showingSettings = false
+            }
         }
     }
 
@@ -338,7 +347,7 @@ struct TabletopGameView: View {
                 }
             }
             Spacer()
-            if let last = table.lastTrick {
+            if settings.showLastTrick, let last = table.lastTrick {
                 HStack(spacing: 8) {
                     Text("Last trick").font(.headline).foregroundStyle(.white.opacity(0.7))
                     ForEach(keyedPlays(last.plays), id: \.key) { entry in
@@ -370,6 +379,12 @@ struct TabletopGameView: View {
                 .font(.headline.weight(.semibold))
                 .foregroundStyle(.white.opacity(0.75))
             Spacer()
+            Button { showingSettings = true } label: {
+                Image(systemName: "gearshape.fill")
+            }
+            .font(.subheadline.weight(.semibold))
+            .buttonStyle(.bordered)
+            .accessibilityLabel("Settings")
             Button("End Match") { netSession.stop(); onExit() }
                 .font(.subheadline.weight(.semibold))
                 .buttonStyle(.bordered)

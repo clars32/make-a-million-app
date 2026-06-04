@@ -14,6 +14,7 @@ struct HostGameView: View {
     let onExit: () -> Void
 
     @State private var lastView: PlayerView? = nil
+    @State private var showingSettings = false
 
     private var tableView: PlayerView? {
         gameSession.displayView ?? human.pending ?? lastView
@@ -66,20 +67,32 @@ struct HostGameView: View {
                 onCaptureLastView: { lastView = $0 })
 
             VStack {
-                HStack {
+                HStack(spacing: 8) {
                     Spacer()
+                    Button { showingSettings = true } label: {
+                        Image(systemName: "gearshape.fill")
+                    }
+                    .buttonStyle(.bordered)
+                    .accessibilityLabel("Settings")
                     Button("End") {
                         netSession.stop()
                         onExit()
                     }
                     .buttonStyle(.bordered)
-                    .padding()
                 }
+                .padding()
                 Spacer()
             }
 
             if case .paused(let reason) = netSession.phase {
                 pausedOverlay(reason: reason)
+            }
+        }
+        .sheet(isPresented: $showingSettings) {
+            // Rules lock while a hand is being played; display toggles stay live.
+            SettingsView(settings: .shared,
+                         rulesLocked: netSession.phase == .running) {
+                showingSettings = false
             }
         }
     }

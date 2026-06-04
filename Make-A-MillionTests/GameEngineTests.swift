@@ -7,7 +7,7 @@
 //
 
 import XCTest
-@testable import Make_A_Million
+@testable import Make_A_Million_Mobile
 
 final class GameEngineTests: XCTestCase {
 
@@ -311,6 +311,92 @@ final class GameEngineTests: XCTestCase {
         // (Full-hand integration is covered by testFullHandPlaysOut.)
         // This test documents intent; the integration test is authoritative.
         XCTAssertTrue(true)
+    }
+
+    // MARK: Endgame tiebreak (matchWinner)
+
+    /// Minimal hand-complete state exercising only the fields `matchWinner`
+    /// reads (phase, scores, bidder, endgameRule). Everything else is inert.
+    private func finishedState(scoreA: Int, scoreB: Int,
+                               bidder: PlayerID?,
+                               rule: EndgameTiebreak) -> GameState {
+        GameState(
+            dealSeed: 0, dealer: PlayerID(0),
+            hands: [:], widow: [],
+            phase: .handComplete, toAct: PlayerID(0),
+            highBid: bidder == nil ? nil : 200_000,
+            highBidder: bidder,
+            passed: [], bidHistory: [], trump: .red,
+            misdealRule: .disabled, endgameRule: rule,
+            currentTrick: nil, completedTricks: [], capturedByTeam: [:],
+            matchScore: [0: scoreA, 1: scoreB],
+            dealtHands: [:], dealtWidow: [])
+    }
+
+    func testMatchWinnerNilUntilHandComplete() {
+        // A fresh deal is in .bidding, so there is no winner yet even though
+        // the (zero) scores are technically a tie.
+        let s = GameState.newHand(dealer: PlayerID(0), seed: 1)
+        XCTAssertNil(s.matchWinner)
+    }
+
+    func testMatchWinnerNilWhenNeitherReachesMillion() {
+        let s = finishedState(scoreA: 999_000, scoreB: 500_000,
+                              bidder: PlayerID(0), rule: .bidder)
+        XCTAssertNil(s.matchWinner)
+    }
+
+    func testSingleTeamOverMillionWinsRegardlessOfRule() {
+        // Only team 0 is over the million; the bidder sits on team 1. Both
+        // rules must still award team 0 — the tiebreak only applies when BOTH
+        // teams cross.
+        for rule in EndgameTiebreak.allCases {
+            let s = finishedState(scoreA: 1_050_000, scoreB: 800_000,
+                                  bidder: PlayerID(1), rule: rule)
+            XCTAssertEqual(s.matchWinner, 0,
+                           "rule \(rule): a lone team over a million should win")
+        }
+    }
+
+    func testBothOverMillion_BidderRuleAwardsBiddingTeam() {
+        // Both over a million; bidder is seat 1 (team 1) with the LOWER score.
+        // .bidder awards the bidding team even though it scored less.
+        let s = finishedState(scoreA: 1_200_000, scoreB: 1_050_000,
+                              bidder: PlayerID(1), rule: .bidder)
+        XCTAssertEqual(s.matchWinner, 1)
+    }
+
+    func testBothOverMillion_HighestScoreRuleAwardsHigherScore() {
+        // Same scores, but .highestScore ignores the bidder and awards team 0.
+        let s = finishedState(scoreA: 1_200_000, scoreB: 1_050_000,
+                              bidder: PlayerID(1), rule: .highestScore)
+        XCTAssertEqual(s.matchWinner, 0)
+    }
+
+    func testBothOverMillion_BidderRuleFallsBackToScoreWithNoBidder() {
+        // Degenerate: both over, no bidder on record. .bidder falls back to
+        // the higher score (team 1 here).
+        let s = finishedState(scoreA: 1_050_000, scoreB: 1_200_000,
+                              bidder: nil, rule: .bidder)
+        XCTAssertEqual(s.matchWinner, 1)
+    }
+
+    func testEndgameRulePersistsThroughMisdealRedeal() throws {
+        // Force an immediate misdeal (threshold = whole deck), then confirm the
+        // redealt hand carries the endgame rule forward unchanged.
+        let g = GameState.newHand(
+            dealer: PlayerID(0), seed: 1,
+            misdealRule: MisdealRule(enabled: true, threshold: Deck.totalMoneyInDeck),
+            endgameRule: .highestScore)
+        XCTAssertEqual(g.view(for: PlayerID(0)).phase, .misdealDecision)
+        let after = try g.applying(.callMisdeal, by: g.view(for: PlayerID(0)).toAct)
+        XCTAssertEqual(after.endgameRule, .highestScore)
+    }
+
+    func testNewHandDefaultsToBidderEndgameRule() {
+        // The house default is the bidding team winning a double-over finish.
+        let g = GameState.newHand(dealer: PlayerID(0), seed: 1)
+        XCTAssertEqual(g.endgameRule, .bidder)
     }
 
     // MARK: Full hand integration — the milestone-one gate

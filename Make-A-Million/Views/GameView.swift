@@ -8,12 +8,40 @@ import SwiftUI
 struct GameView: View {
     @StateObject private var session = GameSession()
     @State private var dealSeed: UInt64 = .random(in: .min ... .max)
+    @State private var showingSettings = false
+
+    /// Return to the home screen. Owned here (rather than in AppRoot's overlay)
+    /// so this view can host the in-game settings entry alongside it and gate
+    /// rule edits on `session.running`.
+    let onExit: () -> Void
 
     var body: some View {
-        SoloGameBody(session: session,
-                     human: session.human,
-                     dealSeed: $dealSeed)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        ZStack(alignment: .topTrailing) {
+            SoloGameBody(session: session,
+                         human: session.human,
+                         dealSeed: $dealSeed)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            HStack(spacing: 8) {
+                Button { showingSettings = true } label: {
+                    Image(systemName: "gearshape.fill")
+                }
+                .buttonStyle(.bordered)
+                .accessibilityLabel("Settings")
+
+                Button("Back", action: onExit)
+                    .buttonStyle(.bordered)
+            }
+            .padding()
+        }
+        .sheet(isPresented: $showingSettings) {
+            // Rules lock only while a hand is actually being played; display
+            // toggles stay live. Between hands / at the start screen
+            // (`running == false`) rules are editable and apply to the next deal.
+            SettingsView(settings: .shared, rulesLocked: session.running) {
+                showingSettings = false
+            }
+        }
     }
 }
 
@@ -104,6 +132,7 @@ struct GameBody: View {
     let dealSeed: UInt64
     let onCaptureLastView: ((PlayerView) -> Void)?
 
+    @EnvironmentObject private var settings: GameSettings
     @Namespace private var cardNS
     @State private var discardSelection: Set<Card> = []
     @State private var selectedBidIndex: Int = 0
@@ -200,7 +229,10 @@ struct GameBody: View {
 
                 scoreBar(table)
 
-                if table.phase == .bidding || !table.bidHistory.isEmpty {
+                // During bidding the record is always shown (you're acting on
+                // it); after bidding ends it stays only if the player opted in.
+                if table.phase == .bidding
+                    || (settings.showBidHistoryDuringHand && !table.bidHistory.isEmpty) {
                     bidHistoryPanel(records: table.bidHistory, opener: table.opener)
                 }
 
@@ -208,7 +240,7 @@ struct GameBody: View {
                     widowPanel(widow, highBidder: table.highBidder)
                 }
 
-                if let last = table.lastTrick {
+                if settings.showLastTrick, let last = table.lastTrick {
                     lastTrickPanel(last)
                 }
 
@@ -236,7 +268,7 @@ struct GameBody: View {
                 
                 Spacer(minLength: 4)
                 
-                if BiddingDebug.showTrickHistory && !table.completedTricks.isEmpty {
+                if settings.showFullTrickHistory && !table.completedTricks.isEmpty {
                     historyPanel(table)
                 }
             }
