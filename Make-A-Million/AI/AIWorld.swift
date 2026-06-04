@@ -55,10 +55,42 @@ struct Determinizer {
 
     let view: PlayerView
     private var rng: SeededRNG
+    /// How strongly bid history biases the deal. 0 = uniform (old behaviour);
+    /// higher = passers get weaker hands and bidders stronger ones. This is a
+    /// soft prior — it shifts the *distribution* of sampled worlds, it never
+    /// violates a hard constraint (counts, voids).
+    private let bidLeanStrength: Double
+    /// Per hidden seat: + if they bid (scaled by amount), − if they passed.
+    /// A human reads exactly this signal: "everyone passed, so they're weak."
+    private let lean: [PlayerID: Double]
 
-    init(view: PlayerView, seed: UInt64) {
+    init(view: PlayerView, seed: UInt64, bidLeanStrength: Double = 0.0) {
         self.view = view
         self.rng = SeededRNG(seed: seed)
+        self.bidLeanStrength = bidLeanStrength
+        self.lean = Determinizer.computeLean(view: view)
+    }
+
+    /// Read the public bid record into a per-seat strength lean.
+    private static func computeLean(view: PlayerView) -> [PlayerID: Double] {
+        var highestBid: [PlayerID: Int] = [:]
+        for rec in view.bidHistory {
+            if case .bid(let amt) = rec.action {
+                highestBid[rec.player] = max(highestBid[rec.player] ?? 0, amt)
+            }
+        }
+        var lean: [PlayerID: Double] = [:]
+        for s in Seats.all where s != view.me {
+            if let amt = highestBid[s] {
+                // Bidding signals strength, scaled by how far above the floor.
+                lean[s] = min(2.0, 0.5 + Double(amt - Bidding.openingMinimum) / 75_000.0)
+            } else if view.passed.contains(s) {
+                lean[s] = -1.0          // a pass signals a weaker hand
+            } else {
+                lean[s] = 0.0           // hasn't acted / unknown
+            }
+        }
+        return lean
     }
 
     // MARK: Public knowledge derived once
@@ -188,12 +220,12 @@ struct Determinizer {
 
     // MARK: Deal mechanics
 
-    private func tryDeal(pool: [Card],
-                         to seats: [PlayerID],
-                         sizes: [PlayerID: Int],
-                         dead: Int,
-                         voids: [PlayerID: Set<CardColor>],
-                         trump: CardColor?) -> [PlayerID: [Card]]? {
+    private mutating func tryDeal(pool: [Card],
+                                  to seats: [PlayerID],
+                                  sizes: [PlayerID: Int],
+                                  dead: Int,
+                                  voids: [PlayerID: Set<CardColor>],
+                                  trump: CardColor?) -> [PlayerID: [Card]]? {
         var hands: [PlayerID: [Card]] = [:]
         for s in seats { hands[s] = [] }
         var deadLeft = dead
@@ -217,7 +249,12 @@ struct Determinizer {
             let candidates = seats.filter {
                 hands[$0]!.count < (sizes[$0] ?? 0) && !banned(card, $0)
             }
-            if let pick = candidates.first {
+            if !candidates.isEmpty {
+                // Bias the choice by bid-lean: strong cards drift toward seats
+                // that bid, weak cards toward seats that passed. Still random
+                // (so samples stay diverse) and still only among eligible
+                // seats (so no hard constraint is broken).
+                let pick = weightedPick(candidates, card: card)
                 hands[pick]!.append(card)
             } else if deadLeft > 0 {
                 deadLeft -= 1                      // goes to the discarded pile
@@ -228,6 +265,45 @@ struct Determinizer {
         // Every seat must be exactly filled.
         for s in seats where hands[s]!.count != (sizes[s] ?? 0) { return nil }
         return hands
+    }
+
+    /// Pick one seat from `candidates`, weighted by bid-lean × card strength.
+    /// With `bidLeanStrength == 0` this is just `candidates[0]`, preserving the
+    /// previous (uniform-after-shuffle) behaviour exactly.
+    private mutating func weightedPick(_ candidates: [PlayerID], card: Card) -> PlayerID {
+        if candidates.count == 1 || bidLeanStrength <= 0 { return candidates[0] }
+        let weights = candidates.map { leanWeight(card: card, seat: $0) }
+        let total = weights.reduce(0, +)
+        guard total > 0 else { return candidates[0] }
+        let r = Double(rng.next() % 1_000_000) / 1_000_000.0 * total
+        var acc = 0.0
+        for (i, w) in weights.enumerated() {
+            acc += w
+            if r <= acc { return candidates[i] }
+        }
+        return candidates[candidates.count - 1]
+    }
+
+    /// exp(strength × centredCardValue × seatLean): >1 when a strong card meets
+    /// a bidder (or a weak card meets a passer), <1 for the mismatches.
+    private func leanWeight(card: Card, seat: PlayerID) -> Double {
+        let v = cardValueScore(card) - 0.5         // [-0.5, +0.5]
+        let l = lean[seat] ?? 0.0                   // [-1, +2]
+        return exp(bidLeanStrength * v * l)
+    }
+
+    /// A rough 0…1 "how good is this card to hold" score, for bid-lean only —
+    /// money and high rank are strong, low pips are weak, Tiger is the top.
+    private func cardValueScore(_ c: Card) -> Double {
+        switch c {
+        case .tiger: return 1.0
+        case .bull, .bear: return 0.5               // situational, treat as neutral
+        case .colored(let col, let r):
+            var s = Double(r.rawValue) / 12.0 * 0.5         // rank → up to 0.5
+            s += Double(r.moneyValue) / 40_000.0 * 0.4      // money → up to 0.4
+            if let t = view.trump, col == t { s += 0.1 }    // trump bonus
+            return min(1.0, s)
+        }
     }
 
     private mutating func shuffle(_ a: inout [Card]) {

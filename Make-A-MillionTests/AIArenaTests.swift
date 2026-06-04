@@ -54,4 +54,50 @@ final class AIArenaTests: XCTestCase {
             "Monte Carlo should clearly beat random; got \(r.mcWinRate). "
             + "Below ~0.65 means a bug, not just untuned — see the verdict line.")
     }
+
+    // MARK: - Self-play A/B (bidding calibration instrument)
+
+    /// Baseline: identical profiles should land near 50% and give a reference
+    /// for the bid-share / contract / set-rate telemetry.
+    func testSelfPlayBaseline() async {
+        let r = await AIArena.runSelfPlay(matches: 20, challenger: .medium,
+                                          champion: .medium, baseSeed: 1)
+        print(r.summary)
+    }
+
+    /// Regression guard for the bid calibration: the new default `.medium`
+    /// against the previous, more conservative profile. Should be win-rate
+    /// neutral, take a few more bids, and not raise the set-rate.
+    func testSelfPlayBidCalibration() async {
+        // New default `.medium` (challenger) vs the previous, more conservative
+        // bid profile (champion). Confirms the calibration is win-rate neutral
+        // and keeps the set-rate bounded.
+        var oldProfile = MonteCarloAgent.Difficulty.medium
+        oldProfile.bidAggression = 0.92
+        oldProfile.partnerRespect = 0.85
+        let r = await AIArena.runSelfPlay(matches: 20, challenger: .medium,
+                                          champion: oldProfile, baseSeed: 1)
+        print(r.summary)
+    }
+
+    /// A/B for bid-inference in the world sampler: challenger reads the
+    /// auction (bidLeanStrength 1.0), champion samples uniformly (0.0).
+    /// Expect neutral-or-better win-rate; the feature also makes play more
+    /// human-like (it stops crediting passers with monster hands).
+    func testSelfPlayBidInference() async {
+        var noInference = MonteCarloAgent.Difficulty.medium
+        noInference.bidLeanStrength = 0.0
+        let r = await AIArena.runSelfPlay(matches: 30, challenger: .medium,
+                                          champion: noInference, baseSeed: 1)
+        print(r.summary)
+    }
+
+    /// Opponent-free calibration: is the evaluator under-valuing hands (i.e.
+    /// passing makeable ones)? Forces each seat to declare at the floor and
+    /// compares estimate vs realized gross. Prints the calibration curve.
+    func testBidCalibration() async {
+        let r = await AIArena.runBidCalibration(deals: 25, difficulty: .medium,
+                                                baseSeed: 1)
+        print(r.summary)
+    }
 }

@@ -89,16 +89,29 @@ struct MonteCarloAgent: PlayerAgent {
         /// Trick-play shortlist size. Smaller = faster but might miss
         /// the best move. 3-5 is the sweet spot.
         var trickCandidates: Int
+        /// How strongly bid history biases the determinized worlds (passers
+        /// get weaker hands, bidders stronger). 0 = ignore bids (uniform
+        /// sampling); higher = read the auction more like a strong human.
+        var bidLeanStrength: Double = 0.0
 
         static let easy   = Difficulty(samples: 10, blunderRate: 0.22,
-                                       bidAggression: 0.80, partnerRespect: 0.95,
-                                       matchAwareness: 0.7, trickCandidates: 3)
+                                       bidAggression: 0.82, partnerRespect: 0.95,
+                                       matchAwareness: 0.7, trickCandidates: 3,
+                                       bidLeanStrength: 0.0)
+        // medium/hard bid up to (or just past) their honest hand valuation
+        // rather than shaving it: self-play shows this is win-rate neutral vs
+        // competent play while taking noticeably more bids — the behaviour a
+        // human opponent expects. partnerRespect eased so the team competes a
+        // little harder for contracts. Pushing aggression higher (1.2) only
+        // trades wins for set-backs, so we stop here.
         static let medium = Difficulty(samples: 20, blunderRate: 0.06,
-                                       bidAggression: 0.92, partnerRespect: 0.85,
-                                       matchAwareness: 1.0, trickCandidates: 4)
+                                       bidAggression: 1.00, partnerRespect: 0.78,
+                                       matchAwareness: 1.0, trickCandidates: 4,
+                                       bidLeanStrength: 1.0)
         static let hard   = Difficulty(samples: 36, blunderRate: 0.0,
-                                       bidAggression: 1.00, partnerRespect: 0.75,
-                                       matchAwareness: 1.0, trickCandidates: 5)
+                                       bidAggression: 1.05, partnerRespect: 0.68,
+                                       matchAwareness: 1.0, trickCandidates: 5,
+                                       bidLeanStrength: 1.6)
     }
 
     let name: String
@@ -289,7 +302,8 @@ struct MonteCarloAgent: PlayerAgent {
         var counts = [Move: Int]()
 
         for s in 0..<difficulty.samples {
-            var det = Determinizer(view: view, seed: seedBox.nextRaw() &+ UInt64(s))
+            var det = Determinizer(view: view, seed: seedBox.nextRaw() &+ UInt64(s),
+                                   bidLeanStrength: difficulty.bidLeanStrength)
             guard let world = det.sample() ?? det.sampleUnconstrained() else { continue }
             for cand in shortlist {
                 guard let afterMine = try? world.state.applying(cand, by: view.me)
@@ -479,25 +493,34 @@ struct MonteCarloAgent: PlayerAgent {
                                      trump: trump, inference: inference,
                                      view: view)
             if safe {
-                if !mustFollow, let bull = plays.first(where: { if case .bull = $0 { return true }; return false }),
-                   moneyOnTable > 0 {
-                    picks.append(bull)
-                }
-                // Cards that are MY highest of their color are future
-                // controllers — try not to dump them.
-                let myTops = topOfEachColorInMyHand(view.myHand, trump: trump)
-                let nonControllers = pool.filter { c in
-                    guard let color = c.effectiveColor(trump: trump) else { return true }
-                    return myTops[color] != c
-                }
-                let dumpFrom = nonControllers.isEmpty ? pool : nonControllers
-                if let hi = dumpFrom.filter({ $0.isMoney }).max(by: { rankOf($0) < rankOf($1) }) {
-                    picks.append(hi)
+                // VALUE-SAFETY: if a loose Bear can still legally land on this
+                // trick from a yet-to-play opponent, any money we add is fed
+                // straight to the Bear. Under that threat, offer ONLY the
+                // low non-money shed to the search — no money-dump candidate.
+                let bearThreat = !amLastToPlay
+                    && inference.opponentCanBearTrick(led: led, currentTrick: trick)
+                if !bearThreat {
+                    if !mustFollow, let bull = plays.first(where: { if case .bull = $0 { return true }; return false }),
+                       moneyOnTable > 0 {
+                        picks.append(bull)
+                    }
+                    // Cards that are MY highest of their color are future
+                    // controllers — try not to dump them.
+                    let myTops = topOfEachColorInMyHand(view.myHand, trump: trump)
+                    let nonControllers = pool.filter { c in
+                        guard let color = c.effectiveColor(trump: trump) else { return true }
+                        return myTops[color] != c
+                    }
+                    let dumpFrom = nonControllers.isEmpty ? pool : nonControllers
+                    if let hi = dumpFrom.filter({ $0.isMoney }).max(by: { rankOf($0) < rankOf($1) }) {
+                        picks.append(hi)
+                    }
                 }
                 // Hedge: cheapest non-money non-special. Never the Bear
-                // (it would cancel partner's money trick — disastrous).
-                let safeLow = dumpFrom.filter { !$0.isSpecial && !$0.isMoney }
-                let lowPool = safeLow.isEmpty ? dumpFrom.filter { !$0.isSpecial } : safeLow
+                // (it would cancel partner's money trick — disastrous). This
+                // is the only money-safe option under a Bear threat.
+                let safeLow = pool.filter { !$0.isSpecial && !$0.isMoney }
+                let lowPool = safeLow.isEmpty ? pool.filter { !$0.isSpecial } : safeLow
                 if let lo = lowPool.min(by: { PlayoutPolicy.strength($0, led: led, trump: trump)
                                             < PlayoutPolicy.strength($1, led: led, trump: trump) }) {
                     picks.append(lo)
@@ -521,6 +544,14 @@ struct MonteCarloAgent: PlayerAgent {
                                            < PlayoutPolicy.strength($1, led: led, trump: trump) }) {
                 picks.append(big)
             }
+            // BANK MONEY: when last to play the win is certain, so capturing
+            // WITH a money card locks it in rather than stranding it for the
+            // other team. Offer the highest-money winner as its own candidate
+            // (the strength-based "big" above can pick a trump over money).
+            if amLastToPlay,
+               let bank = winners.filter({ $0.isMoney }).max(by: { $0.moneyValue < $1.moneyValue }) {
+                picks.append(bank)
+            }
             // Also a cheap shed in case "win" is more expensive than the
             // trick is worth.
             if let sh = cheapShed(pool, led: led, trump: trump) {
@@ -529,10 +560,14 @@ struct MonteCarloAgent: PlayerAgent {
             return picks
         }
 
-        // C. Bear on opponent money trick we can't take.
-        if !partnerWinning && moneyOnTable >= 10_000 && !mustFollow {
-            if let bear = plays.first(where: { if case .bear = $0 { return true }; return false }) {
-                picks.append(bear)
+        // C. Bear on opponent money trick we can't take. Lower the bar when a
+        // loose Bull could still double the pot for their side.
+        if !partnerWinning && !mustFollow {
+            let bullDoubles = inference.opponentCanBullTrick(led: led, currentTrick: trick)
+            if moneyOnTable >= 10_000 || (bullDoubles && moneyOnTable > 0) {
+                if let bear = plays.first(where: { if case .bear = $0 { return true }; return false }) {
+                    picks.append(bear)
+                }
             }
         }
 

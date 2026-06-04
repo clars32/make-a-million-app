@@ -248,9 +248,12 @@ enum HandEvaluator {
     /// Negative below 3, because you'll get over-trumped.
     private static func scoreLengthBonus(trumpLen: Int, hasTiger: Bool) -> Int {
         let tigerBonus = hasTiger ? 4_000 : 0
+        // Short-trump penalty eased (June 2026 calibration): the declarer
+        // names trump on the 16-card hand (after the widow), so "short" trump
+        // is less of a death sentence than the raw 13-card count implies.
         switch trumpLen {
-        case 0...2: return -8_000 + tigerBonus
-        case 3: return -2_000 + tigerBonus
+        case 0...2: return -4_000 + tigerBonus
+        case 3: return 2_000 + tigerBonus
         case 4: return 6_000 + tigerBonus
         case 5: return 18_000 + tigerBonus
         case 6: return 30_000 + tigerBonus
@@ -267,14 +270,19 @@ enum HandEvaluator {
         // play, they routinely contribute $40-50k of incidental capture.
         // Earlier numbers were calibrated against a weaker estimator and
         // left the agent passing on hands a real player would bid.
+        // Recalibrated upward (June 2026): the counterfactual-declarer
+        // calibration showed the team captures ~$100k more than the old
+        // estimate predicted, with most of the gap on the partner/incidental
+        // side. We close ~half of it here (the cleanest team-gross lever),
+        // targeting a ~15% set-rate rather than the old over-cautious ~7%.
         switch (trumpLen, hasTiger) {
-        case (6..., true):  return 52_000
-        case (6..., false): return 42_000
-        case (5,    true):  return 45_000
-        case (5,    false): return 35_000
-        case (4,    true):  return 32_000
-        case (4,    false): return 25_000
-        default:            return 15_000
+        case (6..., true):  return 72_000
+        case (6..., false): return 62_000
+        case (5,    true):  return 64_000
+        case (5,    false): return 54_000
+        case (4,    true):  return 52_000
+        case (4,    false): return 45_000
+        default:            return 36_000
         }
     }
 
@@ -287,8 +295,11 @@ enum HandEvaluator {
         // We discard 3 low cards worth ~$5k of capture potential, so net
         // gain is ~$17k. Slightly discount further because not every widow
         // pick-up improves the hand strongly.
+        // The declarer takes 3 widow cards and keeps the best of the enlarged
+        // hand — worth more than a flat average suggests. Calibration showed
+        // the old ~$15k net was too low.
         let avg = (3 * Deck.totalMoneyInDeck) / 55           // ~$21.8k
-        return Int(Double(avg) * 0.80) - 2_000               // net ~$15k
+        return Int(Double(avg) * 1.30) + 6_000               // net ~$34k
     }
 
     // MARK: - Probability helpers (TUNE)
@@ -304,10 +315,10 @@ enum HandEvaluator {
         var p: Double
         switch rank {
         case .money40k: p = hasTiger ? 0.97 : 0.92
-        case .money30k: p = 0.86
-        case .money15k: p = 0.75
-        case .money10k: p = 0.65
-        case .money5k:  p = 0.55
+        case .money30k: p = 0.88
+        case .money15k: p = 0.80
+        case .money10k: p = 0.72
+        case .money5k:  p = 0.62
         default:        return 0
         }
         // Length adjusts both directions: short trump can't protect
@@ -332,13 +343,16 @@ enum HandEvaluator {
                                               suitLen: Int,
                                               trumpLen: Int,
                                               hasTiger: Bool) -> Double {
+        // Bases raised (June 2026 calibration): as the declarer you control
+        // trump and tempo, so side-suit money is cashed more often than the
+        // old, very pessimistic figures assumed — especially the mid ranks.
         let base: Double
         switch rank {
-        case .money40k: base = 0.78   // top of color, can still be trumped
-        case .money30k: base = 0.40   // often loses to the $40k if you don't have it
-        case .money15k: base = 0.18
-        case .money10k: base = 0.10
-        case .money5k:  base = 0.05
+        case .money40k: base = 0.82   // top of color, can still be trumped
+        case .money30k: base = 0.52   // often loses to the $40k if you don't have it
+        case .money15k: base = 0.28
+        case .money10k: base = 0.16
+        case .money5k:  base = 0.09
         default: return 0
         }
         // Longer in a color → leads find followers, less risk of trumping.

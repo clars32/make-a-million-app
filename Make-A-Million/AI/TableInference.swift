@@ -263,6 +263,32 @@ struct TableInference {
     var isBullOut: Bool { bullLoose }
     var isBearOut: Bool { bearLoose }
 
+    /// Could a yet-to-play OPPONENT legally drop the loose Bear into this
+    /// trick (zeroing its money)? Conservative — requires the Bear to be
+    /// unaccounted for AND an opponent who has not yet played AND is provably
+    /// void in the led color (so the engine would let them play a special).
+    /// Used to avoid dumping our money onto a trick about to be cancelled.
+    func opponentCanBearTrick(led: CardColor?, currentTrick: Trick?) -> Bool {
+        guard bearLoose, let led = led, let trick = currentTrick else { return false }
+        let played = Set(trick.plays.map(\.player))
+        for s in Seats.all where !played.contains(s) && s != me {
+            guard Seats.team(of: s) != Seats.team(of: me) else { continue }
+            if isKnownVoid(s, in: led) { return true }
+        }
+        return false
+    }
+
+    /// Symmetric check for the loose Bull, which DOUBLES the captured money.
+    func opponentCanBullTrick(led: CardColor?, currentTrick: Trick?) -> Bool {
+        guard bullLoose, let led = led, let trick = currentTrick else { return false }
+        let played = Set(trick.plays.map(\.player))
+        for s in Seats.all where !played.contains(s) && s != me {
+            guard Seats.team(of: s) != Seats.team(of: me) else { continue }
+            if isKnownVoid(s, in: led) { return true }
+        }
+        return false
+    }
+
     /// Cards from the widow that we KNOW the declarer must still hold
     /// (Tiger / Bull / Bear / money — the engine forbade discarding them).
     /// Principle 11. Empty if pre-trick-play or if all such cards have

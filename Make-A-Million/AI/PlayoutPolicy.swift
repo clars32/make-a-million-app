@@ -308,6 +308,19 @@ enum PlayoutPolicy {
                                                        onTable: onTable,
                                                        trump: trump)
             if safe {
+                // VALUE-SAFETY (not just rank-safety): a loose Bear in a
+                // yet-to-play opponent zeroes the trick's money even though
+                // it never out-ranks partner. Dumping our money onto a trick
+                // that is about to be Beared just feeds the Bear. When that
+                // threat exists, add the LEAST value possible.
+                let bearThreat = !amLastToPlay
+                    && opponentCanPlayBear(state: state, seat: seat,
+                                           onTable: onTable, led: led, trump: trump)
+                if bearThreat {
+                    // Shed cheapest non-money, non-special — never our money,
+                    // and never the Bear (it would cancel partner ourselves).
+                    return cheapestShed(followingPool, led: led, trump: trump)
+                }
                 // BULL doubles a money trick. Play it if we can.
                 if !mustFollow, let bull = plays.first(where: { if case .bull = $0 { return true }; return false }),
                    moneyOnTable > 0 {
@@ -342,7 +355,16 @@ enum PlayoutPolicy {
         let winners = followingPool.filter(wouldWin)
         let worthTaking = moneyOnTable >= 5_000 || !partnerWinning
         if !winners.isEmpty && worthTaking {
-            // Take it as cheaply as possible — don't waste the Tiger
+            // BANK MONEY when last to play: I am certain to win (no one plays
+            // after me), so capture WITH a money card rather than shedding a
+            // low one and stranding money that the other team may take later.
+            if amLastToPlay {
+                let moneyWinners = winners.filter { $0.isMoney }
+                if let bank = moneyWinners.max(by: { $0.moneyValue < $1.moneyValue }) {
+                    return bank
+                }
+            }
+            // Otherwise take it as cheaply as possible — don't waste the Tiger
             // on a low trick.
             let cheapest = winners.min { strength($0, led: led, trump: trump)
                                        < strength($1, led: led, trump: trump) }!
@@ -350,8 +372,14 @@ enum PlayoutPolicy {
         }
 
         // ---- Can't / shouldn't win. Bear off an opponent's money trick.
-        if !partnerWinning && moneyOnTable >= 10_000 {
-            if !mustFollow, let bear = plays.first(where: { if case .bear = $0 { return true }; return false }) {
+        // Lower the threshold when an opponent can still drop a loose Bull
+        // (which DOUBLES the money heading to their side): even a modest pot
+        // is worth cancelling then.
+        if !partnerWinning, !mustFollow,
+           let bear = plays.first(where: { if case .bear = $0 { return true }; return false }) {
+            let bullDoubles = opponentCanPlayBull(state: state, seat: seat,
+                                                  onTable: onTable, led: led, trump: trump)
+            if moneyOnTable >= 10_000 || (bullDoubles && moneyOnTable > 0) {
                 return bear
             }
         }
@@ -390,6 +418,54 @@ enum PlayoutPolicy {
             }
         }
         return true
+    }
+
+    /// Could a yet-to-play OPPONENT legally play the Bear into this trick
+    /// (cancelling its money)? Full-information: the rollout reads hands. A
+    /// seat may only play the Bear when it cannot follow the led color (or
+    /// the Bear is its last card). Used to avoid feeding money to a trick
+    /// that is about to be zeroed.
+    private static func opponentCanPlayBear(state: GameState,
+                                            seat: PlayerID,
+                                            onTable: [PlayedCard],
+                                            led: CardColor?,
+                                            trump: CardColor) -> Bool {
+        opponentCanPlaySpecial(state: state, seat: seat, onTable: onTable,
+                               led: led, trump: trump) { card in
+            if case .bear = card { return true }; return false
+        }
+    }
+
+    /// Symmetric check for the Bull (which DOUBLES the trick's money for the
+    /// capturing side). Relevant when opponents are taking the trick.
+    private static func opponentCanPlayBull(state: GameState,
+                                            seat: PlayerID,
+                                            onTable: [PlayedCard],
+                                            led: CardColor?,
+                                            trump: CardColor) -> Bool {
+        opponentCanPlaySpecial(state: state, seat: seat, onTable: onTable,
+                               led: led, trump: trump) { card in
+            if case .bull = card { return true }; return false
+        }
+    }
+
+    private static func opponentCanPlaySpecial(state: GameState,
+                                               seat: PlayerID,
+                                               onTable: [PlayedCard],
+                                               led: CardColor?,
+                                               trump: CardColor,
+                                               _ isWanted: (Card) -> Bool) -> Bool {
+        let played = Set(onTable.map(\.player))
+        for s in Seats.all where !played.contains(s) && s != seat {
+            guard Seats.team(of: s) != Seats.team(of: seat) else { continue }
+            guard let hand = state.hands[s], hand.contains(where: isWanted) else { continue }
+            // A special is legal only when the seat cannot follow the led
+            // color, or it is the seat's only remaining card.
+            let canFollow = led != nil
+                && hand.contains { $0.effectiveColor(trump: trump) == led }
+            if !canFollow || hand.count == 1 { return true }
+        }
+        return false
     }
 
     /// Highest money card in a pool, excluding Tiger.
