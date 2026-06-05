@@ -41,6 +41,10 @@ struct CenterTrickView: View {
         static let phone = Metrics(
             cardW: 64, cardH: 90, spread: 68, circle: 200, frame: 244,
             ledDot: 16, idleFont: .system(.subheadline, design: .rounded).bold())
+
+        static let tablet = Metrics(
+            cardW: 136, cardH: 191, spread: 146, circle: 410, frame: 520,
+            ledDot: 22, idleFont: .system(.title3, design: .rounded).bold())
     }
 
     let currentTrick: Trick?

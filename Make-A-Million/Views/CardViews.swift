@@ -195,8 +195,12 @@ private extension Card.Rank {
 struct MiniCardFace: View {
     let card: Card
     var faded: Bool = false
+    var width: CGFloat = 38
+    var height: CGFloat = 26
 
     private var tint: Color { card.tint == .primary ? .black : card.tint }
+    private var labelSize: CGFloat { height * 0.35 }
+    private var dotSize: CGFloat { height * 0.15 }
 
     var body: some View {
         miniBody
@@ -204,7 +208,7 @@ struct MiniCardFace: View {
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
                     .stroke(Color.gray.opacity(0.3), lineWidth: 0.5))
             .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-            .frame(width: 38, height: 26)
+            .frame(width: width, height: height)
             .opacity(faded ? 0.5 : 1.0)
     }
 
@@ -226,12 +230,12 @@ struct MiniCardFace: View {
             .overlay(
                 HStack(spacing: 2) {
                     Text(card.shortLabel)
-                        .font(.system(size: 9, weight: .heavy, design: .rounded))
+                        .font(.system(size: labelSize, weight: .heavy, design: .rounded))
                         .lineLimit(1)
                         .minimumScaleFactor(0.6)
-                    Circle().fill(tint).frame(width: 4, height: 4)
+                    Circle().fill(tint).frame(width: dotSize, height: dotSize)
                 }
-                .padding(.horizontal, 4)
+                .padding(.horizontal, height * 0.15)
                 .foregroundStyle(tint))
     }
 
