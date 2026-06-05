@@ -9,6 +9,10 @@ import SwiftUI
 
 @main
 struct Make_A_MillionApp: App {
+    #if canImport(UIKit)
+    @UIApplicationDelegateAdaptor(AppOrientationDelegate.self) private var orientationDelegate
+    #endif
+
     var body: some Scene {
         WindowGroup {
             ContentView()

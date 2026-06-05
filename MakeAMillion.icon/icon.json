@@ -1,14 +1,14 @@
 {
   "fill" : {
-    "automatic-gradient" : "extended-srgb:0.20392,0.78039,0.34902,1.00000",
+    "automatic-gradient" : "display-p3:0.03922,0.23137,0.14118,1.00000",
     "orientation" : {
       "start" : {
         "x" : 0.5,
-        "y" : 1
+        "y" : 0
       },
       "stop" : {
         "x" : 0.5,
-        "y" : 0.3
+        "y" : 0.7
       }
     }
   },

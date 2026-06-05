@@ -23,6 +23,7 @@ struct TabletopGameView: View {
 
     @State private var lastView: PlayerView? = nil
     @State private var showingSettings = false
+    @State private var selectedTrickHistorySeat: PlayerID? = nil
 
     private var tableView: PlayerView? { gameSession.displayView ?? lastView }
 
@@ -74,6 +75,11 @@ struct TabletopGameView: View {
             .padding(.bottom, 118)
             .zIndex(2)
 
+            if endOfHandSnapshot == nil, let table = tableView {
+                trickHistoryOverlay(table)
+                    .zIndex(5)
+            }
+
             if case .paused(let reason) = netSession.phase {
                 pausedOverlay(reason: reason)
             }
@@ -81,6 +87,19 @@ struct TabletopGameView: View {
         .onChange(of: displayTick) { _, _ in
             guard let d = tableView else { return }
             DispatchQueue.main.async { lastView = d }
+        }
+        .onAppear {
+            #if canImport(UIKit)
+            OrientationLock.shared.lock(.landscape)
+            #endif
+        }
+        .onDisappear {
+            #if canImport(UIKit)
+            OrientationLock.shared.lock(.portrait)
+            #endif
+        }
+        .onChange(of: settings.showFullTrickHistory) { _, enabled in
+            if !enabled { selectedTrickHistorySeat = nil }
         }
         .sheet(isPresented: $showingSettings) {
             // Rules lock while a hand is being played; display toggles stay live.
@@ -187,8 +206,25 @@ struct TabletopGameView: View {
 
     // MARK: Seat markers
 
+    @ViewBuilder
     private func seatMarker(_ seat: PlayerID, _ table: PlayerView) -> some View {
+        let marker = seatMarkerContent(seat, table)
+        if settings.showFullTrickHistory {
+            Button {
+                toggleTrickHistorySeat(seat)
+            } label: {
+                marker
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("\(seatName(seat)) trick history")
+        } else {
+            marker
+        }
+    }
+
+    private func seatMarkerContent(_ seat: PlayerID, _ table: PlayerView) -> some View {
         let toAct = table.toAct == seat && isLivePhase(table.phase)
+        let selected = settings.showFullTrickHistory && selectedTrickHistorySeat == seat
         let tint = TableStyle.teamTint(Seats.team(of: seat))
         return VStack(spacing: 3) {
             HStack(spacing: 6) {
@@ -214,12 +250,49 @@ struct TabletopGameView: View {
                 }
         }
         .overlay(
-            Capsule().stroke(toAct ? TableStyle.panelStrokeActive : tint.opacity(0.55),
-                             lineWidth: toAct ? 3 : 1.5))
-        .shadow(color: toAct ? TableStyle.panelStrokeActive.opacity(0.48) : .black.opacity(0.25),
-                radius: toAct ? 10 : 4, y: 2)
+            Capsule().stroke(selected ? TableStyle.tableGold : (toAct ? TableStyle.panelStrokeActive : tint.opacity(0.55)),
+                             lineWidth: selected ? 3 : (toAct ? 3 : 1.5)))
+        .shadow(color: selected ? TableStyle.tableGold.opacity(0.45) : (toAct ? TableStyle.panelStrokeActive.opacity(0.48) : .black.opacity(0.25)),
+                radius: selected || toAct ? 10 : 4, y: 2)
         .scaleEffect(toAct ? 1.06 : 1.0)
         .animation(.spring(response: 0.3, dampingFraction: 0.7), value: toAct)
+        .animation(.spring(response: 0.3, dampingFraction: 0.78), value: selected)
+    }
+
+    @ViewBuilder
+    private func trickHistoryOverlay(_ table: PlayerView) -> some View {
+        if settings.showFullTrickHistory, let seat = selectedTrickHistorySeat {
+            Color.black.opacity(0.18)
+                .ignoresSafeArea()
+                .onTapGesture { dismissTrickHistory() }
+                .transition(.opacity)
+
+            TrickHistoryPanel(
+                seat: seat,
+                completedTricks: table.completedTricks,
+                seatName: seatName,
+                seatShort: seatShort,
+                miniCardWidth: 72,
+                miniCardHeight: 50,
+                maxHeight: 420,
+                onClose: dismissTrickHistory)
+            .padding(.horizontal, 36)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
+            .padding(.trailing, 26)
+            .transition(.move(edge: .trailing).combined(with: .opacity))
+        }
+    }
+
+    private func toggleTrickHistorySeat(_ seat: PlayerID) {
+        withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
+            selectedTrickHistorySeat = selectedTrickHistorySeat == seat ? nil : seat
+        }
+    }
+
+    private func dismissTrickHistory() {
+        withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
+            selectedTrickHistorySeat = nil
+        }
     }
 
     @ViewBuilder
@@ -323,7 +396,8 @@ struct TabletopGameView: View {
                 .tint(TableStyle.teamAmber)
         }
         .padding(.horizontal, 18)
-        .padding(.vertical, 10)
+        .padding(.top, 16)
+        .padding(.bottom, 10)
     }
 
     private var waitingView: some View {

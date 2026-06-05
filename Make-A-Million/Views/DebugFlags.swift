@@ -2,15 +2,14 @@
 //  DebugFlags.swift
 //  Make-a-Million
 //
-//  The bidding-visibility pass, view side. Same intent as the trick-history
-//  panel you already built: make the state the engine tracks LEGIBLE so
-//  bidding can be judged instead of guessed at. Deliberately plain.
+//  Display and rule toggles, plus the hand-complete reveal surface. These
+//  make engine-tracked public state legible without exposing hidden hands
+//  during play.
 //
 //  TWO DISTINCT THINGS, with a deliberate boundary between them:
 //
-//   • The bid SEQUENCE is PUBLIC (everyone at the table hears it) and is
-//     presented by GameView.bidHistoryPanel, riding the redacted PlayerView
-//     (view.bidHistory) exactly like completed tricks do.
+//   • Bid and trick history are PUBLIC (everyone at the table sees/hears
+//     them) and ride the redacted PlayerView.
 //
 //   • HandRevealPanel — every seat's DEALT hand, declarer, trump, contract
 //     result. This is HIDDEN information. It does NOT come from PlayerView;
@@ -34,7 +33,7 @@ import Combine
 /// see the same values.
 ///
 /// Two kinds of setting live here, with different reach:
-///   • DISPLAY toggles (reveal / bid history / last trick / trick history)
+///   • DISPLAY toggles (reveal / bid history / last trick / seat trick history)
 ///     only change what the local board shows. They are read live by
 ///     `GameBody` as it renders.
 ///   • RULE toggles (misdeal, endgame tiebreak) change the game itself and
@@ -53,7 +52,7 @@ final class GameSettings: ObservableObject {
     @Published var showBidHistoryDuringHand: Bool { didSet { persist() } }
     /// Show the most recently completed trick during play.
     @Published var showLastTrick: Bool { didSet { persist() } }
-    /// Show the full, scrollable trick history during play.
+    /// Allow seat chips to open the public tricks taken by that player.
     @Published var showFullTrickHistory: Bool { didSet { persist() } }
     /// Whether the automatic low-money redeal rule is active.
     @Published var misdealEnabled: Bool { didSet { persist() } }
@@ -250,7 +249,7 @@ struct SettingsView: View {
                     Toggle("Show the last trick during the hand",
                            isOn: $settings.showLastTrick)
                         .accessibilityIdentifier("settings.showLastTrickToggle")
-                    Toggle("Show full trick history during the hand",
+                    Toggle("Tap seats to show trick history",
                            isOn: $settings.showFullTrickHistory)
                 } header: {
                     Text("Display")

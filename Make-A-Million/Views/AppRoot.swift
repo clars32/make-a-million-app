@@ -71,6 +71,18 @@ struct AppRoot: View {
                     onExit: { mode = .picking })
             }
         }
+        .onAppear {
+            #if canImport(UIKit)
+            OrientationLock.shared.lock(.portrait)
+            #endif
+        }
+        .onChange(of: mode) { _, mode in
+            #if canImport(UIKit)
+            if mode != .hosting {
+                OrientationLock.shared.lock(.portrait)
+            }
+            #endif
+        }
         .sheet(isPresented: $showingSettings) {
             // Home-screen entry: no hand in progress, so rules are editable.
             SettingsView(settings: settings, rulesLocked: false) {
@@ -96,81 +108,92 @@ private struct ModePickerView: View {
     let onOpenSettings: () -> Void
 
     var body: some View {
-        ZStack(alignment: .topTrailing) {
-            TableFeltBackground()
+        GeometryReader { proxy in
+            let isTablet = proxy.size.width >= 700
+            let contentWidth = isTablet ? min(proxy.size.width * 0.56, 520) : proxy.size.width
+            let heroHeight = isTablet ? min(proxy.size.height * 0.28, 310) : 198
 
-            VStack(spacing: 24) {
-                Spacer(minLength: 8)
+            ZStack(alignment: .topTrailing) {
+                TableFeltBackground()
 
-                VStack(spacing: 12) {
-                    HomeHeroCards()
-                        .frame(height: 168)
-                        .padding(.bottom, 4)
+                VStack(spacing: isTablet ? 28 : 24) {
+                    Spacer(minLength: isTablet ? 28 : 8)
 
-                    Text("Make-a-Million")
-                        .font(TableTypography.display(.largeTitle, weight: .heavy))
-                        .foregroundStyle(.white)
-                    Text("A trick-taking card game")
-                        .font(TableTypography.display(.subheadline))
-                        .foregroundStyle(.white.opacity(0.66))
+                    VStack(spacing: 12) {
+                        HomeHeroCards(scale: isTablet ? 1.72 : 1.18)
+                            .frame(height: heroHeight)
+                            .padding(.bottom, 4)
+
+                        Text("Make-a-Million")
+                            .font(TableTypography.display(.largeTitle, weight: .heavy))
+                            .foregroundStyle(.white)
+                        Text("A trick-taking card game")
+                            .font(TableTypography.display(.subheadline))
+                            .foregroundStyle(.white.opacity(0.66))
+                    }
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Your name")
+                            .font(TableTypography.display(.caption))
+                            .foregroundStyle(.white.opacity(0.68))
+                        TextField("Player", text: $playerName)
+                            .textFieldStyle(.roundedBorder)
+                            .autocorrectionDisabled()
+                            .textInputAutocapitalization(.words)
+                    }
+                    .padding(14)
+                    .frame(maxWidth: contentWidth)
+                    .tablePanel(cornerRadius: 14, shadowOpacity: 0.18)
+                    .padding(.horizontal)
+
+                    Spacer()
+
+                    VStack(spacing: 12) {
+                        ModeButton(
+                            title: "Play Solo",
+                            subtitle: "Just you against three bots",
+                            systemImage: "person.fill",
+                            color: TableStyle.actionBlue,
+                            action: onPickSolo)
+                        ModeButton(
+                            title: "Host a Table",
+                            subtitle: "Other devices nearby can join you",
+                            systemImage: "wifi",
+                            color: TableStyle.teamBlue,
+                            action: onPickHost)
+                        ModeButton(
+                            title: "Join a Table",
+                            subtitle: "Find a nearby host",
+                            systemImage: "person.2.fill",
+                            color: TableStyle.teamAmber,
+                            action: onPickJoin)
+                    }
+                    .frame(maxWidth: contentWidth)
+                    .padding(.horizontal)
+
+                    Spacer()
                 }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical)
 
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Your name")
-                        .font(TableTypography.display(.caption))
-                        .foregroundStyle(.white.opacity(0.68))
-                    TextField("Player", text: $playerName)
-                        .textFieldStyle(.roundedBorder)
-                        .autocorrectionDisabled()
-                        .textInputAutocapitalization(.words)
+                Button(action: onOpenSettings) {
+                    Image(systemName: "gearshape.fill")
+                        .font(TableTypography.display(.title3))
+                        .foregroundStyle(TableStyle.cardSelected)
+                        .padding(10)
+                        .background(.ultraThinMaterial, in: Circle())
+                        .overlay(Circle().stroke(TableStyle.panelStroke, lineWidth: 1))
                 }
-                .padding(14)
-                .tablePanel(cornerRadius: 14, shadowOpacity: 0.18)
-                .padding(.horizontal)
-
-                Spacer()
-
-                VStack(spacing: 12) {
-                    ModeButton(
-                        title: "Play Solo",
-                        subtitle: "Just you against three bots",
-                        systemImage: "person.fill",
-                        color: TableStyle.actionBlue,
-                        action: onPickSolo)
-                    ModeButton(
-                        title: "Host a Table",
-                        subtitle: "Other devices nearby can join you",
-                        systemImage: "wifi",
-                        color: TableStyle.teamBlue,
-                        action: onPickHost)
-                    ModeButton(
-                        title: "Join a Table",
-                        subtitle: "Find a nearby host",
-                        systemImage: "person.2.fill",
-                        color: TableStyle.teamAmber,
-                        action: onPickJoin)
-                }
-                .padding(.horizontal)
-
-                Spacer()
+                .padding()
+                .accessibilityLabel("Settings")
             }
-            .padding(.vertical)
-
-            Button(action: onOpenSettings) {
-                Image(systemName: "gearshape.fill")
-                    .font(TableTypography.display(.title3))
-                    .foregroundStyle(TableStyle.cardSelected)
-                    .padding(10)
-                    .background(.ultraThinMaterial, in: Circle())
-                    .overlay(Circle().stroke(TableStyle.panelStroke, lineWidth: 1))
-            }
-            .padding()
-            .accessibilityLabel("Settings")
         }
     }
 }
 
 private struct HomeHeroCards: View {
+    var scale: CGFloat = 1.0
+
     private let cards: [Card] = [
         .colored(.green, .money40k),
         .bull,
@@ -181,9 +204,9 @@ private struct HomeHeroCards: View {
     var body: some View {
         ZStack {
             ForEach(Array(cards.enumerated()), id: \.offset) { index, card in
-                CardFace(card: card, width: 74, height: 104)
+                CardFace(card: card, width: 74 * scale, height: 104 * scale)
                     .rotationEffect(.degrees(rotation(for: index)))
-                    .offset(x: xOffset(for: index), y: yOffset(for: index))
+                    .offset(x: xOffset(for: index) * scale, y: yOffset(for: index) * scale)
                     .zIndex(Double(index))
             }
         }

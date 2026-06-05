@@ -148,6 +148,7 @@ struct GameBody: View {
     @State private var dealAnimationTrigger: Int = -1
     @State private var lastDealAnimationToken: Int = -1
     @State private var showingDealAnimation: Bool = false
+    @State private var selectedTrickHistorySeat: PlayerID? = nil
 
     private var teamAName: String {
         guard seatNames.count == 4 else { return "Team A" }
@@ -166,7 +167,10 @@ struct GameBody: View {
             Group {
                 if showingDealAnimation {
                     if let table = tableView {
-                        dealAnimationTable(table)
+                        dealAnimationTable(
+                            table: table,
+                            decision: decisionView ?? table,
+                            interactive: isInteractive)
                     } else {
                         EmptyView()
                     }
@@ -200,6 +204,9 @@ struct GameBody: View {
                 guard let newPhase else { return }
                 bidHistoryExpanded = (newPhase == .bidding)
             }
+            .onChange(of: settings.showFullTrickHistory) { _, enabled in
+                if !enabled { selectedTrickHistorySeat = nil }
+            }
             .onChange(of: dealAnimationToken(for: tableView)) { _, token in
                 startDealAnimationIfNeeded(token)
             }
@@ -207,16 +214,6 @@ struct GameBody: View {
                 startDealAnimationIfNeeded(dealAnimationToken(for: tableView))
             }
 
-            if showingDealAnimation {
-                DealingAnimationOverlay(
-                    trigger: dealAnimationTrigger,
-                    cardWidth: isTabletLayout ? 96 : 68,
-                    cardHeight: isTabletLayout ? 135 : 96,
-                    spreadScale: isTabletLayout ? 0.90 : 0.82)
-                .padding(.top, isTabletLayout ? 90 : 62)
-                .padding(.bottom, handSectionHeight)
-                .zIndex(5)
-            }
         }
     }
 
@@ -272,7 +269,7 @@ struct GameBody: View {
                 handSection(table: table, decision: decision, interactive: interactive)
             }
             .padding(.horizontal, isTabletLayout ? 24 : 12)
-            .padding(.top, isTabletLayout ? 82 : 64)   // clear the floating gear / Back buttons
+            .padding(.top, isTabletLayout ? 94 : 64)   // clear the floating gear / Back buttons
             .padding(.bottom, isTabletLayout ? 10 : 6)
 
             if centerActionActive {
@@ -283,19 +280,60 @@ struct GameBody: View {
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                     .zIndex(1)
             }
+
+            trickHistoryOverlay(table)
         }
         .animation(.spring(response: 0.36, dampingFraction: 0.85), value: actionActive)
+        .animation(.spring(response: 0.32, dampingFraction: 0.86), value: selectedTrickHistorySeat)
     }
 
-    private func dealAnimationTable(_ table: PlayerView) -> some View {
-        VStack(spacing: 8) {
+    private func dealAnimationTable(table: PlayerView, decision: PlayerView, interactive: Bool) -> some View {
+        let actionActive = interactive && isActionPhase(decision.phase)
+        let biddingActive = interactive && decision.phase == .bidding
+        let centerActionActive = actionActive && !biddingActive
+        return VStack(spacing: 8) {
+            boardHeader(table)
+                .hidden()
+
+            if table.phase == .misdealDecision {
+                misdealBanner(table)
+                    .hidden()
+            }
+
             Spacer(minLength: 0)
-            boardArea(table, showLiveCards: false, showsIdleText: false)
+
+            boardArea(table,
+                      showLiveCards: false,
+                      showsIdleText: false,
+                      dealAnimationTrigger: dealAnimationTrigger)
+                .scaleEffect(centerActionActive ? 0.92 : 1.0, anchor: .top)
+
             Spacer(minLength: 0)
+
+            footerStrip(table)
+                .hidden()
+
+            if biddingActive {
+                biddingActionPanel(decision)
+                    .padding(.horizontal, 4)
+                    .hidden()
+            } else if !actionActive {
+                if interactive && decision.phase == .trickPlay {
+                    hintText("Tap a card in your hand to play it.")
+                        .hidden()
+                } else if !interactive {
+                    hintText(caughtUp ? "Waiting for other players…" : "Watching play…")
+                        .hidden()
+                }
+            }
+
+            handSection(table: table, decision: decision, interactive: interactive)
+                .hidden()
         }
         .padding(.horizontal, isTabletLayout ? 24 : 12)
-        .padding(.top, isTabletLayout ? 82 : 64)
-        .padding(.bottom, handSectionHeight)
+        .padding(.top, isTabletLayout ? 94 : 64)
+        .padding(.bottom, isTabletLayout ? 10 : 6)
+        .allowsHitTesting(false)
     }
 
     @ViewBuilder
@@ -435,37 +473,55 @@ struct GameBody: View {
 
     private func boardArea(_ table: PlayerView,
                            showLiveCards: Bool = true,
-                           showsIdleText: Bool = true) -> some View {
+                           showsIdleText: Bool = true,
+                           dealAnimationTrigger: Int? = nil) -> some View {
         let metrics = soloBoardMetrics
-        let seatOffset = soloBoardSeatOffset
         return ZStack {
-            CenterTrickView(
-                currentTrick: showLiveCards ? table.currentTrick : nil,
-                completedTricks: showLiveCards ? table.completedTricks : [],
-                trump: table.trump,
-                viewer: table.me,
-                metrics: metrics,
-                seatName: seatName,
-                showsIdleText: showsIdleText,
-                cardNS: showLiveCards ? cardNS : nil)
+            ZStack {
+                CenterTrickView(
+                    currentTrick: showLiveCards ? table.currentTrick : nil,
+                    completedTricks: showLiveCards ? table.completedTricks : [],
+                    trump: table.trump,
+                    viewer: table.me,
+                    metrics: metrics,
+                    seatName: seatName,
+                    showsIdleText: showsIdleText,
+                    cardNS: showLiveCards ? cardNS : nil)
+
+                if let dealAnimationTrigger {
+                    DealingAnimationOverlay(
+                        trigger: dealAnimationTrigger,
+                        cardWidth: isTabletLayout ? 96 : 68,
+                        cardHeight: isTabletLayout ? 135 : 96,
+                        spreadScale: isTabletLayout ? 0.66 : 0.60)
+                    .frame(width: metrics.frame, height: metrics.frame)
+                }
+            }
 
             // All four seats are marked, relative to the local player: bottom
             // (you), left, top (partner), right — mirroring the tabletop board.
-            VStack {
-                seatChip(relativeSeat(2, from: table.me), table)
-                    .offset(y: -seatOffset)
-                Spacer()
-                seatChip(table.me, table)
-                    .offset(y: seatOffset)
-            }
-            HStack {
-                seatChip(relativeSeat(1, from: table.me), table)
-                Spacer()
-                seatChip(relativeSeat(3, from: table.me), table)
-            }
+            seatChip(relativeSeat(2, from: table.me), table)
+                .offset(seatChipOffset(direction: 2))
+            seatChip(table.me, table)
+                .offset(seatChipOffset(direction: 0))
+            seatChip(relativeSeat(1, from: table.me), table)
+                .offset(seatChipOffset(direction: 1))
+            seatChip(relativeSeat(3, from: table.me), table)
+                .offset(seatChipOffset(direction: 3))
         }
         .frame(maxWidth: .infinity)
         .frame(height: soloBoardHeight)
+    }
+
+    private func seatChipOffset(direction: Int) -> CGSize {
+        let distance = soloBoardSeatDistance
+        switch direction {
+        case 0: return CGSize(width: 0, height: distance)
+        case 1: return CGSize(width: -distance, height: 0)
+        case 2: return CGSize(width: 0, height: -distance)
+        case 3: return CGSize(width: distance, height: 0)
+        default: return .zero
+        }
     }
 
     private var isTabletLayout: Bool {
@@ -477,11 +533,11 @@ struct GameBody: View {
     }
 
     private var soloBoardHeight: CGFloat {
-        isTabletLayout ? 560 : 264
+        isTabletLayout ? 640 : 320
     }
 
-    private var soloBoardSeatOffset: CGFloat {
-        isTabletLayout ? 72 : 35
+    private var soloBoardSeatDistance: CGFloat {
+        isTabletLayout ? 296 : 154
     }
 
     private var miniCardWidth: CGFloat {
@@ -520,8 +576,25 @@ struct GameBody: View {
         isTabletLayout ? 22 : 12
     }
 
+    @ViewBuilder
     private func seatChip(_ seat: PlayerID, _ table: PlayerView) -> some View {
+        let chip = seatChipContent(seat, table)
+        if settings.showFullTrickHistory {
+            Button {
+                toggleTrickHistorySeat(seat)
+            } label: {
+                chip
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("\(seatName(seat)) trick history")
+        } else {
+            chip
+        }
+    }
+
+    private func seatChipContent(_ seat: PlayerID, _ table: PlayerView) -> some View {
         let toAct = table.toAct == seat && isLivePhase(table.phase)
+        let selected = settings.showFullTrickHistory && selectedTrickHistorySeat == seat
         let tint = TableStyle.teamTint(Seats.team(of: seat))
         return VStack(spacing: isTabletLayout ? 4 : 2) {
             HStack(spacing: isTabletLayout ? 6 : 4) {
@@ -548,12 +621,50 @@ struct GameBody: View {
                     Capsule().fill(tint.opacity(toAct ? 0.20 : 0.11))
                 }
         }
-        .overlay(Capsule().stroke(toAct ? TableStyle.panelStrokeActive : tint.opacity(0.55),
-                                  lineWidth: toAct ? (isTabletLayout ? 3 : 2.5) : 1.5))
-        .shadow(color: toAct ? TableStyle.panelStrokeActive.opacity(0.48) : .black.opacity(0.25),
-                radius: toAct ? (isTabletLayout ? 12 : 8) : 3, y: 2)
+        .overlay(Capsule().stroke(selected ? TableStyle.tableGold : (toAct ? TableStyle.panelStrokeActive : tint.opacity(0.55)),
+                                  lineWidth: selected ? (isTabletLayout ? 3 : 2.5) : (toAct ? (isTabletLayout ? 3 : 2.5) : 1.5)))
+        .shadow(color: selected ? TableStyle.tableGold.opacity(0.45) : (toAct ? TableStyle.panelStrokeActive.opacity(0.48) : .black.opacity(0.25)),
+                radius: selected || toAct ? (isTabletLayout ? 12 : 8) : 3, y: 2)
         .scaleEffect(toAct ? 1.06 : 1.0)
         .animation(.spring(response: 0.3, dampingFraction: 0.7), value: toAct)
+        .animation(.spring(response: 0.3, dampingFraction: 0.78), value: selected)
+    }
+
+    @ViewBuilder
+    private func trickHistoryOverlay(_ table: PlayerView) -> some View {
+        if settings.showFullTrickHistory, let seat = selectedTrickHistorySeat {
+            Color.black.opacity(0.16)
+                .ignoresSafeArea()
+                .onTapGesture { dismissTrickHistory() }
+                .transition(.opacity)
+
+            TrickHistoryPanel(
+                seat: seat,
+                completedTricks: table.completedTricks,
+                seatName: seatName,
+                seatShort: seatShort,
+                miniCardWidth: isTabletLayout ? 66 : 46,
+                miniCardHeight: isTabletLayout ? 46 : 32,
+                maxHeight: isTabletLayout ? 360 : 250,
+                onClose: dismissTrickHistory)
+            .padding(.horizontal, isTabletLayout ? 24 : 14)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+            .padding(.bottom, isTabletLayout ? 292 : 142)
+            .transition(.move(edge: .bottom).combined(with: .opacity))
+            .zIndex(3)
+        }
+    }
+
+    private func toggleTrickHistorySeat(_ seat: PlayerID) {
+        withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
+            selectedTrickHistorySeat = selectedTrickHistorySeat == seat ? nil : seat
+        }
+    }
+
+    private func dismissTrickHistory() {
+        withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
+            selectedTrickHistorySeat = nil
+        }
     }
 
     @ViewBuilder
@@ -749,8 +860,21 @@ struct GameBody: View {
             default:            EmptyView()
             }
         }
+        .frame(width: actionPanelContentWidth(for: view), alignment: .leading)
+        .fixedSize(horizontal: true, vertical: false)
         .padding(14)
         .tablePanel(cornerRadius: 18, shadowOpacity: 0.34)
+    }
+
+    private func actionPanelContentWidth(for view: PlayerView) -> CGFloat? {
+        switch view.phase {
+        case .namingTrump:
+            return trumpPanelContentWidth
+        case .widowDiscard:
+            return discardPanelContentWidth
+        default:
+            return nil
+        }
     }
 
     private func biddingActionPanel(_ view: PlayerView) -> some View {
@@ -763,6 +887,7 @@ struct GameBody: View {
     private func biddingPanel(_ view: PlayerView) -> some View {
         let passMove = view.legalMoves.first { $0.isPass }
         let bidMoves = view.legalMoves.filter { $0.bidAmount != nil }
+        let bidAmounts = bidMoves.compactMap(\.bidAmount)
         let safeBidIndex = min(selectedBidIndex, max(0, bidMoves.count - 1))
         let bidSelection = Binding<Int>(
             get: { min(selectedBidIndex, max(0, bidMoves.count - 1)) },
@@ -771,21 +896,13 @@ struct GameBody: View {
 
         HStack(spacing: isTabletLayout ? 12 : 8) {
             if !bidMoves.isEmpty {
-                Picker("Bid amount", selection: bidSelection) {
-                    ForEach(Array(bidMoves.enumerated()), id: \.offset) { index, move in
-                        Text(bidAmountText(move))
-                            .font(TableTypography.display(isTabletLayout ? .title3 : .callout, weight: .bold))
-                            .tag(index)
-                    }
-                }
-                .pickerStyle(.wheel)
-                .labelsHidden()
-                .frame(width: isTabletLayout ? 112 : 82,
-                       height: isTabletLayout ? 76 : 62)
-                .clipped()
-                .background(TableStyle.panelFill, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .stroke(TableStyle.panelStroke, lineWidth: 1))
+                BidAmountWheel(
+                    amounts: bidAmounts,
+                    selection: bidSelection,
+                    width: isTabletLayout ? 112 : 82,
+                    height: isTabletLayout ? 76 : 62,
+                    rowHeight: isTabletLayout ? 24 : 20,
+                    textStyle: isTabletLayout ? .title3 : .callout)
             }
 
             HStack(spacing: isTabletLayout ? 10 : 8) {
@@ -833,10 +950,21 @@ struct GameBody: View {
             if case .nameTrump(let c) = move { return (c, move) }
             return nil
         }
+        let buttonWidth = trumpButtonWidth
+        let buttonHeight: CGFloat = isTabletLayout ? 52 : 48
+        let gridSpacing = trumpGridSpacing
+        let contentWidth = trumpPanelContentWidth
+        let columns = [
+            GridItem(.fixed(buttonWidth), spacing: gridSpacing),
+            GridItem(.fixed(buttonWidth), spacing: gridSpacing)
+        ]
         return VStack(alignment: .leading, spacing: 10) {
             Text("Pick the trump color for this hand. You'll discard three after.")
-                .font(TableTypography.display(.caption)).foregroundStyle(.white.opacity(0.8))
-            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
+                .font(TableTypography.display(.caption))
+                .foregroundStyle(.white.opacity(0.8))
+                .frame(width: contentWidth, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true)
+            LazyVGrid(columns: columns, spacing: gridSpacing) {
                 ForEach(trumpMoves, id: \.0) { color, move in
                     // `CardColor.black` maps to `Color.primary` in `swatch`, which
                     // inverts in dark mode and would render the Black trump button
@@ -851,11 +979,9 @@ struct GameBody: View {
                             Text(color.displayName)
                                 .font(TableTypography.display(.headline, weight: .bold))
                                 .foregroundStyle(.white)
-                            Spacer(minLength: 0)
                         }
                         .padding(.horizontal, 14)
-                        .frame(height: 50)
-                        .frame(maxWidth: .infinity)
+                        .frame(width: buttonWidth, height: buttonHeight)
                         .background(
                             RoundedRectangle(cornerRadius: 12, style: .continuous)
                                 .fill(solidSwatch.opacity(color == .black ? 0.68 : 0.76))
@@ -868,6 +994,7 @@ struct GameBody: View {
                     .buttonStyle(.plain)
                 }
             }
+            .frame(width: contentWidth)
         }
     }
 
@@ -875,13 +1002,20 @@ struct GameBody: View {
         let count = discardSelection.count
         let ready = count == 3
         let legalMove = ready ? matchingWidowDiscardMove(selection: discardSelection, in: view) : nil
+        let panelWidth = discardPanelContentWidth
 
         return VStack(alignment: .leading, spacing: 8) {
             Text(discardHelpText(for: view))
-                .font(TableTypography.display(.caption)).foregroundStyle(.white.opacity(0.8))
+                .font(TableTypography.display(.caption))
+                .foregroundStyle(.white.opacity(0.8))
+                .frame(width: panelWidth, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true)
             if ready && legalMove == nil {
                 Text("That discard isn't legal — you can only discard money cards when you have no other choice.")
-                    .font(TableTypography.display(.caption)).foregroundStyle(TableStyle.teamAmber)
+                    .font(TableTypography.display(.caption))
+                    .foregroundStyle(TableStyle.teamAmber)
+                    .frame(width: panelWidth, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             HStack(spacing: 8) {
                 Text("\(count) of 3 selected")
@@ -894,7 +1028,25 @@ struct GameBody: View {
                 .buttonStyle(.borderedProminent)
                 .disabled(legalMove == nil)
             }
+            .frame(width: panelWidth)
         }
+        .frame(width: panelWidth, alignment: .leading)
+    }
+
+    private var trumpButtonWidth: CGFloat {
+        isTabletLayout ? 142 : 126
+    }
+
+    private var trumpGridSpacing: CGFloat {
+        10
+    }
+
+    private var trumpPanelContentWidth: CGFloat {
+        trumpButtonWidth * 2 + trumpGridSpacing
+    }
+
+    private var discardPanelContentWidth: CGFloat {
+        isTabletLayout ? 330 : 286
     }
     
     private func discardHelpText(for view: PlayerView) -> String {
@@ -1053,11 +1205,6 @@ struct GameBody: View {
         case .pass: return "Pass"
         case .bid(let amount): return "$\(amount / 1000)k"
         }
-    }
-
-    private func bidAmountText(_ move: Move) -> String {
-        guard let amount = move.bidAmount else { return "—" }
-        return "$\(amount / 1000)k"
     }
 
     private func bidHistoryTint(_ record: BidRecord) -> Color {

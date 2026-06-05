@@ -153,6 +153,7 @@ struct ClientGameView: View {
     private func biddingBar(_ view: PlayerView) -> some View {
         let passMove = view.legalMoves.first { $0.isPass }
         let bidMoves = view.legalMoves.filter { $0.bidAmount != nil }
+        let bidAmounts = bidMoves.compactMap(\.bidAmount)
         let safeIndex = min(selectedBidIndex, max(0, bidMoves.count - 1))
         let bidSelection = Binding<Int>(
             get: { min(selectedBidIndex, max(0, bidMoves.count - 1)) },
@@ -161,20 +162,13 @@ struct ClientGameView: View {
 
         return HStack(spacing: 10) {
             if !bidMoves.isEmpty {
-                Picker("Bid amount", selection: bidSelection) {
-                    ForEach(Array(bidMoves.enumerated()), id: \.offset) { index, move in
-                        Text(bidAmountText(move))
-                            .font(TableTypography.display(.headline, weight: .bold))
-                            .tag(index)
-                    }
-                }
-                .pickerStyle(.wheel)
-                .labelsHidden()
-                .frame(width: 102, height: 76)
-                .clipped()
-                .background(TableStyle.panelFill, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .stroke(TableStyle.panelStroke, lineWidth: 1))
+                BidAmountWheel(
+                    amounts: bidAmounts,
+                    selection: bidSelection,
+                    width: 102,
+                    height: 76,
+                    rowHeight: 24,
+                    textStyle: .headline)
             }
 
             HStack(spacing: 8) {
@@ -250,11 +244,6 @@ struct ClientGameView: View {
                 .overlay(Capsule().stroke(.white.opacity(0.18), lineWidth: 1))
         }
         .buttonStyle(.plain)
-    }
-
-    private func bidAmountText(_ move: Move) -> String {
-        guard let amount = move.bidAmount else { return "—" }
-        return "$\(amount / 1000)k"
     }
 
     // MARK: - Chrome
