@@ -36,15 +36,15 @@ struct CenterTrickView: View {
 
         static let tabletop = Metrics(
             cardW: 82, cardH: 115, spread: 104, circle: 300, frame: 380,
-            ledDot: 22, idleFont: .system(.title3, design: .rounded).bold())
+            ledDot: 22, idleFont: TableTypography.display(.title3, weight: .bold))
 
         static let phone = Metrics(
             cardW: 64, cardH: 90, spread: 68, circle: 200, frame: 244,
-            ledDot: 16, idleFont: .system(.subheadline, design: .rounded).bold())
+            ledDot: 16, idleFont: TableTypography.display(.subheadline, weight: .bold))
 
         static let tablet = Metrics(
             cardW: 136, cardH: 191, spread: 146, circle: 410, frame: 520,
-            ledDot: 22, idleFont: .system(.title3, design: .rounded).bold())
+            ledDot: 22, idleFont: TableTypography.display(.title3, weight: .bold))
     }
 
     let currentTrick: Trick?
@@ -79,7 +79,8 @@ struct CenterTrickView: View {
         let idle = plays.isEmpty && sweep == nil
         return ZStack {
             Circle()
-                .fill(Color.white.opacity(0.04))
+                .fill(Color.white.opacity(0.035))
+                .overlay(Circle().stroke(Color.white.opacity(0.055), lineWidth: 1))
                 .frame(width: metrics.circle, height: metrics.circle)
 
             // Led-suit reminder at dead center (cards rest out toward the edges).
@@ -90,7 +91,7 @@ struct CenterTrickView: View {
                     Circle().fill(colorSwatch(led))
                         .frame(width: metrics.ledDot, height: metrics.ledDot)
                         .overlay(Circle().stroke(.white.opacity(0.7), lineWidth: 1))
-                    Text("Led").font(.caption2).foregroundStyle(.white.opacity(0.6))
+                    Text("Led").font(.caption2).foregroundStyle(.white.opacity(0.66))
                 }
             }
 
@@ -147,7 +148,7 @@ struct CenterTrickView: View {
 
     private func cardFace(_ card: Card) -> some View {
         CardFace(card: card, width: metrics.cardW, height: metrics.cardH)
-            .shadow(color: .black.opacity(0.4), radius: 5, y: 3)
+            .shadow(color: .black.opacity(0.24), radius: 7, y: 5)
     }
 
     /// Animate the four just-played cards toward the winner, then clear.
@@ -196,6 +197,6 @@ struct CenterTrickView: View {
     }
 
     private func colorSwatch(_ color: CardColor) -> Color {
-        color == .black ? .black : color.swatch
+        TableStyle.suitSwatch(color)
     }
 }

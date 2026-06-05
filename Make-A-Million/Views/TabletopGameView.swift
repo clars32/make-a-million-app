@@ -122,14 +122,9 @@ struct TabletopGameView: View {
             Spacer(minLength: 8)
             VStack(spacing: 8) {
                 Text(table.phase.headline)
-                    .font(.system(.title2, design: .rounded).bold())
+                    .font(TableTypography.display(.title2, weight: .bold))
                     .foregroundStyle(.white)
-                HStack(spacing: 10) {
-                    if let t = table.trump { trumpBadge(t) }
-                    if let bid = table.highBid, let bidder = table.highBidder {
-                        bidBadge(bidder: bidder, amount: bid)
-                    }
-                }
+                headerBadges(table)
             }
             Spacer(minLength: 8)
             teamScoreCard(team: 1, table)
@@ -137,15 +132,33 @@ struct TabletopGameView: View {
         .padding(.horizontal, 8)
     }
 
+    @ViewBuilder
+    private func headerBadges(_ table: PlayerView) -> some View {
+        if table.trump == nil, let bid = table.highBid, let bidder = table.highBidder {
+            HStack {
+                Spacer(minLength: 0)
+                bidBadge(bidder: bidder, amount: bid)
+                Spacer(minLength: 0)
+            }
+        } else {
+            HStack(spacing: 10) {
+                if let t = table.trump { trumpBadge(t) }
+                if let bid = table.highBid, let bidder = table.highBidder {
+                    bidBadge(bidder: bidder, amount: bid)
+                }
+            }
+        }
+    }
+
     private func teamScoreCard(team: Int, _ table: PlayerView) -> some View {
-        let tint = team == 0 ? Color.cyan : Color.orange
+        let tint = TableStyle.teamTint(team)
         let hand = table.liveHandScore[team, default: 0]
         let match = table.matchScore[team, default: 0]
         let progress = min(1.0, Double(match) / 1_000_000.0)
         return VStack(alignment: .leading, spacing: 3) {
             Text(teamName(team)).font(.subheadline.bold()).foregroundStyle(tint)
             Text("Hand $\(hand / 1000)k")
-                .font(.system(.title2, design: .rounded).bold().monospacedDigit())
+                .font(TableTypography.money(.title2))
                 .foregroundStyle(.white)
             Text("Match $\(match / 1000)k / $1M")
                 .font(.caption.monospacedDigit()).foregroundStyle(.white.opacity(0.7))
@@ -159,15 +172,15 @@ struct TabletopGameView: View {
         }
         .padding(.horizontal, 16).padding(.vertical, 12)
         .frame(width: 180)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(tint.opacity(0.5), lineWidth: 1))
+        .tablePanel(cornerRadius: 14, shadowOpacity: 0.20)
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(tint.opacity(0.50), lineWidth: 1))
     }
 
     // MARK: Seat markers
 
     private func seatMarker(_ seat: PlayerID, _ table: PlayerView) -> some View {
         let toAct = table.toAct == seat && isLivePhase(table.phase)
-        let tint = Seats.team(of: seat) == 0 ? Color.cyan : Color.orange
+        let tint = TableStyle.teamTint(Seats.team(of: seat))
         return VStack(spacing: 3) {
             HStack(spacing: 6) {
                 if dealerSeat(table) == seat {
@@ -178,17 +191,23 @@ struct TabletopGameView: View {
                         .help("Dealer")
                 }
                 Text(seatName(seat))
-                    .font(.system(.title2, design: .rounded).bold())
+                    .font(TableTypography.display(.title2, weight: .bold))
                     .foregroundStyle(.white)
             }
             seatSubtitle(seat, table)
         }
         .padding(.horizontal, 18).padding(.vertical, 10)
-        .background(.ultraThinMaterial, in: Capsule())
+        .background {
+            Capsule()
+                .fill(.ultraThinMaterial)
+                .overlay {
+                    Capsule().fill(tint.opacity(toAct ? 0.20 : 0.11))
+                }
+        }
         .overlay(
-            Capsule().stroke(toAct ? Color.yellow : tint.opacity(0.55),
+            Capsule().stroke(toAct ? TableStyle.panelStrokeActive : tint.opacity(0.55),
                              lineWidth: toAct ? 3 : 1.5))
-        .shadow(color: toAct ? Color.yellow.opacity(0.5) : .black.opacity(0.25),
+        .shadow(color: toAct ? TableStyle.panelStrokeActive.opacity(0.48) : .black.opacity(0.25),
                 radius: toAct ? 10 : 4, y: 2)
         .scaleEffect(toAct ? 1.06 : 1.0)
         .animation(.spring(response: 0.3, dampingFraction: 0.7), value: toAct)
@@ -201,7 +220,7 @@ struct TabletopGameView: View {
                 Text("Passed").font(.caption).foregroundStyle(.white.opacity(0.55))
             } else if let last = table.bidHistory.last(where: { $0.player == seat }) {
                 Text(bidLabel(last.action))
-                    .font(.system(.caption, design: .rounded).bold().monospacedDigit())
+                    .font(TableTypography.money(.caption))
                     .foregroundStyle(.white)
             } else {
                 Text("…").font(.caption).foregroundStyle(.white.opacity(0.4))
@@ -210,7 +229,7 @@ struct TabletopGameView: View {
             let tricks = table.completedTricks.filter { $0.winner == seat }.count
             HStack(spacing: 4) {
                 if table.highBidder == seat {
-                    Image(systemName: "crown.fill").font(.caption2).foregroundStyle(.yellow)
+                    Image(systemName: "crown.fill").font(.caption2).foregroundStyle(TableStyle.tableGold)
                 }
                 Text("\(tricks) trick\(tricks == 1 ? "" : "s")")
                     .font(.caption).foregroundStyle(.white.opacity(0.85))
@@ -245,6 +264,9 @@ struct TabletopGameView: View {
                         CardFace(card: entry.card, width: 50, height: 70)
                     }
                 }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .tablePanel(cornerRadius: 14, shadowOpacity: 0.14)
             }
             Spacer()
             if settings.showLastTrick, let last = table.lastTrick {
@@ -258,6 +280,9 @@ struct TabletopGameView: View {
                         .font(.headline.monospacedDigit().bold())
                         .foregroundStyle(.white.opacity(0.85))
                 }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .tablePanel(cornerRadius: 14, shadowOpacity: 0.14)
             }
         }
         .frame(maxWidth: .infinity)
@@ -267,10 +292,7 @@ struct TabletopGameView: View {
     // MARK: - Chrome
 
     private var feltBackground: some View {
-        LinearGradient(colors: [Color(red: 0.06, green: 0.30, blue: 0.18),
-                                Color(red: 0.03, green: 0.17, blue: 0.11)],
-                       startPoint: .top, endPoint: .bottom)
-            .ignoresSafeArea()
+        TableFeltBackground()
     }
 
     private var topBar: some View {
@@ -284,11 +306,12 @@ struct TabletopGameView: View {
             }
             .font(.subheadline.weight(.semibold))
             .buttonStyle(.bordered)
+            .tint(TableStyle.cardSelected)
             .accessibilityLabel("Settings")
             Button("End Match") { netSession.stop(); onExit() }
                 .font(.subheadline.weight(.semibold))
                 .buttonStyle(.bordered)
-                .tint(.red)
+                .tint(TableStyle.teamAmber)
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 10)
@@ -304,17 +327,17 @@ struct TabletopGameView: View {
 
     private func bidBadge(bidder: PlayerID, amount: Int) -> some View {
         HStack(spacing: 6) {
-            Image(systemName: "crown.fill").font(.subheadline).foregroundStyle(.yellow)
+            Image(systemName: "crown.fill").font(.subheadline).foregroundStyle(TableStyle.tableGold)
             Text("\(seatName(bidder)) · $\(amount / 1000)k")
                 .font(.headline.weight(.bold)).foregroundStyle(.white)
         }
         .padding(.horizontal, 14).padding(.vertical, 7)
-        .background(Capsule().fill(Color.yellow.opacity(0.18)))
-        .overlay(Capsule().stroke(Color.yellow.opacity(0.6), lineWidth: 1))
+        .background(Capsule().fill(TableStyle.tableGold.opacity(0.18)))
+        .overlay(Capsule().stroke(TableStyle.tableGold.opacity(0.58), lineWidth: 1))
     }
 
     private func trumpBadge(_ color: CardColor) -> some View {
-        let swatch: Color = (color == .black) ? .black : color.swatch
+        let swatch = TableStyle.suitSwatch(color)
         return HStack(spacing: 8) {
             Circle().fill(swatch).frame(width: 18, height: 18)
                 .overlay(Circle().stroke(.white.opacity(0.7), lineWidth: 1))
@@ -322,8 +345,8 @@ struct TabletopGameView: View {
                 .font(.headline.weight(.bold)).foregroundStyle(.white)
         }
         .padding(.horizontal, 14).padding(.vertical, 7)
-        .background(Capsule().fill(swatch.opacity(0.3)))
-        .overlay(Capsule().stroke(swatch.opacity(0.8), lineWidth: 1))
+        .background(Capsule().fill(swatch.opacity(color == .black ? 0.34 : 0.22)))
+        .overlay(Capsule().stroke(swatch.opacity(0.68), lineWidth: 1))
     }
 
     private func handCompleteView(_ s: HandCompleteSnapshot) -> some View {
@@ -332,7 +355,7 @@ struct TabletopGameView: View {
                 .font(.largeTitle).bold().foregroundStyle(.white)
             if let winner = s.matchWinner {
                 Text(teamName(winner) + " wins!")
-                    .font(.title2).foregroundStyle(.green)
+                    .font(.title2).foregroundStyle(TableStyle.tableGold)
             }
             if let bid = s.bidAmount, let bidder = s.bidder {
                 let pts = s.biddingTeamPoints ?? 0
@@ -343,15 +366,15 @@ struct TabletopGameView: View {
                     Text(made ? "Made it — took $\(pts / 1000)k"
                               : "Set — took only $\(pts / 1000)k")
                         .font(.headline.bold())
-                        .foregroundStyle(made ? .green : .red)
+                        .foregroundStyle(made ? TableStyle.cardPlayable : TableStyle.teamAmber)
                 }
                 .padding(.vertical, 4)
             }
 
             HStack(spacing: 28) {
-                VStack { Text(teamName(0)).font(.caption).foregroundStyle(.cyan)
+                VStack { Text(teamName(0)).font(.caption).foregroundStyle(TableStyle.teamTint(0))
                     Text("$\(s.matchScore[0, default: 0] / 1000)k").font(.title3.bold().monospacedDigit()).foregroundStyle(.white) }
-                VStack { Text(teamName(1)).font(.caption).foregroundStyle(.orange)
+                VStack { Text(teamName(1)).font(.caption).foregroundStyle(TableStyle.teamTint(1))
                     Text("$\(s.matchScore[1, default: 0] / 1000)k").font(.title3.bold().monospacedDigit()).foregroundStyle(.white) }
             }
 
@@ -361,6 +384,7 @@ struct TabletopGameView: View {
                         .font(.title3.bold())
                 }
                 .buttonStyle(.borderedProminent)
+                .tint(TableStyle.actionBlue)
                 .padding(.top, 8)
             } else {
                 Button { netSession.start(dealSeed: .random(in: .min ... .max)) } label: {
@@ -368,10 +392,12 @@ struct TabletopGameView: View {
                         .font(.title3.bold())
                 }
                 .buttonStyle(.borderedProminent)
+                .tint(TableStyle.actionBlue)
                 .padding(.top, 8)
             }
         }
         .padding(40)
+        .tablePanel(cornerRadius: 24, shadowOpacity: 0.30)
     }
 
     private func pausedOverlay(reason: PauseReason) -> some View {
@@ -383,10 +409,10 @@ struct TabletopGameView: View {
             Color.black.opacity(0.4).ignoresSafeArea()
             VStack(spacing: 16) {
                 Image(systemName: "pause.circle.fill")
-                    .font(.system(size: 64)).foregroundStyle(.orange)
-                Text("Table Paused").font(.largeTitle).bold()
+                    .font(.system(size: 64)).foregroundStyle(TableStyle.teamAmber)
+                Text("Table Paused").font(.largeTitle).bold().foregroundStyle(.white)
                 Text("\(droppedName) lost connection. Wait for them to rejoin, replace them with a bot, or end the match.")
-                    .font(.title3).foregroundStyle(.secondary)
+                    .font(.title3).foregroundStyle(.white.opacity(0.68))
                     .multilineTextAlignment(.center).frame(maxWidth: 480)
 
                 HStack(spacing: 16) {
@@ -396,18 +422,19 @@ struct TabletopGameView: View {
                         Label("Continue with Bot", systemImage: "cpu").font(.headline)
                     }
                     .buttonStyle(.borderedProminent)
+                    .tint(TableStyle.actionBlue)
 
                     Button(role: .destructive) {
                         netSession.stop(); onExit()
                     } label: {
                         Label("End Match", systemImage: "xmark.circle").font(.headline)
                     }
-                    .buttonStyle(.bordered).tint(.red)
+                    .buttonStyle(.bordered).tint(TableStyle.teamAmber)
                 }
                 .padding(.top, 8)
             }
             .padding(40)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+            .tablePanel(cornerRadius: 24, shadowOpacity: 0.34)
         }
     }
 

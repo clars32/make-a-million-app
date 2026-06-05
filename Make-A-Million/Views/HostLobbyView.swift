@@ -107,11 +107,7 @@ struct HostLobbyView: View {
     }
 
     private var background: some View {
-        LinearGradient(
-            colors: [Color.green.opacity(0.18), Color.teal.opacity(0.05)],
-            startPoint: .topLeading,
-            endPoint: .bottomTrailing)
-            .ignoresSafeArea()
+        TableFeltBackground()
     }
 
     private var lobbyContent: some View {
@@ -138,9 +134,11 @@ struct HostLobbyView: View {
     private var header: some View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
-                Text("Your table").font(.system(.title2, design: .rounded)).bold()
+                Text("Your table")
+                    .font(TableTypography.display(.title2, weight: .bold))
+                    .foregroundStyle(.white)
                 Text("Hosted by \(playerName)")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.caption).foregroundStyle(.white.opacity(0.66))
             }
             Spacer()
             Button("Stop") {
@@ -148,20 +146,23 @@ struct HostLobbyView: View {
                 onExit()
             }
             .buttonStyle(.bordered)
+            .tint(TableStyle.teamAmber)
         }
     }
 
     private var advertisingStatus: some View {
         HStack(spacing: 8) {
             Circle()
-                .fill(multipeer.isAdvertising ? Color.green : Color.gray)
+                .fill(multipeer.isAdvertising ? TableStyle.cardPlayable : TableStyle.passGray)
                 .frame(width: 8, height: 8)
             Text(multipeer.isAdvertising
                  ? "Visible to nearby devices — tell others to tap “Join a Table”"
                  : "Not advertising")
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.white.opacity(0.68))
         }
+        .padding(12)
+        .tablePanel(cornerRadius: 12, shadowOpacity: 0.14)
     }
 
     // MARK: Seat list & Assignments
@@ -199,15 +200,17 @@ struct HostLobbyView: View {
         let kind = seatKind(for: seat)
         
         let rowContent = HStack(spacing: 12) {
-            Text(label).font(.caption).bold().foregroundStyle(.secondary).frame(width: 48, alignment: .leading)
+            Text(label).font(.caption).bold().foregroundStyle(.white.opacity(0.60)).frame(width: 48, alignment: .leading)
             seatIcon(kind: kind)
-            Text(seatContent(seat: seat, kind: kind)).foregroundStyle(kind == .empty ? AnyShapeStyle(.tertiary) : AnyShapeStyle(.primary)).italic(kind == .empty)
+            Text(seatContent(seat: seat, kind: kind))
+                .foregroundStyle(kind == .empty ? AnyShapeStyle(.white.opacity(0.42)) : AnyShapeStyle(.white))
+                .italic(kind == .empty)
             Spacer()
             seatBadge(kind: kind)
         }
         .padding(12)
-        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(.background.opacity(0.6)))
-        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(kind.borderColor.opacity(0.4), lineWidth: 1))
+        .tablePanel(cornerRadius: 12, shadowOpacity: 0.12)
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(kind.borderColor.opacity(0.46), lineWidth: 1))
         
         if !isTabletopMode && seat.raw == 0 {
             rowContent // Locked to local host
@@ -236,7 +239,7 @@ struct HostLobbyView: View {
     private enum SeatKind { case host, peer, empty
         var borderColor: Color {
             switch self {
-            case .host: return .blue; case .peer: return .green; case .empty: return .gray
+            case .host: return TableStyle.cardSelected; case .peer: return TableStyle.cardPlayable; case .empty: return TableStyle.passGray
             }
         }
     }
@@ -263,15 +266,20 @@ struct HostLobbyView: View {
         let name: String = {
             switch kind { case .host: return "person.fill"; case .peer: return "person.fill.checkmark"; case .empty: return "person.fill.questionmark" }
         }()
-        Image(systemName: name).font(.title3).foregroundStyle(kind.borderColor).frame(width: 40, height: 40).background(Circle().fill(kind.borderColor.opacity(0.15)))
+        Image(systemName: name)
+            .font(.title3)
+            .foregroundStyle(kind.borderColor)
+            .frame(width: 40, height: 40)
+            .background(Circle().fill(kind.borderColor.opacity(0.15)))
+            .overlay(Circle().stroke(kind.borderColor.opacity(0.34), lineWidth: 1))
     }
 
     @ViewBuilder
     private func seatBadge(kind: SeatKind) -> some View {
         switch kind {
-        case .host: Text("HOST").font(.caption2).bold().foregroundStyle(.blue)
-        case .peer: Text("JOINED").font(.caption2).bold().foregroundStyle(.green)
-        case .empty: Text("BOT").font(.caption2).bold().foregroundStyle(.gray)
+        case .host: Text("HOST").font(.caption2).bold().foregroundStyle(TableStyle.cardSelected)
+        case .peer: Text("JOINED").font(.caption2).bold().foregroundStyle(TableStyle.cardPlayable)
+        case .empty: Text("BOT").font(.caption2).bold().foregroundStyle(TableStyle.passGray)
         }
     }
 
@@ -279,9 +287,15 @@ struct HostLobbyView: View {
 
     private var startButton: some View {
         Button { startHand() } label: {
-            Text("Start hand").font(.headline).frame(maxWidth: .infinity).padding(.vertical, 14)
+            Text("Start hand")
+                .font(.headline)
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 14)
+                .background(Capsule(style: .continuous).fill(TableStyle.actionBlue))
+                .overlay(Capsule(style: .continuous).stroke(.white.opacity(0.20), lineWidth: 1))
         }
-        .buttonStyle(.borderedProminent)
+        .buttonStyle(.plain)
     }
 
     private func startHand() {

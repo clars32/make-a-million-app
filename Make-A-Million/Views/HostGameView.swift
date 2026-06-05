@@ -71,12 +71,14 @@ struct HostGameView: View {
                         Image(systemName: "gearshape.fill")
                     }
                     .buttonStyle(.bordered)
+                    .tint(TableStyle.cardSelected)
                     .accessibilityLabel("Settings")
                     Button("End") {
                         netSession.stop()
                         onExit()
                     }
                     .buttonStyle(.bordered)
+                    .tint(TableStyle.teamAmber)
                 }
                 .padding()
                 Spacer()
@@ -101,11 +103,11 @@ struct HostGameView: View {
             VStack(spacing: 14) {
                 Image(systemName: "pause.circle.fill")
                     .font(.system(size: 48))
-                    .foregroundStyle(.orange)
-                Text("Table paused").font(.title3).bold().foregroundStyle(.primary)
+                    .foregroundStyle(TableStyle.teamAmber)
+                Text("Table paused").font(.title3).bold().foregroundStyle(.white)
                 Text(messageFor(reason))
                     .multilineTextAlignment(.center)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.white.opacity(0.68))
 
                 VStack(spacing: 10) {
                     Button {
@@ -116,6 +118,7 @@ struct HostGameView: View {
                             .padding(.vertical, 10)
                     }
                     .buttonStyle(.borderedProminent)
+                    .tint(TableStyle.actionBlue)
 
                     Button {
                         netSession.stop()
@@ -126,16 +129,12 @@ struct HostGameView: View {
                             .padding(.vertical, 8)
                     }
                     .buttonStyle(.bordered)
-                    .tint(.red)
+                    .tint(TableStyle.teamAmber)
                 }
                 .padding(.top, 4)
             }
             .padding(22)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .strokeBorder(.primary.opacity(0.1), lineWidth: 0.5)
-            )
+            .tablePanel(cornerRadius: 18, shadowOpacity: 0.34)
             .padding(.horizontal, 28)
         }
     }

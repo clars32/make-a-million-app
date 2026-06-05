@@ -82,13 +82,13 @@ struct CardFace: View {
             .overlay(
                 RoundedRectangle(cornerRadius: corner, style: .continuous)
                     .stroke(
-                        selected ? Color.accentColor
-                            : (highlighted ? Color.green : Color.gray.opacity(0.3)),
+                        selected ? TableStyle.cardSelected
+                            : (highlighted ? TableStyle.cardPlayable : Color.black.opacity(0.18)),
                         lineWidth: (selected || highlighted) ? 2.5 : 0.5))
             .shadow(
-                color: .black.opacity(selected ? 0.3 : 0.15),
-                radius: selected ? 8 : 2,
-                y: selected ? 4 : 1)
+                color: .black.opacity(selected ? 0.34 : 0.22),
+                radius: selected ? 10 : 4,
+                y: selected ? 5 : 2)
             .frame(width: width, height: height)
             .opacity(faded ? 0.5 : 1.0)
             .scaleEffect(selected ? 1.1 : 1.0)
@@ -117,7 +117,7 @@ struct CardFace: View {
             .overlay(
                 VStack(alignment: .leading, spacing: 0) {
                     Text(card.shortLabel)
-                        .font(.system(size: labelSize, weight: .heavy, design: .rounded))
+                        .font(TableTypography.display(size: labelSize, weight: .heavy))
                         .lineLimit(1)
                         .minimumScaleFactor(0.5)
                     Circle().fill(tint).frame(width: dot, height: dot)
@@ -206,10 +206,11 @@ struct MiniCardFace: View {
         miniBody
             .overlay(
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .stroke(Color.gray.opacity(0.3), lineWidth: 0.5))
+                    .stroke(Color.black.opacity(0.16), lineWidth: 0.5))
             .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
             .frame(width: width, height: height)
             .opacity(faded ? 0.5 : 1.0)
+            .shadow(color: .black.opacity(0.18), radius: 2, y: 1)
     }
 
     @ViewBuilder
@@ -230,7 +231,7 @@ struct MiniCardFace: View {
             .overlay(
                 HStack(spacing: 2) {
                     Text(card.shortLabel)
-                        .font(.system(size: labelSize, weight: .heavy, design: .rounded))
+                        .font(TableTypography.display(size: labelSize, weight: .heavy))
                         .lineLimit(1)
                         .minimumScaleFactor(0.6)
                     Circle().fill(tint).frame(width: dotSize, height: dotSize)

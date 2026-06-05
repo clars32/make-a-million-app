@@ -296,7 +296,7 @@ struct GameBody: View {
             teamScorePill(team: 0, table)
             VStack(spacing: 6) {
                 Text(table.phase.headline)
-                    .font(.system(isTabletLayout ? .title2 : .headline, design: .rounded).bold())
+                    .font(TableTypography.display(isTabletLayout ? .title2 : .headline, weight: .bold))
                     .foregroundStyle(.white)
                     .lineLimit(1).minimumScaleFactor(0.7)
                 headerBadges(table)
@@ -326,7 +326,7 @@ struct GameBody: View {
     }
 
     private func teamScorePill(team: Int, _ table: PlayerView) -> some View {
-        let tint = team == 0 ? Color.cyan : Color.orange
+        let tint = TableStyle.teamTint(team)
         let isMine = Seats.team(of: table.me) == team
         let hand = table.liveHandScore[team, default: 0]
         let match = table.matchScore[team, default: 0]
@@ -335,7 +335,7 @@ struct GameBody: View {
                 .font((isTabletLayout ? Font.callout : Font.caption2).bold()).foregroundStyle(tint)
                 .lineLimit(1).minimumScaleFactor(0.7)
             Text("$\(hand / 1000)k")
-                .font(.system(isTabletLayout ? .title3 : .callout, design: .rounded).bold().monospacedDigit())
+                .font(TableTypography.money(isTabletLayout ? .title3 : .callout))
                 .foregroundStyle(.white)
             Text("$\(match / 1000)k")
                 .font((isTabletLayout ? Font.callout : Font.caption2).monospacedDigit())
@@ -344,13 +344,21 @@ struct GameBody: View {
         .padding(.horizontal, isTabletLayout ? 16 : 9)
         .padding(.vertical, isTabletLayout ? 12 : 7)
         .frame(width: isTabletLayout ? 142 : 88, alignment: .leading)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: isTabletLayout ? 16 : 12, style: .continuous))
+        .background {
+            RoundedRectangle(cornerRadius: isTabletLayout ? 16 : 12, style: .continuous)
+                .fill(.ultraThinMaterial)
+                .overlay {
+                    RoundedRectangle(cornerRadius: isTabletLayout ? 16 : 12, style: .continuous)
+                        .fill(tint.opacity(isMine ? 0.18 : 0.10))
+                }
+        }
         .overlay(RoundedRectangle(cornerRadius: isTabletLayout ? 16 : 12, style: .continuous)
-            .stroke(tint.opacity(isMine ? 0.9 : 0.4), lineWidth: isMine ? 2 : 1))
+            .stroke(tint.opacity(isMine ? 0.82 : 0.42), lineWidth: isMine ? 2 : 1))
+        .shadow(color: .black.opacity(0.22), radius: 8, y: 3)
     }
 
     private func trumpBadge(_ color: CardColor) -> some View {
-        let swatch: Color = (color == .black) ? .black : color.swatch
+        let swatch = TableStyle.suitSwatch(color)
         return HStack(spacing: isTabletLayout ? 8 : 5) {
             Circle().fill(swatch)
                 .frame(width: isTabletLayout ? 18 : 12,
@@ -362,8 +370,8 @@ struct GameBody: View {
         }
         .padding(.horizontal, isTabletLayout ? 14 : 9)
         .padding(.vertical, isTabletLayout ? 7 : 4)
-        .background(Capsule().fill(swatch.opacity(0.3)))
-        .overlay(Capsule().stroke(swatch.opacity(0.8), lineWidth: 1))
+        .background(Capsule().fill(swatch.opacity(color == .black ? 0.34 : 0.22)))
+        .overlay(Capsule().stroke(swatch.opacity(0.68), lineWidth: 1))
         .accessibilityLabel("Trump: \(color.displayName)")
     }
 
@@ -371,15 +379,15 @@ struct GameBody: View {
         HStack(spacing: isTabletLayout ? 7 : 4) {
             Image(systemName: "crown.fill")
                 .font(isTabletLayout ? .subheadline : .caption2)
-                .foregroundStyle(.yellow)
+                .foregroundStyle(TableStyle.tableGold)
             Text("\(seatShort(bidder)) $\(amount / 1000)k")
                 .font((isTabletLayout ? Font.headline : Font.caption).weight(.bold)).foregroundStyle(.white)
                 .lineLimit(1).minimumScaleFactor(0.75)
         }
         .padding(.horizontal, isTabletLayout ? 14 : 9)
         .padding(.vertical, isTabletLayout ? 7 : 4)
-        .background(Capsule().fill(Color.yellow.opacity(0.18)))
-        .overlay(Capsule().stroke(Color.yellow.opacity(0.6), lineWidth: 1))
+        .background(Capsule().fill(TableStyle.tableGold.opacity(0.18)))
+        .overlay(Capsule().stroke(TableStyle.tableGold.opacity(0.58), lineWidth: 1))
     }
 
     // MARK: Board (opponent seats + center trick)
@@ -470,7 +478,7 @@ struct GameBody: View {
 
     private func seatChip(_ seat: PlayerID, _ table: PlayerView) -> some View {
         let toAct = table.toAct == seat && isLivePhase(table.phase)
-        let tint = Seats.team(of: seat) == 0 ? Color.cyan : Color.orange
+        let tint = TableStyle.teamTint(Seats.team(of: seat))
         return VStack(spacing: isTabletLayout ? 4 : 2) {
             HStack(spacing: isTabletLayout ? 6 : 4) {
                 if dealerSeat(table) == seat {
@@ -482,17 +490,23 @@ struct GameBody: View {
                         .background(Circle().fill(.white.opacity(0.9)))
                 }
                 Text(seatName(seat))
-                    .font(.system(isTabletLayout ? .title3 : .subheadline, design: .rounded).bold())
+                    .font(TableTypography.display(isTabletLayout ? .title3 : .subheadline, weight: .bold))
                     .foregroundStyle(.white).lineLimit(1)
             }
             seatSubtitle(seat, table)
         }
         .padding(.horizontal, isTabletLayout ? 20 : 12)
         .padding(.vertical, isTabletLayout ? 10 : 6)
-        .background(.ultraThinMaterial, in: Capsule())
-        .overlay(Capsule().stroke(toAct ? Color.yellow : tint.opacity(0.55),
+        .background {
+            Capsule()
+                .fill(.ultraThinMaterial)
+                .overlay {
+                    Capsule().fill(tint.opacity(toAct ? 0.20 : 0.11))
+                }
+        }
+        .overlay(Capsule().stroke(toAct ? TableStyle.panelStrokeActive : tint.opacity(0.55),
                                   lineWidth: toAct ? (isTabletLayout ? 3 : 2.5) : 1.5))
-        .shadow(color: toAct ? Color.yellow.opacity(0.5) : .black.opacity(0.25),
+        .shadow(color: toAct ? TableStyle.panelStrokeActive.opacity(0.48) : .black.opacity(0.25),
                 radius: toAct ? (isTabletLayout ? 12 : 8) : 3, y: 2)
         .scaleEffect(toAct ? 1.06 : 1.0)
         .animation(.spring(response: 0.3, dampingFraction: 0.7), value: toAct)
@@ -507,7 +521,7 @@ struct GameBody: View {
                     .foregroundStyle(.white.opacity(0.55))
             } else if let last = table.bidHistory.last(where: { $0.player == seat }) {
                 Text(bidHistoryLabel(last.action))
-                    .font(.system(isTabletLayout ? .callout : .caption2, design: .rounded).bold().monospacedDigit())
+                    .font(TableTypography.money(isTabletLayout ? .callout : .caption2))
                     .foregroundStyle(.white)
             } else {
                 Text("…")
@@ -520,7 +534,7 @@ struct GameBody: View {
                 if table.highBidder == seat {
                     Image(systemName: "crown.fill")
                         .font(.system(size: isTabletLayout ? 12 : 8))
-                        .foregroundStyle(.yellow)
+                        .foregroundStyle(TableStyle.tableGold)
                 }
                 Text("\(tricks) trick\(tricks == 1 ? "" : "s")")
                     .font(isTabletLayout ? .callout : .caption2)
@@ -550,6 +564,9 @@ struct GameBody: View {
                             }
                         }
                     }
+                    .padding(.horizontal, isTabletLayout ? 12 : 8)
+                    .padding(.vertical, isTabletLayout ? 10 : 7)
+                    .tablePanel(cornerRadius: isTabletLayout ? 14 : 10, shadowOpacity: 0.16)
                 }
                 Spacer(minLength: isTabletLayout ? 16 : 8)
                 if showLast, let last = table.lastTrick {
@@ -568,6 +585,9 @@ struct GameBody: View {
                             }
                         }
                     }
+                    .padding(.horizontal, isTabletLayout ? 12 : 8)
+                    .padding(.vertical, isTabletLayout ? 10 : 7)
+                    .tablePanel(cornerRadius: isTabletLayout ? 14 : 10, shadowOpacity: 0.16)
                 }
             }
             .frame(maxWidth: .infinity)
@@ -632,10 +652,7 @@ struct GameBody: View {
     }
 
     private var feltBackground: some View {
-        LinearGradient(colors: [Color(red: 0.06, green: 0.30, blue: 0.18),
-                                Color(red: 0.03, green: 0.17, blue: 0.11)],
-                       startPoint: .top, endPoint: .bottom)
-            .ignoresSafeArea()
+        TableFeltBackground()
     }
 
     private func misdealBanner(_ view: PlayerView) -> some View {
@@ -643,7 +660,7 @@ struct GameBody: View {
         return HStack(spacing: 12) {
             Image(systemName: "arrow.triangle.2.circlepath")
                 .font(.title2)
-                .foregroundStyle(.orange)
+                .foregroundStyle(TableStyle.teamAmber)
             VStack(alignment: .leading, spacing: 2) {
                 Text("Misdeal — redealing").font(.subheadline).bold()
                 Text("A player has too little money in hand. Your hand: $\(myMoney / 1000)k in money cards.")
@@ -654,8 +671,8 @@ struct GameBody: View {
             ProgressView().controlSize(.small)
         }
         .padding(12)
-        .background(.orange.opacity(0.15), in: RoundedRectangle(cornerRadius: 10))
-        .overlay(RoundedRectangle(cornerRadius: 10).stroke(.orange.opacity(0.5), lineWidth: 1))
+        .background(TableStyle.teamAmber.opacity(0.16), in: RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(TableStyle.teamAmber.opacity(0.5), lineWidth: 1))
     }
 
     // MARK: Action panel (bid / name trump / discard)
@@ -673,19 +690,13 @@ struct GameBody: View {
             }
         }
         .padding(14)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous)
-            .stroke(.white.opacity(0.15), lineWidth: 1))
-        .shadow(color: .black.opacity(0.35), radius: 12, y: 5)
+        .tablePanel(cornerRadius: 18, shadowOpacity: 0.34)
     }
 
     private func biddingActionPanel(_ view: PlayerView) -> some View {
         biddingPanel(view)
             .padding(.vertical, isTabletLayout ? 6 : 5)
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(.white.opacity(0.15), lineWidth: 1))
-            .shadow(color: .black.opacity(0.3), radius: 10, y: 4)
+            .tablePanel(cornerRadius: 16, shadowOpacity: 0.26)
     }
 
     @ViewBuilder
@@ -703,7 +714,7 @@ struct GameBody: View {
                 Picker("Bid amount", selection: bidSelection) {
                     ForEach(Array(bidMoves.enumerated()), id: \.offset) { index, move in
                         Text(bidAmountText(move))
-                            .font(.system(isTabletLayout ? .title3 : .callout, design: .rounded).bold())
+                            .font(TableTypography.display(isTabletLayout ? .title3 : .callout, weight: .bold))
                             .tag(index)
                     }
                 }
@@ -712,9 +723,9 @@ struct GameBody: View {
                 .frame(width: isTabletLayout ? 112 : 82,
                        height: isTabletLayout ? 76 : 62)
                 .clipped()
-                .background(.white.opacity(0.10), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .background(TableStyle.panelFill, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                 .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .stroke(.white.opacity(0.12), lineWidth: 1))
+                    .stroke(TableStyle.panelStroke, lineWidth: 1))
             }
 
             HStack(spacing: isTabletLayout ? 10 : 8) {
@@ -723,11 +734,12 @@ struct GameBody: View {
                     submit(bidMoves[safeBidIndex])
                 } label: {
                     Text("Bid")
-                        .font(.system(isTabletLayout ? .title3 : .subheadline, design: .rounded).weight(.bold))
+                        .font(TableTypography.display(isTabletLayout ? .title3 : .subheadline, weight: .bold))
                         .foregroundStyle(.white)
                         .frame(width: isTabletLayout ? 112 : 78,
                                height: isTabletLayout ? 44 : 36)
-                        .background(Capsule(style: .continuous).fill(Color.blue))
+                        .background(Capsule(style: .continuous).fill(TableStyle.actionBlue))
+                        .overlay(Capsule(style: .continuous).stroke(.white.opacity(0.20), lineWidth: 1))
                 }
                 .buttonStyle(.plain)
                 .disabled(bidMoves.isEmpty)
@@ -738,11 +750,12 @@ struct GameBody: View {
                     submit(passMove)
                 } label: {
                     Text("Pass")
-                        .font(.system(isTabletLayout ? .title3 : .subheadline, design: .rounded).weight(.semibold))
+                        .font(TableTypography.display(isTabletLayout ? .title3 : .subheadline, weight: .semibold))
                         .foregroundStyle(.white)
                         .frame(width: isTabletLayout ? 112 : 78,
                                height: isTabletLayout ? 44 : 36)
-                        .background(Capsule(style: .continuous).fill(.gray.opacity(0.75)))
+                        .background(Capsule(style: .continuous).fill(TableStyle.passGray.opacity(0.82)))
+                        .overlay(Capsule(style: .continuous).stroke(.white.opacity(0.16), lineWidth: 1))
                 }
                 .buttonStyle(.plain)
                 .disabled(passMove == nil)
@@ -769,14 +782,14 @@ struct GameBody: View {
                     // inverts in dark mode and would render the Black trump button
                     // as white-on-white. The selector should always show the suit
                     // color faithfully, so override `.black` to a literal black.
-                    let solidSwatch: Color = (color == .black) ? .black : color.swatch
+                    let solidSwatch = TableStyle.suitSwatch(color)
                     Button { submit(move) } label: {
                         HStack(spacing: 10) {
                             Circle().fill(solidSwatch)
                                 .frame(width: 22, height: 22)
                                 .overlay(Circle().stroke(.white.opacity(0.8), lineWidth: 1.5))
                             Text(color.displayName)
-                                .font(.system(.headline, design: .rounded).weight(.bold))
+                                .font(TableTypography.display(.headline, weight: .bold))
                                 .foregroundStyle(.white)
                             Spacer(minLength: 0)
                         }
@@ -785,7 +798,7 @@ struct GameBody: View {
                         .frame(maxWidth: .infinity)
                         .background(
                             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                .fill(solidSwatch.opacity(0.85))
+                                .fill(solidSwatch.opacity(color == .black ? 0.68 : 0.76))
                         )
                         .overlay(
                             RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -808,11 +821,11 @@ struct GameBody: View {
                 .font(.caption).foregroundStyle(.white.opacity(0.8))
             if ready && legalMove == nil {
                 Text("That discard isn't legal — you can only discard money cards when you have no other choice.")
-                    .font(.caption).foregroundStyle(.orange)
+                    .font(.caption).foregroundStyle(TableStyle.teamAmber)
             }
             HStack(spacing: 8) {
                 Text("\(count) of 3 selected")
-                    .font(.system(.callout, design: .rounded)).monospacedDigit()
+                    .font(TableTypography.money(.callout, weight: .regular))
                     .foregroundStyle(.white)
                 Spacer()
                 Button("Discard selected") {
@@ -884,7 +897,7 @@ struct GameBody: View {
                 .font(.title2).bold().foregroundStyle(.white)
             if let winner = s.matchWinner {
                 Text("\(winner == 0 ? teamAName : teamBName) wins!")
-                    .font(.headline).foregroundStyle(.green)
+                    .font(.headline).foregroundStyle(TableStyle.tableGold)
             }
             Text("\(teamAName): $\(a / 1000)k").foregroundStyle(.white)
             Text("\(teamBName): $\(b / 1000)k").foregroundStyle(.white.opacity(0.7))
@@ -897,13 +910,15 @@ struct GameBody: View {
                 Button(label, action: dealAnother).buttonStyle(.borderedProminent)
             }
         }
+        .padding(20)
+        .tablePanel(cornerRadius: 20, shadowOpacity: 0.30)
     }
 
     private func bidHistoryPanel(records: [BidRecord], opener: PlayerID) -> some View {
         DisclosureGroup(isExpanded: $bidHistoryExpanded) {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 8) {
-                    Text("Opener: \(seatName(opener))").font(.caption2).bold().foregroundStyle(.blue)
+                    Text("Opener: \(seatName(opener))").font(.caption2).bold().foregroundStyle(TableStyle.cardSelected)
                     Spacer()
                 }
                 if records.isEmpty {
@@ -915,7 +930,7 @@ struct GameBody: View {
                             HStack(spacing: 4) {
                                 Text(seatShort(record.player)).font(.caption2).foregroundStyle(.secondary)
                                 if record.player == opener && firstMention {
-                                    Text("opens").font(.caption2).foregroundStyle(.blue)
+                                    Text("opens").font(.caption2).foregroundStyle(TableStyle.cardSelected)
                                 }
                                 Text(bidHistoryLabel(record.action)).font(.caption2).bold().monospacedDigit()
                             }
@@ -932,7 +947,7 @@ struct GameBody: View {
         }
         .font(.caption)
         .padding(10)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .tablePanel(cornerRadius: 12, shadowOpacity: 0.16)
     }
 
     private func bidHistorySummary(records: [BidRecord], opener: PlayerID) -> some View {
@@ -944,8 +959,8 @@ struct GameBody: View {
             Spacer()
             if let w = winning, case .bid(let amount) = w.action {
                 Text("\(seatShort(w.player)) $\(amount / 1000)k")
-                    .font(.system(.caption, design: .rounded).bold().monospacedDigit())
-                    .foregroundStyle(.blue)
+                    .font(TableTypography.money(.caption))
+                    .foregroundStyle(TableStyle.tableGold)
             } else {
                 Text("Opener: \(seatName(opener))").font(.caption2).foregroundStyle(.tertiary)
             }
@@ -987,8 +1002,8 @@ struct GameBody: View {
 
     private func bidHistoryTint(_ record: BidRecord) -> Color {
         switch record.action {
-        case .pass: return .secondary
-        case .bid: return .blue
+        case .pass: return TableStyle.passGray
+        case .bid: return TableStyle.tableGold
         }
     }
 

@@ -172,7 +172,7 @@ struct HandRevealPanel: View {
         }()
         return Text(text)
             .font(.caption).bold()
-            .foregroundStyle(made ? Color.green : Color.red)
+            .foregroundStyle(made ? TableStyle.cardPlayable : TableStyle.teamAmber)
     }
 
     private func seatRow(_ seat: PlayerID, _ r: DebugReveal) -> some View {
@@ -330,6 +330,7 @@ struct SettingsView: View {
                     Button("Done", action: onClose)
                 }
             }
+            .tint(TableStyle.actionBlue)
         }
     }
 

@@ -97,31 +97,34 @@ private struct ModePickerView: View {
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
-            LinearGradient(
-                colors: [Color.teal.opacity(0.2), Color.blue.opacity(0.05)],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing)
-                .ignoresSafeArea()
+            TableFeltBackground()
 
             VStack(spacing: 24) {
-                Spacer().frame(height: 12)
+                Spacer(minLength: 8)
 
-                VStack(spacing: 6) {
+                VStack(spacing: 12) {
+                    HomeHeroCards()
+                        .frame(height: 168)
+                        .padding(.bottom, 4)
+
                     Text("Make-a-Million")
-                        .font(.largeTitle).bold()
+                        .font(TableTypography.display(.largeTitle, weight: .heavy))
+                        .foregroundStyle(.white)
                     Text("A trick-taking card game")
                         .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(.white.opacity(0.66))
                 }
 
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Your name")
-                        .font(.caption).foregroundStyle(.secondary)
+                        .font(.caption).foregroundStyle(.white.opacity(0.68))
                     TextField("Player", text: $playerName)
                         .textFieldStyle(.roundedBorder)
                         .autocorrectionDisabled()
                         .textInputAutocapitalization(.words)
                 }
+                .padding(14)
+                .tablePanel(cornerRadius: 14, shadowOpacity: 0.18)
                 .padding(.horizontal)
 
                 Spacer()
@@ -131,19 +134,19 @@ private struct ModePickerView: View {
                         title: "Play Solo",
                         subtitle: "Just you against three bots",
                         systemImage: "person.fill",
-                        color: .blue,
+                        color: TableStyle.actionBlue,
                         action: onPickSolo)
                     ModeButton(
                         title: "Host a Table",
                         subtitle: "Other devices nearby can join you",
                         systemImage: "wifi",
-                        color: .green,
+                        color: TableStyle.teamBlue,
                         action: onPickHost)
                     ModeButton(
                         title: "Join a Table",
                         subtitle: "Find a nearby host",
                         systemImage: "person.2.fill",
-                        color: .orange,
+                        color: TableStyle.teamAmber,
                         action: onPickJoin)
                 }
                 .padding(.horizontal)
@@ -155,13 +158,47 @@ private struct ModePickerView: View {
             Button(action: onOpenSettings) {
                 Image(systemName: "gearshape.fill")
                     .font(.title3)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(TableStyle.cardSelected)
                     .padding(10)
                     .background(.ultraThinMaterial, in: Circle())
+                    .overlay(Circle().stroke(TableStyle.panelStroke, lineWidth: 1))
             }
             .padding()
             .accessibilityLabel("Settings")
         }
+    }
+}
+
+private struct HomeHeroCards: View {
+    private let cards: [Card] = [
+        .colored(.green, .money40k),
+        .bull,
+        .colored(.yellow, .money30k),
+        .tiger
+    ]
+
+    var body: some View {
+        ZStack {
+            ForEach(Array(cards.enumerated()), id: \.offset) { index, card in
+                CardFace(card: card, width: 74, height: 104)
+                    .rotationEffect(.degrees(rotation(for: index)))
+                    .offset(x: xOffset(for: index), y: yOffset(for: index))
+                    .zIndex(Double(index))
+            }
+        }
+        .accessibilityHidden(true)
+    }
+
+    private func rotation(for index: Int) -> Double {
+        [-13, -4, 6, 14][index]
+    }
+
+    private func xOffset(for index: Int) -> CGFloat {
+        [-84, -28, 30, 86][index]
+    }
+
+    private func yOffset(for index: Int) -> CGFloat {
+        [12, -8, -2, 16][index]
     }
 }
 
@@ -178,24 +215,27 @@ private struct ModeButton: View {
                 Image(systemName: systemImage)
                     .font(.title2)
                     .frame(width: 36, height: 36)
-                    .foregroundStyle(.white)
+                    .foregroundStyle(color)
+                    .background(Circle().fill(color.opacity(0.18)))
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title)
                         .font(.headline)
                         .foregroundStyle(.white)
                     Text(subtitle)
                         .font(.caption)
-                        .foregroundStyle(.white.opacity(0.9))
+                        .foregroundStyle(.white.opacity(0.70))
                 }
                 Spacer()
                 Image(systemName: "chevron.right")
-                    .foregroundStyle(.white.opacity(0.7))
+                    .foregroundStyle(.white.opacity(0.52))
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 14)
-            .background(
+            .tablePanel(cornerRadius: 14, shadowOpacity: 0.22)
+            .overlay {
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(color))
+                    .stroke(color.opacity(0.42), lineWidth: 1)
+            }
         }
         .buttonStyle(.plain)
     }

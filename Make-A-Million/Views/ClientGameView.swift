@@ -156,10 +156,11 @@ struct ClientGameView: View {
                                     }
                                 } label: {
                                     Text(move.label.replacingOccurrences(of: "Bid ", with: ""))
-                                        .font(.system(.subheadline, design: .rounded).weight(.bold))
-                                        .foregroundStyle(isSel ? .white : .primary)
+                                        .font(TableTypography.display(.subheadline, weight: .bold))
+                                        .foregroundStyle(isSel ? .white : .white.opacity(0.72))
                                         .padding(.horizontal, 14).frame(height: 40)
-                                        .background(Capsule().fill(isSel ? Color.blue : Color.secondary.opacity(0.18)))
+                                        .background(Capsule().fill(isSel ? TableStyle.actionBlue : TableStyle.panelFill))
+                                        .overlay(Capsule().stroke(isSel ? .white.opacity(0.20) : TableStyle.panelStroke, lineWidth: 1))
                                         .scaleEffect(isSel ? 1.05 : 0.95)
                                 }
                                 .buttonStyle(.plain)
@@ -172,10 +173,10 @@ struct ClientGameView: View {
                 }
             }
             if let passMove {
-                actionButton("Pass", tint: .gray) { session.submit(passMove) }
+                actionButton("Pass", tint: TableStyle.passGray.opacity(0.82)) { session.submit(passMove) }
             }
             if !bidMoves.isEmpty {
-                actionButton("Bid", tint: .blue) { session.submit(bidMoves[safeIndex]) }
+                actionButton("Bid", tint: TableStyle.actionBlue) { session.submit(bidMoves[safeIndex]) }
             }
         }
         .barChrome()
@@ -190,17 +191,17 @@ struct ClientGameView: View {
         return HStack(spacing: 10) {
             Text("Trump:").font(.subheadline.weight(.semibold)).foregroundStyle(.white.opacity(0.9))
             ForEach(trumpMoves, id: \.0) { color, move in
-                let swatch: Color = (color == .black) ? .black : color.swatch
+                let swatch = TableStyle.suitSwatch(color)
                 Button { session.submit(move) } label: {
                     HStack(spacing: 6) {
                         Circle().fill(swatch).frame(width: 16, height: 16)
                             .overlay(Circle().stroke(.white.opacity(0.8), lineWidth: 1))
-                        Text(color.displayName).font(.system(.subheadline, design: .rounded).weight(.bold))
+                        Text(color.displayName).font(TableTypography.display(.subheadline, weight: .bold))
                             .foregroundStyle(.white)
                     }
                     .padding(.horizontal, 12).frame(height: 40)
-                    .background(Capsule().fill(swatch.opacity(0.85)))
-                    .overlay(Capsule().stroke(swatch, lineWidth: 1))
+                    .background(Capsule().fill(swatch.opacity(color == .black ? 0.68 : 0.76)))
+                    .overlay(Capsule().stroke(swatch.opacity(0.90), lineWidth: 1))
                 }
                 .buttonStyle(.plain)
             }
@@ -216,9 +217,9 @@ struct ClientGameView: View {
             Text("Discard 3 — tap your cards")
                 .font(.subheadline.weight(.semibold)).foregroundStyle(.white.opacity(0.9))
             Text("\(discardSelection.count)/3")
-                .font(.system(.subheadline, design: .rounded).bold().monospacedDigit())
+                .font(TableTypography.money(.subheadline))
                 .foregroundStyle(.white)
-            actionButton("Discard", tint: move == nil ? .gray : .blue) {
+            actionButton("Discard", tint: move == nil ? TableStyle.passGray.opacity(0.82) : TableStyle.actionBlue) {
                 if let move { session.submit(move); discardSelection = [] }
             }
             .disabled(move == nil)
@@ -231,10 +232,11 @@ struct ClientGameView: View {
     private func actionButton(_ title: String, tint: Color, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(title)
-                .font(.system(.subheadline, design: .rounded).weight(.bold))
+                .font(TableTypography.display(.subheadline, weight: .bold))
                 .foregroundStyle(.white)
                 .padding(.horizontal, 18).frame(height: 40)
                 .background(Capsule().fill(tint))
+                .overlay(Capsule().stroke(.white.opacity(0.18), lineWidth: 1))
         }
         .buttonStyle(.plain)
     }
@@ -242,10 +244,7 @@ struct ClientGameView: View {
     // MARK: - Chrome
 
     private var feltBackground: some View {
-        LinearGradient(colors: [Color(red: 0.05, green: 0.25, blue: 0.15),
-                                Color(red: 0.03, green: 0.16, blue: 0.10)],
-                       startPoint: .top, endPoint: .bottom)
-            .ignoresSafeArea()
+        TableFeltBackground()
     }
 
     private var topBar: some View {
@@ -261,6 +260,7 @@ struct ClientGameView: View {
                         .foregroundStyle(.white.opacity(0.85))
                         .padding(8)
                         .background(.ultraThinMaterial, in: Circle())
+                        .overlay(Circle().stroke(TableStyle.panelStroke, lineWidth: 1))
                 }
             }
             Spacer()
@@ -281,20 +281,22 @@ struct ClientGameView: View {
 
     private func pausedOverlay(reason: PauseReason) -> some View {
         overlayCard {
-            Image(systemName: "pause.circle.fill").font(.system(size: 48)).foregroundStyle(.orange)
-            Text("Table paused").font(.title3).bold()
-            Text(messageFor(reason)).multilineTextAlignment(.center).foregroundStyle(.secondary)
-            Text("Waiting for the host…").font(.caption).foregroundStyle(.tertiary).padding(.top, 4)
+            Image(systemName: "pause.circle.fill").font(.system(size: 48)).foregroundStyle(TableStyle.teamAmber)
+            Text("Table paused").font(.title3).bold().foregroundStyle(.white)
+            Text(messageFor(reason)).multilineTextAlignment(.center).foregroundStyle(.white.opacity(0.68))
+            Text("Waiting for the host…").font(.caption).foregroundStyle(.white.opacity(0.42)).padding(.top, 4)
         }
     }
 
     private var disconnectedOverlay: some View {
         overlayCard {
-            Image(systemName: "wifi.slash").font(.system(size: 44)).foregroundStyle(.red)
-            Text("Disconnected").font(.title3).bold()
-            Text("Lost connection to the host.").foregroundStyle(.secondary)
+            Image(systemName: "wifi.slash").font(.system(size: 44)).foregroundStyle(TableStyle.teamAmber)
+            Text("Disconnected").font(.title3).bold().foregroundStyle(.white)
+            Text("Lost connection to the host.").foregroundStyle(.white.opacity(0.68))
             Button("Back to menu") { session.stop(); onExit() }
-                .buttonStyle(.borderedProminent).padding(.top, 6)
+                .buttonStyle(.borderedProminent)
+                .tint(TableStyle.actionBlue)
+                .padding(.top, 6)
         }
     }
 
@@ -303,7 +305,7 @@ struct ClientGameView: View {
             Color.black.opacity(0.45).ignoresSafeArea()
             VStack(spacing: 12) { content() }
                 .padding(24)
-                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                .tablePanel(cornerRadius: 18, shadowOpacity: 0.34)
                 .padding(.horizontal, 40)
         }
     }
@@ -369,8 +371,12 @@ private extension View {
     func barChrome() -> some View {
         self
             .padding(.horizontal, 16).padding(.vertical, 10)
-            .background(.ultraThinMaterial, in: Capsule())
-            .overlay(Capsule().stroke(.white.opacity(0.15), lineWidth: 1))
-            .shadow(color: .black.opacity(0.3), radius: 8, y: 3)
+            .background {
+                Capsule()
+                    .fill(.ultraThinMaterial)
+                    .overlay { Capsule().fill(TableStyle.panelFill) }
+            }
+            .overlay(Capsule().stroke(TableStyle.panelStroke, lineWidth: 1))
+            .shadow(color: .black.opacity(0.28), radius: 10, y: 4)
     }
 }
