@@ -67,14 +67,19 @@ struct Determinizer {
     /// declarer's sampled hand (a hard fact) rather than scattered. See the
     /// `Difficulty.deduceWidowHoldings` lever.
     private let deduceWidowHoldings: Bool
+    /// SHAPE prior: bias trump cards toward the declarer (they named trump, so
+    /// they're likely long in it). 0 = off. See `Difficulty.declarerTrumpBias`.
+    private let declarerTrumpBias: Double
 
     init(view: PlayerView, seed: UInt64,
          bidLeanStrength: Double = 0.0,
-         deduceWidowHoldings: Bool = false) {
+         deduceWidowHoldings: Bool = false,
+         declarerTrumpBias: Double = 0.0) {
         self.view = view
         self.rng = SeededRNG(seed: seed)
         self.bidLeanStrength = bidLeanStrength
         self.deduceWidowHoldings = deduceWidowHoldings
+        self.declarerTrumpBias = declarerTrumpBias
         self.lean = Determinizer.computeLean(view: view)
     }
 
@@ -318,8 +323,20 @@ struct Determinizer {
     /// With `bidLeanStrength == 0` this is just `candidates[0]`, preserving the
     /// previous (uniform-after-shuffle) behaviour exactly.
     private mutating func weightedPick(_ candidates: [PlayerID], card: Card) -> PlayerID {
-        if candidates.count == 1 || bidLeanStrength <= 0 { return candidates[0] }
-        let weights = candidates.map { leanWeight(card: card, seat: $0) }
+        if candidates.count == 1 { return candidates[0] }
+        if bidLeanStrength <= 0 && declarerTrumpBias <= 0 { return candidates[0] }
+        let weights = candidates.map { seat -> Double in
+            var w = leanWeight(card: card, seat: seat)
+            // Shape prior: the declarer named trump → likely long in it. Pull
+            // trump cards (any rank) toward the declarer; `leanWeight` only
+            // captures strength, so it misses low-trump length.
+            if declarerTrumpBias > 0,
+               let t = view.trump, let d = view.highBidder, d != view.me,
+               seat == d, card.effectiveColor(trump: t) == t {
+                w *= exp(declarerTrumpBias)
+            }
+            return w
+        }
         let total = weights.reduce(0, +)
         guard total > 0 else { return candidates[0] }
         let r = Double(rng.next() % 1_000_000) / 1_000_000.0 * total

@@ -118,6 +118,85 @@ final class AIArenaTests: XCTestCase {
         print(r.summary)
     }
 
+    /// A/B for the Extreme `deepInference` (count-exhaustion voids): both sides
+    /// play `.normal`; the challenger additionally infers voids from suit
+    /// exhaustion. Isolates the deduction from Extreme's other levers. Expect
+    /// neutral-or-better (it's provably correct — it only adds true voids).
+    /// As always, read it against the same-seed off-vs-off control, NOT 50%.
+    /// Read against the same-seed off-vs-off control, NOT 50%. Measured paired
+    /// at 60 matches / baseSeed 1: control 55% → treatment 57% (set 18%→17%) —
+    /// essentially NEUTRAL (+~2pp / +1 match). Expected: count-exhaustion voids
+    /// fire rarely, so the effect is small; it's provably correct (only adds
+    /// true voids) and non-regressive, hence kept as an Extreme differentiator
+    /// rather than promoted to all tiers.
+    func testSelfPlayDeepInference() async {
+        var withDeep = MonteCarloAgent.Difficulty.normal
+        withDeep.deepInference = true
+        let r = await AIArena.runSelfPlay(matches: 30, challenger: withDeep,
+                                          champion: .normal, baseSeed: 1)
+        print(r.summary)
+    }
+
+    /// Tuning probe for the (currently PARKED) `declarerTrumpBias` shape prior:
+    /// challenger biases trump toward the declarer when sampling; champion
+    /// samples flat. Read against the same-seed control, not 50%. Measured
+    /// paired at 60 matches / baseSeed 1: control 55% → treatment 53% at BOTH
+    /// 0.4 and 0.8, i.e. −~2pp — so the lever is parked at 0 (see
+    /// `Difficulty.declarerTrumpBias`). Re-run this after a refinement (bias
+    /// only low trump, or reduce `bidLeanStrength` alongside).
+    func testSelfPlayTrumpShape() async {
+        var withShape = MonteCarloAgent.Difficulty.normal
+        withShape.declarerTrumpBias = 0.4
+        let r = await AIArena.runSelfPlay(matches: 30, challenger: withShape,
+                                          champion: .normal, baseSeed: 1)
+        print(r.summary)
+    }
+
+    /// Does Extreme actually beat Hard? Read TREATMENT against the same-seed
+    /// hard-vs-hard CONTROL, not 50%. Extreme adds: more samples (60 vs 36),
+    /// a wider shortlist (6 vs 5), a stronger auction read (2.0 vs 1.6), the
+    /// exhaustion-void deduction, and slightly less partner-respect.
+    func testSelfPlayExtremeVsHard() async {
+        let control = await AIArena.runSelfPlay(matches: 60, challenger: .hard,
+                                                champion: .hard, baseSeed: 1)
+        print("CONTROL (hard vs hard):\n" + control.summary)
+        let r = await AIArena.runSelfPlay(matches: 60, challenger: .extreme,
+                                          champion: .hard, baseSeed: 1)
+        print("TREATMENT (extreme vs hard):\n" + r.summary)
+    }
+
+    /// Probe for the (PARKED) `rolloutCommandingPull` rollout change (declarer
+    /// draws trump with a commanding high card, not the lowest). Read against
+    /// the same-seed control, not 50%. Measured paired, baseSeed 1: 60 matches
+    /// 55%→60% looked promising, but 100 matches 55%→56% — i.e. NEUTRAL, the
+    /// 60-match bump was noise. Parked off (the lever stays for future work).
+    /// Lesson: confirm promising small-N results at higher N before promoting.
+    func testSelfPlayCommandingPull() async {
+        var withPull = MonteCarloAgent.Difficulty.normal
+        withPull.rolloutCommandingPull = true
+        let r = await AIArena.runSelfPlay(matches: 30, challenger: withPull,
+                                          champion: .normal, baseSeed: 1)
+        print(r.summary)
+    }
+
+    /// Isolates Extreme's STRENGTH levers from its (suspect, unvalidated) bid
+    /// knobs: challenger = Hard + Extreme's search/deduction (samples 60,
+    /// shortlist 6, deepInference) but Hard's bidding (bidLean 1.6, respect
+    /// 0.68). If this beats the hard-vs-hard control, the search/deduction
+    /// levers help and the bid knobs are the drag in full Extreme.
+    func testSelfPlayExtremeStrengthLevers() async {
+        var strongHard = MonteCarloAgent.Difficulty.hard
+        strongHard.samples = 60
+        strongHard.trickCandidates = 6
+        strongHard.deepInference = true
+        let control = await AIArena.runSelfPlay(matches: 60, challenger: .hard,
+                                                champion: .hard, baseSeed: 1)
+        print("CONTROL (hard vs hard):\n" + control.summary)
+        let r = await AIArena.runSelfPlay(matches: 60, challenger: strongHard,
+                                          champion: .hard, baseSeed: 1)
+        print("TREATMENT (hard+search+deduction vs hard):\n" + r.summary)
+    }
+
     /// Opponent-free calibration: is the evaluator under-valuing hands (i.e.
     /// passing makeable ones)? Forces each seat to declare at the floor and
     /// compares estimate vs realized gross. Prints the calibration curve.

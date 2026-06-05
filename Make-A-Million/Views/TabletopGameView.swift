@@ -72,6 +72,7 @@ struct TabletopGameView: View {
                 spreadScale: 0.92)
             .padding(.top, 84)
             .padding(.bottom, 118)
+            .zIndex(2)
 
             if case .paused(let reason) = netSession.phase {
                 pausedOverlay(reason: reason)

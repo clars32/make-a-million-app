@@ -145,6 +145,9 @@ struct GameBody: View {
     @State private var discardSelection: Set<Card> = []
     @State private var selectedBidIndex: Int = 0
     @State private var bidHistoryExpanded: Bool = true
+    @State private var dealAnimationTrigger: Int = -1
+    @State private var lastDealAnimationToken: Int = -1
+    @State private var showingDealAnimation: Bool = false
 
     private var teamAName: String {
         guard seatNames.count == 4 else { return "Team A" }
@@ -161,7 +164,13 @@ struct GameBody: View {
             feltBackground
 
             Group {
-                if let snapshot = endOfHandSnapshot {
+                if showingDealAnimation {
+                    if let table = tableView {
+                        dealAnimationTable(table)
+                    } else {
+                        EmptyView()
+                    }
+                } else if let snapshot = endOfHandSnapshot {
                     handCompleteView(snapshot).padding()
                 } else if let table = tableView {
                     activeView(
@@ -190,6 +199,23 @@ struct GameBody: View {
             .onChange(of: tableView?.phase) { _, newPhase in
                 guard let newPhase else { return }
                 bidHistoryExpanded = (newPhase == .bidding)
+            }
+            .onChange(of: dealAnimationToken(for: tableView)) { _, token in
+                startDealAnimationIfNeeded(token)
+            }
+            .onAppear {
+                startDealAnimationIfNeeded(dealAnimationToken(for: tableView))
+            }
+
+            if showingDealAnimation {
+                DealingAnimationOverlay(
+                    trigger: dealAnimationTrigger,
+                    cardWidth: isTabletLayout ? 96 : 68,
+                    cardHeight: isTabletLayout ? 135 : 96,
+                    spreadScale: isTabletLayout ? 0.90 : 0.82)
+                .padding(.top, isTabletLayout ? 90 : 62)
+                .padding(.bottom, handSectionHeight)
+                .zIndex(5)
             }
         }
     }
@@ -257,17 +283,19 @@ struct GameBody: View {
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                     .zIndex(1)
             }
-
-            DealingAnimationOverlay(
-                trigger: dealAnimationToken(for: table),
-                cardWidth: isTabletLayout ? 78 : 44,
-                cardHeight: isTabletLayout ? 110 : 62,
-                spreadScale: isTabletLayout ? 0.86 : 0.68)
-            .padding(.top, isTabletLayout ? 90 : 62)
-            .padding(.bottom, handSectionHeight)
-            .zIndex(0.8)
         }
         .animation(.spring(response: 0.36, dampingFraction: 0.85), value: actionActive)
+    }
+
+    private func dealAnimationTable(_ table: PlayerView) -> some View {
+        VStack(spacing: 8) {
+            Spacer(minLength: 0)
+            boardArea(table, showLiveCards: false, showsIdleText: false)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, isTabletLayout ? 24 : 12)
+        .padding(.top, isTabletLayout ? 82 : 64)
+        .padding(.bottom, handSectionHeight)
     }
 
     @ViewBuilder
@@ -405,18 +433,21 @@ struct GameBody: View {
 
     // MARK: Board (opponent seats + center trick)
 
-    private func boardArea(_ table: PlayerView) -> some View {
+    private func boardArea(_ table: PlayerView,
+                           showLiveCards: Bool = true,
+                           showsIdleText: Bool = true) -> some View {
         let metrics = soloBoardMetrics
         let seatOffset = soloBoardSeatOffset
         return ZStack {
             CenterTrickView(
-                currentTrick: table.currentTrick,
-                completedTricks: table.completedTricks,
+                currentTrick: showLiveCards ? table.currentTrick : nil,
+                completedTricks: showLiveCards ? table.completedTricks : [],
                 trump: table.trump,
                 viewer: table.me,
                 metrics: metrics,
                 seatName: seatName,
-                cardNS: cardNS)
+                showsIdleText: showsIdleText,
+                cardNS: showLiveCards ? cardNS : nil)
 
             // All four seats are marked, relative to the local player: bottom
             // (you), left, top (partner), right — mirroring the tabletop board.
@@ -644,6 +675,21 @@ struct GameBody: View {
         switch p {
         case .bidding, .namingTrump, .widowDiscard: return true
         default: return false
+        }
+    }
+
+    private func startDealAnimationIfNeeded(_ token: Int) {
+        guard token >= 0, token != lastDealAnimationToken else { return }
+        lastDealAnimationToken = token
+        showingDealAnimation = true
+        dealAnimationTrigger = -1
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+            dealAnimationTrigger = token
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.05) {
+            if lastDealAnimationToken == token {
+                showingDealAnimation = false
+            }
         }
     }
 

@@ -68,6 +68,7 @@ struct ClientGameView: View {
                 spreadScale: 0.58)
             .padding(.horizontal, 26)
             .padding(.bottom, cardH * 0.35)
+            .zIndex(2)
 
             topBar
 

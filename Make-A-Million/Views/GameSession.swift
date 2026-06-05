@@ -69,6 +69,7 @@ final class GameSession: ObservableObject {
     private let frameInterval: Duration = .milliseconds(800)
     private let trickSettleInterval: Duration = .milliseconds(1300)
     private let settleInterval: Duration = .milliseconds(1000)
+    private let dealAnimationHoldInterval: Duration = .milliseconds(2050)
     
     // MARK: Match progression
 
@@ -104,6 +105,7 @@ final class GameSession: ObservableObject {
     private var holdPresentation = false
     private var pauseBotFramesUntil: ContinuousClock.Instant?
     private var pendingFinal: GameState? = nil
+    private var dealPresentationHoldToken: Int = -1
 
     private var runTask: Task<Void, Never>? = nil
     private var drainTask: Task<Void, Never>? = nil
@@ -156,6 +158,7 @@ final class GameSession: ObservableObject {
         holdPresentation = false
         pauseBotFramesUntil = nil
         pendingFinal = nil
+        dealPresentationHoldToken = -1
 
         // Hand-unique seed derived from the match base. Agents seed off it
         // too so their RNGs vary hand to hand (otherwise West would always
@@ -197,7 +200,7 @@ final class GameSession: ObservableObject {
                     endgameRule: endgameRule,
                     spectator: spectator,
                     onView: { [weak self] view in
-                        self?.receivePublicFrame(view)
+                        await self?.receivePublicFrameAndHoldForDealIfNeeded(view)
                     })
                 await MainActor.run {
                     self.finishHand(final)
@@ -217,6 +220,7 @@ final class GameSession: ObservableObject {
         holdPresentation = false
         pauseBotFramesUntil = nil
         pendingFinal = nil
+        dealPresentationHoldToken = -1
         displayView = nil
         finished = nil
         running = false
@@ -239,6 +243,7 @@ final class GameSession: ObservableObject {
         holdPresentation = false
         pauseBotFramesUntil = nil
         pendingFinal = nil
+        dealPresentationHoldToken = -1
         lastPublishAt = nil
         displayView = nil
         finished = nil
@@ -261,6 +266,24 @@ final class GameSession: ObservableObject {
         }
 
         enqueue(.show(view))
+    }
+
+    /// Publish the frame immediately, then hold the runner on the initial
+    /// deal frame so bots do not begin bidding until the deal animation has
+    /// had time to complete.
+    private func receivePublicFrameAndHoldForDealIfNeeded(_ view: PlayerView) async {
+        let shouldHold = shouldHoldForDealAnimation(view)
+        receivePublicFrame(view)
+        if shouldHold {
+            try? await Task.sleep(for: dealAnimationHoldInterval)
+        }
+    }
+
+    private func shouldHoldForDealAnimation(_ view: PlayerView) -> Bool {
+        let token = dealAnimationToken(for: view)
+        guard token >= 0, token != dealPresentationHoldToken else { return false }
+        dealPresentationHoldToken = token
+        return true
     }
 
     /// Latest table snapshot: last queued show, else what is on screen.

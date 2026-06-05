@@ -58,7 +58,13 @@ enum PlayoutPolicy {
 
     /// Pick a legal move for `seat` in `state`. Guarantees: returns a
     /// move from `state.legalMoves(for: seat)`. Total over all phases.
-    static func move(in state: GameState, seat: PlayerID) -> Move {
+    /// `commandingPull`: A/B-gated rollout improvement — when the declarer
+    /// draws trump, lead a commanding HIGH trump (one no other seat can beat)
+    /// instead of always the lowest, so the round is won and the lead kept.
+    /// Default off preserves the previous rollout behaviour exactly (and keeps
+    /// the `move(in:seat:)` API stable for the golden tactics tests).
+    static func move(in state: GameState, seat: PlayerID,
+                     commandingPull: Bool = false) -> Move {
         let moves = state.legalMoves(for: seat)
         precondition(!moves.isEmpty,
                      "PlayoutPolicy asked to move with no legal moves "
@@ -86,7 +92,8 @@ enum PlayoutPolicy {
             return moves[0]
 
         case .trickPlay:
-            return trickMove(in: state, seat: seat, legal: moves)
+            return trickMove(in: state, seat: seat, legal: moves,
+                             commandingPull: commandingPull)
 
         case .handComplete:
             return moves[0]
@@ -97,7 +104,8 @@ enum PlayoutPolicy {
 
     private static func trickMove(in state: GameState,
                                   seat: PlayerID,
-                                  legal: [Move]) -> Move {
+                                  legal: [Move],
+                                  commandingPull: Bool) -> Move {
         guard let trump = state.trump else { return legal[0] }
         let plays = legal.compactMap { $0.playedCard }
         guard !plays.isEmpty else { return legal[0] }
@@ -112,7 +120,8 @@ enum PlayoutPolicy {
                                     state: state,
                                     seat: seat,
                                     trump: trump,
-                                    amDeclarer: amDeclarer))
+                                    amDeclarer: amDeclarer,
+                                    commandingPull: commandingPull))
         } else {
             return .play(chooseFollow(plays: plays,
                                       onTable: onTable,
@@ -129,7 +138,8 @@ enum PlayoutPolicy {
                                    state: GameState,
                                    seat: PlayerID,
                                    trump: CardColor,
-                                   amDeclarer: Bool) -> Card {
+                                   amDeclarer: Bool,
+                                   commandingPull: Bool = false) -> Card {
 
         // Helper: has this color been led in any completed trick?
         func colorLed(_ color: CardColor) -> Bool {
@@ -161,9 +171,24 @@ enum PlayoutPolicy {
         // ---- 1. Pull trumps (declarer principle).
         //
         // As declarer with strong trump and the Tiger or large trump still
-        // loose, lead a LOW trump — not money, not the Tiger, just our
-        // smallest trump card — to draw out opponents'.
+        // loose, draw it out. By default lead a LOW trump (not money, not the
+        // Tiger). With `commandingPull` (A/B), if we hold a HIGH trump that no
+        // other seat can beat, lead THAT instead — the round still wins and we
+        // keep the lead, rather than donating it (and any banked money) to an
+        // opponent's higher trump. Full-info rollout, so we can read the table.
         if amDeclarer && trumpStillOut >= 2 && myTrump.count >= 4 {
+            if commandingPull {
+                let highestOtherTrump = state.hands
+                    .filter { $0.key != seat }
+                    .flatMap { $0.value }
+                    .filter { $0.effectiveColor(trump: trump) == trump }
+                    .map { rankOf($0) }
+                    .max() ?? -1
+                let commander = myTrump
+                    .filter { !$0.isSpecial && rankOf($0) > highestOtherTrump }
+                    .max { rankOf($0) < rankOf($1) }
+                if let c = commander { return c }
+            }
             let lowTrump = myTrump
                 .filter { !$0.isMoney && !$0.isSpecial }
                 .min { rankOf($0) < rankOf($1) }

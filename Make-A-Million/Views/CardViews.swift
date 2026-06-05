@@ -58,17 +58,14 @@ func keyedPlays(_ plays: [PlayedCard]) -> [(key: CardKey, play: PlayedCard)] {
 
 func dealAnimationToken(for view: PlayerView?) -> Int {
     guard let view,
-          view.phase == .bidding,
-          !view.myHand.isEmpty,
-          view.currentTrick?.plays.isEmpty ?? true,
+          view.phase != .handComplete,
           view.completedTricks.isEmpty else {
         return -1
     }
 
-    return view.myHand.reduce(view.opener.raw + 31) { partial, card in
-        let key = cardKey(card)
-        return partial &* 31 &+ key.g &* 101 &+ key.c &* 17 &+ key.r
-    }
+    let team0 = view.matchScore[0, default: 0] / 1000
+    let team1 = view.matchScore[1, default: 0] / 1000
+    return 10_000 &+ view.opener.raw &* 1_000_000 &+ team0 &* 1_000 &+ team1
 }
 
 // MARK: - Card face
@@ -353,18 +350,18 @@ struct DealingAnimationOverlay: View {
         shuffling = false
         dealt = false
 
-        withAnimation(.easeInOut(duration: 0.14).repeatCount(5, autoreverses: true)) {
+        withAnimation(.easeInOut(duration: 0.18).repeatCount(5, autoreverses: true)) {
             shuffling = true
         }
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.62) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.82) {
             guard visible else { return }
-            withAnimation(.easeOut(duration: 0.52)) {
+            withAnimation(.easeOut(duration: 0.72)) {
                 dealt = true
             }
         }
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.18) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.92) {
             guard visible else { return }
             visible = false
         }

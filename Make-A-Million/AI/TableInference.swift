@@ -75,7 +75,7 @@ struct TableInference {
 
     // MARK: - Build
 
-    init(view: PlayerView) {
+    init(view: PlayerView, deepInference: Bool = false) {
         self.me = view.me
         self.myHand = view.myHand
         self.trump = view.trump
@@ -202,6 +202,23 @@ struct TableInference {
             }
             for info in view.completedTricks { scan(info.leader, info.plays) }
             if let cur = view.currentTrick { scan(cur.leader, cur.plays) }
+
+            // Count-exhaustion voids (deep inference / Extreme only). Once every
+            // card of a color is accounted for — in my hand or already played —
+            // NO other seat can be holding one, so they are ALL void in it, even
+            // if they never failed to follow. This catches voids that arose
+            // AFTER a seat last followed the suit, letting the agent foresee a
+            // ruff of an otherwise-"boss" side card whose suit has run dry.
+            // Provable: `bucket[color]` is exactly the still-unaccounted pool.
+            // (Conservative w.r.t. the widow: undiscardable widow cards stay in
+            // the pool, so a suit never falsely reads as exhausted.)
+            if deepInference {
+                for color in CardColor.allCases where (bucket[color]?.isEmpty ?? true) {
+                    for s in Seats.all where s != view.me {
+                        voids[s, default: []].insert(color)
+                    }
+                }
+            }
         }
         self.voids = voids
     }

@@ -86,4 +86,39 @@ final class AIWorldTests: XCTestCase {
         XCTAssertLessThan(timesWithDeclarer, samples,
                           "Without deduction the Tiger should sometimes land elsewhere")
     }
+
+    /// `declarerTrumpBias` (shape prior) should give the declarer MORE trump on
+    /// average than uniform dealing. I'm a defender holding a full red suit (so
+    /// zero trump), trump is black, nothing played — all 14 trumps are free to
+    /// distribute. Seeds are fixed, so this is deterministic, not flaky.
+    func testDeclarerTrumpBiasLengthensDeclarerTrump() {
+        let me = PlayerID(0)
+        let declarer = PlayerID(1)
+        let myHand: [Card] = Card.Rank.allCases.map { .colored(.red, $0) }  // 0 trump
+        let view = PlayerView(
+            me: me, myHand: myHand, phase: .trickPlay, toAct: declarer,
+            trump: .black, highBid: 200_000, highBidder: declarer,
+            passed: [], opener: declarer, bidHistory: [], widow: nil,
+            currentTrick: nil, completedTrickCount: 0, completedTricks: [],
+            matchScore: [0: 0, 1: 0], legalMoves: [])
+
+        func avgDeclarerTrump(bias: Double) -> Double {
+            var total = 0, n = 0
+            for s in 0..<60 {
+                var det = Determinizer(view: view, seed: UInt64(s) &+ 1,
+                                       bidLeanStrength: 0, deduceWidowHoldings: false,
+                                       declarerTrumpBias: bias)
+                guard let w = det.sample() else { continue }
+                let hand = w.state.hands[declarer] ?? []
+                total += hand.filter { $0.effectiveColor(trump: .black) == .black }.count
+                n += 1
+            }
+            return n > 0 ? Double(total) / Double(n) : 0
+        }
+
+        let biased = avgDeclarerTrump(bias: 0.8)
+        let unbiased = avgDeclarerTrump(bias: 0.0)
+        XCTAssertGreaterThan(biased, unbiased + 0.75,
+            "declarerTrumpBias should lengthen the declarer's trump (got \(biased) vs \(unbiased))")
+    }
 }

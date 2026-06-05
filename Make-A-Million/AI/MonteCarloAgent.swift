@@ -102,6 +102,32 @@ struct MonteCarloAgent: PlayerAgent {
         /// measured it positive (paired +~7pp, lower set-rate). Kept as a field,
         /// not hard-wired, so it stays A/B-able (turn it off on one side).
         var deduceWidowHoldings: Bool = true
+        /// Extreme-only deeper table-reading. Currently: count-exhaustion voids
+        /// — once every card of a color is accounted for (in my hand or already
+        /// played), the other seats are void in it even if they never failed to
+        /// follow, so the agent foresees a ruff of an otherwise-"boss" side card
+        /// whose suit has run dry. Provably correct, but TIERED (off below
+        /// Extreme) to keep Extreme a distinctly stronger card-counter.
+        var deepInference: Bool = false
+        /// SHAPE prior for world sampling: the declarer NAMED trump, so they
+        /// are likely LONG in it. Biases trump cards (any rank) toward the
+        /// declarer's sampled hand. Soft prior (shifts the distribution, never
+        /// breaks a count/void/widow constraint). 0 = off; higher = stronger
+        /// pull (≈ exp(value) odds multiplier per trump card).
+        ///
+        /// PARKED AT 0 (June 2026): measured −~2pp at BOTH 0.4 and 0.8 in
+        /// paired self-play. Hypothesis: `bidLeanStrength` already drifts high
+        /// trump to the (bidder) declarer, so adding a length bias on top
+        /// over-concentrates trump there and the defenders under-model their
+        /// own/partner's trump. Lever retained for a future refinement — bias
+        /// only LOW trump, or pair it with a reduced `bidLeanStrength`.
+        var declarerTrumpBias: Double = 0.0
+        /// A/B-gated ROLLOUT-policy improvement (algorithm work, not a knob):
+        /// when the declarer draws trump in a rollout, lead a commanding high
+        /// trump rather than the lowest. Sharper rollouts → better MCTS value
+        /// estimates → potentially better moves at every tier. Off by default
+        /// until a paired A/B confirms it; promote globally if it helps.
+        var rolloutCommandingPull: Bool = false
 
         // ── Selectable strength tiers (Settings → Opponents) ───────────────
         // The strength ladder is driven, in order, by: `samples` (search
@@ -129,14 +155,19 @@ struct MonteCarloAgent: PlayerAgent {
                                         bidAggression: 1.05, partnerRespect: 0.68,
                                         matchAwareness: 1.0, trickCandidates: 5,
                                         bidLeanStrength: 1.6)
-        /// `Extreme` — maximum search + table-reading. Widow deduction is now
-        /// universal (default-on); the planned count-exhaustion voids and
-        /// bid-derived shape priors in AIWorld/TableInference are what will
-        /// eventually set Extreme apart from Hard.
-        static let extreme = Difficulty(samples: 60, blunderRate: 0.0,
-                                        bidAggression: 1.05, partnerRespect: 0.60,
+        /// `Extreme` — RIGHT-SIZED (June 2026). Paired self-play showed neither
+        /// extra samples (60 vs 36) nor pushier bid knobs (bidLean 2.0,
+        /// respect 0.60) beat Hard — the MCTS search has plateaued at Hard's
+        /// settings, and the unvalidated bid knobs added drag. So Extreme is now
+        /// Hard's VALIDATED bidding + the count-exhaustion card-counting
+        /// deduction + a small search bump (samples 44, shortlist 6). Genuine
+        /// additional strength needs ALGORITHM work (PlayoutPolicy / shortlist
+        /// quality — the high-leverage levers), not more compute.
+        static let extreme = Difficulty(samples: 44, blunderRate: 0.0,
+                                        bidAggression: 1.05, partnerRespect: 0.68,
                                         matchAwareness: 1.0, trickCandidates: 6,
-                                        bidLeanStrength: 2.0)
+                                        bidLeanStrength: 1.6,
+                                        deepInference: true)
 
         /// Player-facing strength tiers. A small, Codable, ordered enum so the
         /// settings layer and UI deal in names, not tuning constants.
@@ -393,7 +424,8 @@ struct MonteCarloAgent: PlayerAgent {
     // MARK: - Trick play (heuristic shortlist + MCTS)
 
     private func decideTrickPlay(_ view: PlayerView, legal: [Move]) -> Move {
-        let inference = TableInference(view: view)
+        let inference = TableInference(view: view,
+                                       deepInference: difficulty.deepInference)
         let shortlist = trickShortlist(view: view,
                                        legal: legal,
                                        inference: inference)
@@ -431,7 +463,8 @@ struct MonteCarloAgent: PlayerAgent {
         for s in 0..<difficulty.samples {
             var det = Determinizer(view: view, seed: seedBox.nextRaw() &+ UInt64(s),
                                    bidLeanStrength: difficulty.bidLeanStrength,
-                                   deduceWidowHoldings: difficulty.deduceWidowHoldings)
+                                   deduceWidowHoldings: difficulty.deduceWidowHoldings,
+                                   declarerTrumpBias: difficulty.declarerTrumpBias)
             guard let world = det.sample() ?? det.sampleUnconstrained() else { continue }
             for cand in shortlist {
                 guard let afterMine = try? world.state.applying(cand, by: view.me)
@@ -940,7 +973,8 @@ struct MonteCarloAgent: PlayerAgent {
         var s = start
         var steps = 0
         while s.phase != .handComplete && steps < 600 {
-            let mv = PlayoutPolicy.move(in: s, seat: s.toAct)
+            let mv = PlayoutPolicy.move(in: s, seat: s.toAct,
+                                        commandingPull: difficulty.rolloutCommandingPull)
             guard let ns = try? s.applying(mv, by: s.toAct) else { break }
             s = ns
             steps += 1
