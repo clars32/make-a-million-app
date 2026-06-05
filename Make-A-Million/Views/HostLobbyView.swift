@@ -138,7 +138,8 @@ struct HostLobbyView: View {
                     .font(TableTypography.display(.title2, weight: .bold))
                     .foregroundStyle(.white)
                 Text("Hosted by \(playerName)")
-                    .font(.caption).foregroundStyle(.white.opacity(0.66))
+                    .font(TableTypography.display(.caption))
+                    .foregroundStyle(.white.opacity(0.66))
             }
             Spacer()
             Button("Stop") {
@@ -156,9 +157,9 @@ struct HostLobbyView: View {
                 .fill(multipeer.isAdvertising ? TableStyle.cardPlayable : TableStyle.passGray)
                 .frame(width: 8, height: 8)
             Text(multipeer.isAdvertising
-                 ? "Visible to nearby devices — tell others to tap “Join a Table”"
-                 : "Not advertising")
-                .font(.caption)
+                ? "Visible to nearby devices — tell others to tap “Join a Table”"
+                : "Not advertising")
+                .font(TableTypography.display(.caption))
                 .foregroundStyle(.white.opacity(0.68))
         }
         .padding(12)
@@ -200,7 +201,10 @@ struct HostLobbyView: View {
         let kind = seatKind(for: seat)
         
         let rowContent = HStack(spacing: 12) {
-            Text(label).font(.caption).bold().foregroundStyle(.white.opacity(0.60)).frame(width: 48, alignment: .leading)
+            Text(label)
+                .font(TableTypography.display(.caption, weight: .bold))
+                .foregroundStyle(.white.opacity(0.60))
+                .frame(width: 48, alignment: .leading)
             seatIcon(kind: kind)
             Text(seatContent(seat: seat, kind: kind))
                 .foregroundStyle(kind == .empty ? AnyShapeStyle(.white.opacity(0.42)) : AnyShapeStyle(.white))
@@ -267,7 +271,7 @@ struct HostLobbyView: View {
             switch kind { case .host: return "person.fill"; case .peer: return "person.fill.checkmark"; case .empty: return "person.fill.questionmark" }
         }()
         Image(systemName: name)
-            .font(.title3)
+            .font(TableTypography.display(.title3))
             .foregroundStyle(kind.borderColor)
             .frame(width: 40, height: 40)
             .background(Circle().fill(kind.borderColor.opacity(0.15)))
@@ -277,9 +281,9 @@ struct HostLobbyView: View {
     @ViewBuilder
     private func seatBadge(kind: SeatKind) -> some View {
         switch kind {
-        case .host: Text("HOST").font(.caption2).bold().foregroundStyle(TableStyle.cardSelected)
-        case .peer: Text("JOINED").font(.caption2).bold().foregroundStyle(TableStyle.cardPlayable)
-        case .empty: Text("BOT").font(.caption2).bold().foregroundStyle(TableStyle.passGray)
+        case .host: Text("HOST").font(TableTypography.display(.caption2, weight: .bold)).foregroundStyle(TableStyle.cardSelected)
+        case .peer: Text("JOINED").font(TableTypography.display(.caption2, weight: .bold)).foregroundStyle(TableStyle.cardPlayable)
+        case .empty: Text("BOT").font(TableTypography.display(.caption2, weight: .bold)).foregroundStyle(TableStyle.passGray)
         }
     }
 
@@ -288,7 +292,7 @@ struct HostLobbyView: View {
     private var startButton: some View {
         Button { startHand() } label: {
             Text("Start hand")
-                .font(.headline)
+                .font(TableTypography.display(.headline, weight: .bold))
                 .foregroundStyle(.white)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 14)

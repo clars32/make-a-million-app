@@ -111,13 +111,14 @@ private struct ModePickerView: View {
                         .font(TableTypography.display(.largeTitle, weight: .heavy))
                         .foregroundStyle(.white)
                     Text("A trick-taking card game")
-                        .font(.subheadline)
+                        .font(TableTypography.display(.subheadline))
                         .foregroundStyle(.white.opacity(0.66))
                 }
 
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Your name")
-                        .font(.caption).foregroundStyle(.white.opacity(0.68))
+                        .font(TableTypography.display(.caption))
+                        .foregroundStyle(.white.opacity(0.68))
                     TextField("Player", text: $playerName)
                         .textFieldStyle(.roundedBorder)
                         .autocorrectionDisabled()
@@ -157,7 +158,7 @@ private struct ModePickerView: View {
 
             Button(action: onOpenSettings) {
                 Image(systemName: "gearshape.fill")
-                    .font(.title3)
+                    .font(TableTypography.display(.title3))
                     .foregroundStyle(TableStyle.cardSelected)
                     .padding(10)
                     .background(.ultraThinMaterial, in: Circle())
@@ -213,16 +214,16 @@ private struct ModeButton: View {
         Button(action: action) {
             HStack(spacing: 14) {
                 Image(systemName: systemImage)
-                    .font(.title2)
+                    .font(TableTypography.display(.title2))
                     .frame(width: 36, height: 36)
                     .foregroundStyle(color)
                     .background(Circle().fill(color.opacity(0.18)))
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title)
-                        .font(.headline)
+                        .font(TableTypography.display(.headline, weight: .bold))
                         .foregroundStyle(.white)
                     Text(subtitle)
-                        .font(.caption)
+                        .font(TableTypography.display(.caption))
                         .foregroundStyle(.white.opacity(0.70))
                 }
                 Spacer()

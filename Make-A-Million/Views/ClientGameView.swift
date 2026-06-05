@@ -189,7 +189,7 @@ struct ClientGameView: View {
             return nil
         }
         return HStack(spacing: 10) {
-            Text("Trump:").font(.subheadline.weight(.semibold)).foregroundStyle(.white.opacity(0.9))
+            Text("Trump:").font(TableTypography.display(.subheadline, weight: .semibold)).foregroundStyle(.white.opacity(0.9))
             ForEach(trumpMoves, id: \.0) { color, move in
                 let swatch = TableStyle.suitSwatch(color)
                 Button { session.submit(move) } label: {
@@ -215,7 +215,7 @@ struct ClientGameView: View {
         let move = ready ? matchingDiscardMove(in: view) : nil
         return HStack(spacing: 12) {
             Text("Discard 3 — tap your cards")
-                .font(.subheadline.weight(.semibold)).foregroundStyle(.white.opacity(0.9))
+                .font(TableTypography.display(.subheadline, weight: .semibold)).foregroundStyle(.white.opacity(0.9))
             Text("\(discardSelection.count)/3")
                 .font(TableTypography.money(.subheadline))
                 .foregroundStyle(.white)
@@ -256,7 +256,7 @@ struct ClientGameView: View {
                     onExit()
                 } label: {
                     Image(systemName: "rectangle.portrait.and.arrow.right")
-                        .font(.subheadline.weight(.semibold))
+                        .font(TableTypography.display(.subheadline, weight: .semibold))
                         .foregroundStyle(.white.opacity(0.85))
                         .padding(8)
                         .background(.ultraThinMaterial, in: Circle())
@@ -273,7 +273,7 @@ struct ClientGameView: View {
         VStack(spacing: 12) {
             ProgressView().tint(.white).scaleEffect(1.3)
             Text("Waiting for the table…")
-                .font(.callout).foregroundStyle(.white.opacity(0.8))
+                .font(TableTypography.display(.callout)).foregroundStyle(.white.opacity(0.8))
         }
     }
 
@@ -282,16 +282,16 @@ struct ClientGameView: View {
     private func pausedOverlay(reason: PauseReason) -> some View {
         overlayCard {
             Image(systemName: "pause.circle.fill").font(.system(size: 48)).foregroundStyle(TableStyle.teamAmber)
-            Text("Table paused").font(.title3).bold().foregroundStyle(.white)
+            Text("Table paused").font(TableTypography.display(.title3, weight: .bold)).foregroundStyle(.white)
             Text(messageFor(reason)).multilineTextAlignment(.center).foregroundStyle(.white.opacity(0.68))
-            Text("Waiting for the host…").font(.caption).foregroundStyle(.white.opacity(0.42)).padding(.top, 4)
+            Text("Waiting for the host…").font(TableTypography.display(.caption)).foregroundStyle(.white.opacity(0.42)).padding(.top, 4)
         }
     }
 
     private var disconnectedOverlay: some View {
         overlayCard {
             Image(systemName: "wifi.slash").font(.system(size: 44)).foregroundStyle(TableStyle.teamAmber)
-            Text("Disconnected").font(.title3).bold().foregroundStyle(.white)
+            Text("Disconnected").font(TableTypography.display(.title3, weight: .bold)).foregroundStyle(.white)
             Text("Lost connection to the host.").foregroundStyle(.white.opacity(0.68))
             Button("Back to menu") { session.stop(); onExit() }
                 .buttonStyle(.borderedProminent)

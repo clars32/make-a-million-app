@@ -104,7 +104,7 @@ struct HostGameView: View {
                 Image(systemName: "pause.circle.fill")
                     .font(.system(size: 48))
                     .foregroundStyle(TableStyle.teamAmber)
-                Text("Table paused").font(.title3).bold().foregroundStyle(.white)
+                Text("Table paused").font(TableTypography.display(.title3, weight: .bold)).foregroundStyle(.white)
                 Text(messageFor(reason))
                     .multilineTextAlignment(.center)
                     .foregroundStyle(.white.opacity(0.68))

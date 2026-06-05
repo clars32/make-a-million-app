@@ -35,7 +35,7 @@ struct GameView: View {
                 Button("Back", action: onExit)
                     .buttonStyle(.bordered)
             }
-            .font(usesTabletChrome ? .title3.weight(.semibold) : .body)
+            .font(usesTabletChrome ? TableTypography.display(.title3, weight: .semibold) : TableTypography.display(.body))
             .controlSize(usesTabletChrome ? .large : .regular)
             .padding(usesTabletChrome ? 24 : 16)
         }
@@ -198,7 +198,8 @@ struct GameBody: View {
         VStack(spacing: 12) {
             ProgressView().tint(.white).scaleEffect(1.2)
             Text("Waiting for the table…")
-                .font(.callout).foregroundStyle(.white.opacity(0.8))
+                .font(TableTypography.display(.callout))
+                .foregroundStyle(.white.opacity(0.8))
         }
     }
 
@@ -332,13 +333,14 @@ struct GameBody: View {
         let match = table.matchScore[team, default: 0]
         return VStack(alignment: .leading, spacing: isTabletLayout ? 4 : 2) {
             Text(team == 0 ? teamAName : teamBName)
-                .font((isTabletLayout ? Font.callout : Font.caption2).bold()).foregroundStyle(tint)
+                .font(TableTypography.display(isTabletLayout ? .callout : .caption2, weight: .bold))
+                .foregroundStyle(tint)
                 .lineLimit(1).minimumScaleFactor(0.7)
             Text("$\(hand / 1000)k")
                 .font(TableTypography.money(isTabletLayout ? .title3 : .callout))
                 .foregroundStyle(.white)
             Text("$\(match / 1000)k")
-                .font((isTabletLayout ? Font.callout : Font.caption2).monospacedDigit())
+                .font(TableTypography.money(isTabletLayout ? .callout : .caption2, weight: .regular))
                 .foregroundStyle(.white.opacity(0.65))
         }
         .padding(.horizontal, isTabletLayout ? 16 : 9)
@@ -365,7 +367,8 @@ struct GameBody: View {
                        height: isTabletLayout ? 18 : 12)
                 .overlay(Circle().stroke(.white.opacity(0.7), lineWidth: 1))
             Text(color.displayName)
-                .font((isTabletLayout ? Font.headline : Font.caption).weight(.bold)).foregroundStyle(.white)
+                .font(TableTypography.display(isTabletLayout ? .headline : .caption, weight: .bold))
+                .foregroundStyle(.white)
                 .lineLimit(1).minimumScaleFactor(0.75)
         }
         .padding(.horizontal, isTabletLayout ? 14 : 9)
@@ -381,7 +384,8 @@ struct GameBody: View {
                 .font(isTabletLayout ? .subheadline : .caption2)
                 .foregroundStyle(TableStyle.tableGold)
             Text("\(seatShort(bidder)) $\(amount / 1000)k")
-                .font((isTabletLayout ? Font.headline : Font.caption).weight(.bold)).foregroundStyle(.white)
+                .font(TableTypography.display(isTabletLayout ? .headline : .caption, weight: .bold))
+                .foregroundStyle(.white)
                 .lineLimit(1).minimumScaleFactor(0.75)
         }
         .padding(.horizontal, isTabletLayout ? 14 : 9)
@@ -483,7 +487,7 @@ struct GameBody: View {
             HStack(spacing: isTabletLayout ? 6 : 4) {
                 if dealerSeat(table) == seat {
                     Text("D")
-                        .font((isTabletLayout ? Font.callout : Font.caption2).bold())
+                        .font(TableTypography.display(isTabletLayout ? .callout : .caption2, weight: .bold))
                         .foregroundStyle(.black)
                         .frame(width: isTabletLayout ? 24 : 16,
                                height: isTabletLayout ? 24 : 16)
@@ -517,7 +521,7 @@ struct GameBody: View {
         if table.phase == .bidding {
             if table.passed.contains(seat) {
                 Text("Passed")
-                    .font(isTabletLayout ? .callout : .caption2)
+                    .font(TableTypography.display(isTabletLayout ? .callout : .caption2))
                     .foregroundStyle(.white.opacity(0.55))
             } else if let last = table.bidHistory.last(where: { $0.player == seat }) {
                 Text(bidHistoryLabel(last.action))
@@ -525,7 +529,7 @@ struct GameBody: View {
                     .foregroundStyle(.white)
             } else {
                 Text("…")
-                    .font(isTabletLayout ? .callout : .caption2)
+                    .font(TableTypography.display(isTabletLayout ? .callout : .caption2))
                     .foregroundStyle(.white.opacity(0.4))
             }
         } else {
@@ -537,7 +541,7 @@ struct GameBody: View {
                         .foregroundStyle(TableStyle.tableGold)
                 }
                 Text("\(tricks) trick\(tricks == 1 ? "" : "s")")
-                    .font(isTabletLayout ? .callout : .caption2)
+                    .font(TableTypography.display(isTabletLayout ? .callout : .caption2))
                     .foregroundStyle(.white.opacity(0.85))
             }
         }
@@ -554,7 +558,7 @@ struct GameBody: View {
                 if !widow.isEmpty {
                     VStack(alignment: .leading, spacing: isTabletLayout ? 7 : 4) {
                         Text("Widow")
-                            .font(isTabletLayout ? .callout : .caption2)
+                            .font(TableTypography.display(isTabletLayout ? .callout : .caption2))
                             .foregroundStyle(.white.opacity(0.7))
                         HStack(spacing: isTabletLayout ? 8 : 5) {
                             ForEach(keyedHand(widow), id: \.key) { entry in
@@ -572,7 +576,7 @@ struct GameBody: View {
                 if showLast, let last = table.lastTrick {
                     VStack(alignment: .trailing, spacing: isTabletLayout ? 7 : 4) {
                         Text("Last trick · \(seatShort(last.winner)) $\(last.value / 1000)k")
-                            .font((isTabletLayout ? Font.callout : Font.caption2).monospacedDigit().bold())
+                            .font(TableTypography.money(isTabletLayout ? .callout : .caption2))
                             .foregroundStyle(.white.opacity(0.75))
                             .lineLimit(1)
                             .minimumScaleFactor(0.8)
@@ -597,7 +601,7 @@ struct GameBody: View {
 
     private func hintText(_ s: String) -> some View {
         Text(s)
-            .font(isTabletLayout ? .callout : .caption)
+            .font(TableTypography.display(isTabletLayout ? .callout : .caption))
             .italic()
             .foregroundStyle(.white.opacity(0.7))
     }
@@ -607,7 +611,7 @@ struct GameBody: View {
     private func handSection(table: PlayerView, decision: PlayerView, interactive: Bool) -> some View {
         VStack(spacing: isTabletLayout ? 4 : 2) {
             Text("Your hand (\(table.myHand.count))")
-                .font(isTabletLayout ? .callout : .caption2)
+                .font(TableTypography.display(isTabletLayout ? .callout : .caption2))
                 .foregroundStyle(.white.opacity(0.6))
             FannedHand(cards: table.myHand,
                        cardWidth: handCardWidth,
@@ -659,12 +663,13 @@ struct GameBody: View {
         let myMoney = view.myHand.reduce(0) { $0 + $1.moneyValue }
         return HStack(spacing: 12) {
             Image(systemName: "arrow.triangle.2.circlepath")
-                .font(.title2)
+                .font(TableTypography.display(.title2))
                 .foregroundStyle(TableStyle.teamAmber)
             VStack(alignment: .leading, spacing: 2) {
-                Text("Misdeal — redealing").font(.subheadline).bold()
+                Text("Misdeal — redealing").font(TableTypography.display(.subheadline, weight: .bold))
                 Text("A player has too little money in hand. Your hand: $\(myMoney / 1000)k in money cards.")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(TableTypography.display(.caption))
+                    .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 8)
@@ -775,7 +780,7 @@ struct GameBody: View {
         }
         return VStack(alignment: .leading, spacing: 10) {
             Text("Pick the trump color for this hand. You'll discard three after.")
-                .font(.caption).foregroundStyle(.white.opacity(0.8))
+                .font(TableTypography.display(.caption)).foregroundStyle(.white.opacity(0.8))
             LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
                 ForEach(trumpMoves, id: \.0) { color, move in
                     // `CardColor.black` maps to `Color.primary` in `swatch`, which
@@ -818,10 +823,10 @@ struct GameBody: View {
 
         return VStack(alignment: .leading, spacing: 8) {
             Text(discardHelpText(for: view))
-                .font(.caption).foregroundStyle(.white.opacity(0.8))
+                .font(TableTypography.display(.caption)).foregroundStyle(.white.opacity(0.8))
             if ready && legalMove == nil {
                 Text("That discard isn't legal — you can only discard money cards when you have no other choice.")
-                    .font(.caption).foregroundStyle(TableStyle.teamAmber)
+                    .font(TableTypography.display(.caption)).foregroundStyle(TableStyle.teamAmber)
             }
             HStack(spacing: 8) {
                 Text("\(count) of 3 selected")
@@ -894,10 +899,10 @@ struct GameBody: View {
         let matchOver = s.matchWinner != nil
         return VStack(spacing: 14) {
             Text(matchOver ? "Match complete" : "Hand complete")
-                .font(.title2).bold().foregroundStyle(.white)
+                .font(TableTypography.display(.title2, weight: .bold)).foregroundStyle(.white)
             if let winner = s.matchWinner {
                 Text("\(winner == 0 ? teamAName : teamBName) wins!")
-                    .font(.headline).foregroundStyle(TableStyle.tableGold)
+                    .font(TableTypography.display(.headline, weight: .bold)).foregroundStyle(TableStyle.tableGold)
             }
             Text("\(teamAName): $\(a / 1000)k").foregroundStyle(.white)
             Text("\(teamBName): $\(b / 1000)k").foregroundStyle(.white.opacity(0.7))
@@ -918,21 +923,21 @@ struct GameBody: View {
         DisclosureGroup(isExpanded: $bidHistoryExpanded) {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 8) {
-                    Text("Opener: \(seatName(opener))").font(.caption2).bold().foregroundStyle(TableStyle.cardSelected)
+                    Text("Opener: \(seatName(opener))").font(TableTypography.display(.caption2, weight: .bold)).foregroundStyle(TableStyle.cardSelected)
                     Spacer()
                 }
                 if records.isEmpty {
-                    Text("Waiting for \(seatName(opener)) to open").font(.caption2).foregroundStyle(.tertiary)
+                    Text("Waiting for \(seatName(opener)) to open").font(TableTypography.display(.caption2)).foregroundStyle(.tertiary)
                 } else {
                     FlowRow(spacing: 6) {
                         ForEach(Array(records.enumerated()), id: \.offset) { index, record in
                             let firstMention = !records[..<index].contains { $0.player == record.player }
                             HStack(spacing: 4) {
-                                Text(seatShort(record.player)).font(.caption2).foregroundStyle(.secondary)
+                                Text(seatShort(record.player)).font(TableTypography.display(.caption2)).foregroundStyle(.secondary)
                                 if record.player == opener && firstMention {
-                                    Text("opens").font(.caption2).foregroundStyle(TableStyle.cardSelected)
+                                    Text("opens").font(TableTypography.display(.caption2)).foregroundStyle(TableStyle.cardSelected)
                                 }
-                                Text(bidHistoryLabel(record.action)).font(.caption2).bold().monospacedDigit()
+                                Text(bidHistoryLabel(record.action)).font(TableTypography.money(.caption2))
                             }
                             .padding(.horizontal, 7).padding(.vertical, 5)
                             .background(RoundedRectangle(cornerRadius: 6).fill(bidHistoryTint(record).opacity(0.14)))
@@ -945,7 +950,7 @@ struct GameBody: View {
         } label: {
             bidHistorySummary(records: records, opener: opener)
         }
-        .font(.caption)
+        .font(TableTypography.display(.caption))
         .padding(10)
         .tablePanel(cornerRadius: 12, shadowOpacity: 0.16)
     }
@@ -955,14 +960,14 @@ struct GameBody: View {
             if case .bid = rec.action { return true }; return false
         }
         return HStack(spacing: 8) {
-            Text("Bid history").font(.caption).foregroundStyle(.secondary)
+            Text("Bid history").font(TableTypography.display(.caption)).foregroundStyle(.secondary)
             Spacer()
             if let w = winning, case .bid(let amount) = w.action {
                 Text("\(seatShort(w.player)) $\(amount / 1000)k")
                     .font(TableTypography.money(.caption))
                     .foregroundStyle(TableStyle.tableGold)
             } else {
-                Text("Opener: \(seatName(opener))").font(.caption2).foregroundStyle(.tertiary)
+                Text("Opener: \(seatName(opener))").font(TableTypography.display(.caption2)).foregroundStyle(.tertiary)
             }
         }
     }

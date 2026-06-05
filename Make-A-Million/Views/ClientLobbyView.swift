@@ -92,7 +92,8 @@ struct ClientLobbyView: View {
                     .font(TableTypography.display(.title2, weight: .bold))
                     .foregroundStyle(.white)
                 Text("Searching as \(playerName)")
-                    .font(.caption).foregroundStyle(.white.opacity(0.66))
+                    .font(TableTypography.display(.caption))
+                    .foregroundStyle(.white.opacity(0.66))
             }
             Spacer()
             Button("Back") {
@@ -124,7 +125,8 @@ struct ClientLobbyView: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
                 Text("Nearby tables")
-                    .font(.caption).foregroundStyle(.white.opacity(0.66))
+                    .font(TableTypography.display(.caption))
+                    .foregroundStyle(.white.opacity(0.66))
                 Spacer()
                 ProgressView().scaleEffect(0.7)
                     .tint(TableStyle.tableGold)
@@ -143,11 +145,11 @@ struct ClientLobbyView: View {
                             }
                         }
                     Text("Looking for tables…")
-                        .font(.callout)
+                        .font(TableTypography.display(.callout))
                         .foregroundStyle(.white.opacity(0.52))
                         .italic()
                     Text("Make sure the host has tapped “Host a Table.”")
-                        .font(.caption2)
+                        .font(TableTypography.display(.caption2))
                         .foregroundStyle(.white.opacity(0.42))
                         .multilineTextAlignment(.center)
                 }
@@ -173,9 +175,12 @@ struct ClientLobbyView: View {
                     .foregroundStyle(TableStyle.teamAmber)
                     .frame(width: 22)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(host.displayName).font(.headline).foregroundStyle(.white)
+                    Text(host.displayName)
+                        .font(TableTypography.display(.headline, weight: .bold))
+                        .foregroundStyle(.white)
                     Text("Tap to join")
-                        .font(.caption).foregroundStyle(.white.opacity(0.60))
+                        .font(TableTypography.display(.caption))
+                        .foregroundStyle(.white.opacity(0.60))
                 }
                 Spacer()
                 Image(systemName: "chevron.right")
@@ -194,10 +199,11 @@ struct ClientLobbyView: View {
         VStack(spacing: 14) {
             ProgressView().scaleEffect(1.4).tint(TableStyle.tableGold)
             Text("Connecting to \(peerName)…")
-                .font(.headline)
+                .font(TableTypography.display(.headline, weight: .bold))
                 .foregroundStyle(.white)
             Text("The host has to accept your invitation.")
-                .font(.caption).foregroundStyle(.white.opacity(0.62))
+                .font(TableTypography.display(.caption))
+                .foregroundStyle(.white.opacity(0.62))
         }
         .frame(maxWidth: .infinity)
         .padding(24)
@@ -208,7 +214,7 @@ struct ClientLobbyView: View {
         VStack(spacing: 14) {
             ProgressView().scaleEffect(1.2).tint(TableStyle.tableGold)
             Text("Waiting for host to start…")
-                .font(.headline)
+                .font(TableTypography.display(.headline, weight: .bold))
                 .foregroundStyle(.white)
         }
         .frame(maxWidth: .infinity)
@@ -222,7 +228,7 @@ struct ClientLobbyView: View {
                 .font(.system(size: 40))
                 .foregroundStyle(TableStyle.teamAmber)
             Text(message).multilineTextAlignment(.center)
-                .font(.callout)
+                .font(TableTypography.display(.callout))
                 .foregroundStyle(.white.opacity(0.68))
             Button("Try again") {
                 multipeer.startBrowsing()

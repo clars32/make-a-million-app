@@ -134,7 +134,7 @@ struct HandRevealPanel: View {
                 Divider()
                 HStack {
                     Text("Hand reveal (debug)")
-                        .font(.caption).bold().foregroundStyle(.secondary)
+                        .font(TableTypography.display(.caption, weight: .bold)).foregroundStyle(.secondary)
                     Spacer()
                     contractBadge(r)
                 }
@@ -146,10 +146,10 @@ struct HandRevealPanel: View {
                 if !r.dealtWidow.isEmpty {
                     HStack(spacing: 6) {
                         Text("Widow")
-                            .font(.caption2).foregroundStyle(.tertiary)
+                            .font(TableTypography.display(.caption2)).foregroundStyle(.tertiary)
                             .frame(width: 70, alignment: .leading)
                         ForEach(Array(r.dealtWidow.enumerated()), id: \.offset) { _, c in
-                            Text(c.shortLabel).font(.caption2)
+                            Text(c.shortLabel).font(TableTypography.display(.caption2))
                                 .foregroundStyle(c.tint)
                         }
                     }
@@ -171,7 +171,7 @@ struct HandRevealPanel: View {
                          : "SET ($\(r.bidTeamGross / 1000)k)")
         }()
         return Text(text)
-            .font(.caption).bold()
+            .font(TableTypography.display(.caption, weight: .bold))
             .foregroundStyle(made ? TableStyle.cardPlayable : TableStyle.teamAmber)
     }
 
@@ -181,7 +181,7 @@ struct HandRevealPanel: View {
         let isDeclarer = (seat == r.declarer)
         return HStack(alignment: .top, spacing: 6) {
             Text(seatShort(seat))
-                .font(.caption2)
+                .font(TableTypography.display(.caption2))
                 .fontWeight(isDeclarer ? .bold : .regular)
                 .foregroundStyle(isDeclarer ? AnyShapeStyle(.primary)
                                             : AnyShapeStyle(.secondary))
@@ -189,7 +189,7 @@ struct HandRevealPanel: View {
             FlowRow(spacing: 4) {
                 ForEach(Array(hand.enumerated()), id: \.offset) { _, c in
                     Text(c.shortLabel)
-                        .font(.caption2).foregroundStyle(c.tint)
+                        .font(TableTypography.display(.caption2)).foregroundStyle(c.tint)
                 }
             }
         }

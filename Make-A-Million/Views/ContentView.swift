@@ -14,6 +14,7 @@ struct ContentView: View {
     var body: some View {
         AppRoot()
             .environmentObject(GameSettings.shared)
+            .font(TableTypography.display(.body))
     }
 }
 

@@ -91,7 +91,7 @@ struct CenterTrickView: View {
                     Circle().fill(colorSwatch(led))
                         .frame(width: metrics.ledDot, height: metrics.ledDot)
                         .overlay(Circle().stroke(.white.opacity(0.7), lineWidth: 1))
-                    Text("Led").font(.caption2).foregroundStyle(.white.opacity(0.66))
+                    Text("Led").font(TableTypography.display(.caption2)).foregroundStyle(.white.opacity(0.66))
                 }
             }
 
