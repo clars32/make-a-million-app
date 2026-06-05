@@ -86,8 +86,9 @@ final class GameSession: ObservableObject {
     /// replays the whole hand at the end. Keep only recent frames.
     private let maxQueuedItems = 12
 
-    /// One place to tune how hard the table plays.
-    private let botDifficulty: MonteCarloAgent.Difficulty = .medium
+    // How hard the table plays is chosen by the player in Settings → Opponents
+    // and read fresh at the start of each hand (see `runHand`), so a change
+    // between hands takes effect on the next deal.
 
     private enum QueueItem {
         case show(PlayerView)
@@ -165,6 +166,9 @@ final class GameSession: ObservableObject {
         AIDecisionTrace.shared.beginHand(enabled: GameSettings.shared.logHandsToFile)
 
         let handSeed = matchSeedBase &+ handIndex
+        // Read the chosen strength tier fresh each hand (locked during play, so
+        // a change only lands on the next deal).
+        let botDifficulty = GameSettings.shared.botDifficulty
         let agents: [PlayerAgent] = [
             human,
             MonteCarloAgent(name: "West",  difficulty: botDifficulty,

@@ -1,0 +1,25 @@
+#### Bidding
+- During the bidding phase, they are reluctant to bid their teammate up because their teammate is signaling that they have a strong hand.
+- In addition, they are generally slow to bid more than is necessary to outbid the opposing player, unless some advantage can be gained by bidding higher. This is not always true, however - certain players bid aggressively and closer to the true value of their hand
+- Bidding *more* than the minimum raise is sometimes correct, for two reasons:
+    - **Psychological / signalling:** a larger-than-minimum jump appears to indicate a stronger hand. Sometimes this is genuine (telegraphing strength to your partner); sometimes it is a bluff to scare opponents off. These are occasional tactics, not the default.
+    - **Increment spacing:** a player may anticipate that the auction will climb a little past where they want it if everyone raises the minimum, and adjust their bid so the increments land on (or near) their true hand value. Example: the high bid is $190 and the player values their hand at $225. Rather than bidding the minimum to $200, they bid $205 — so that if an opponent raises them to $215, they can answer $225 (their true value) instead of having to overshoot to $235 or stop short.
+- In a scenario where a team has a large lead towards the end of a complete game, they will typically be more conservative in bidding so as to avoid going set and letting their opponent back in the game.
+- The most important skill for bidding is hand-valuation - how much money is in the hand? Is it strong money? Does it benefit you to decide trump (lots of one color)? Are you out or close to out of one or more suits? (Allows you to trump on big money in that color) In general, how strongly will you be able to control the game if you take the bid?
+- They note how other players bid and take that into account - if a player passes, they likely have a poor hand, and if a player bids, they likely have a good hand. Note however that this isn't ironclad - "sandbagging" by passing a good hand or "bluffing" by bidding a bad hand are valid strategies. Those strategies, however, are used occasionally, and it is generally more beneficial to play your hand straight up.
+- If your partner has already passed, you should be slightly more aggressive in bidding to try and drive the other team's bid up, although you should still avoid bidding an amount you don't feel like you could reasonably get except in desperate situations
+#### Trick Play
+- A good human player will count the number of trump that have been played to be aware if others have trump. They will often endeavor to "lead others out of trump" by playing off trump cards so that their opponents do not have trump to use.
+- To go along with the above, when they are the lead player, they will protect their big money in trump until they are sure that it will be not taken by the tiger. If they are the teammate of the lead player, they will recognize when their teammate is fishing for the tiger and bring it out.
+- Usually, the first time a color is played, the $40k card is played whenever possible (to avoid trump/bear from another player).
+- In addition, if their partner plays the $40k and you have the $30k, it is best to not play it in order to have another trick controlled (unless you are concerned about trump/bear).
+- As a general rule, they will keep track of what the highest card still unseen in each color is.
+- They will notice when another player is out of a certain color and take that into account.
+- They will remember what was in the widow, knowing that the lead player has those cards (unless they were discarded). This mainly applies to money/animal/trump cards.
+- If their partner is definitely taking a trick, they will often dump their partner some money if possible.
+- If they have an opportunity to play off cards, they will try to get out of another color when the previous does not apply.
+- If they are holding a big money card for fear that it will be trumped, they will try to find a way to slip it through - either by getting it to their teammate when a different color is led or when they are the last one to play.
+- If the other team is winning the trick, they give them as little money as possible unless they are reasonably confident that their team will end up winning. If their team is winning the trick, they will give them money while holding on to cards that could feasibly control the game later.
+- They should always play a money card if it is the highest unseen card in that color, unless they have suspicion that an opposing player is out of that color.
+- They will take advantage of situations where they are the last player to play and can bank a money card, even if it isn't the highest card left.
+- They will avoid throwing money on tricks that are getting beared (this is bad except in certain situations where you are trying to set the other team and you burn money that would otherwise go to them) or playing more money than necessary on tricks that are bulled and headed to the other team.

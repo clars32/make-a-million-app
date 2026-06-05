@@ -35,8 +35,8 @@ struct CenterTrickView: View {
         var idleFont: Font
 
         static let tabletop = Metrics(
-            cardW: 82, cardH: 115, spread: 104, circle: 300, frame: 380,
-            ledDot: 22, idleFont: TableTypography.display(.title3, weight: .bold))
+            cardW: 150, cardH: 211, spread: 170, circle: 500, frame: 640,
+            ledDot: 26, idleFont: TableTypography.display(.title2, weight: .bold))
 
         static let phone = Metrics(
             cardW: 64, cardH: 90, spread: 68, circle: 200, frame: 244,

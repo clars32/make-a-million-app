@@ -36,10 +36,11 @@ struct HostLobbyView: View {
         let gs = GameSession()
         _gameSession = StateObject(wrappedValue: gs)
         
-        // Initialize with default Player role, we can change it later
+        // Initialize with default Player role, we can change it later.
+        // Bot strength follows the player's Settings → Opponents choice.
         _netSession = StateObject(wrappedValue: NetSession(
             hostRole: .player(seat: PlayerID(0), human: gs.human, name: playerName),
-            botDifficulty: .medium))
+            botDifficulty: GameSettings.shared.botDifficulty))
     }
 
     var body: some View {

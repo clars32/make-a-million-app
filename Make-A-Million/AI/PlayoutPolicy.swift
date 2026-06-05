@@ -392,8 +392,12 @@ enum PlayoutPolicy {
             }
         }
 
-        // ---- Shed the least valuable card.
-        return cheapestShed(followingPool, led: led, trump: trump)
+        // ---- Shed the least valuable card. If we're feeding an opponent-controlled
+        // trick that already holds base money, the Bull is NOT cheap — it would
+        // double their take — so steer the shed away from it.
+        let bullIsCostly = !partnerWinning && moneyOnTable > 0
+        return cheapestShed(followingPool, led: led, trump: trump,
+                            bullIsCostly: bullIsCostly)
     }
 
     /// Is partner's currently-winning card safe from over-trump / over-rank
@@ -507,14 +511,23 @@ enum PlayoutPolicy {
         return money.max { rankOf($0) < rankOf($1) }
     }
 
-    /// "Lowest" = least costly to give up: non-money first, then lowest
-    /// strength.
+    /// "Lowest" = least costly to give up. Cheapest first:
+    ///   • when `bullIsCostly` (we're feeding an opponent-controlled trick that
+    ///     already holds money) the Bull is the LAST thing we'd shed — it would
+    ///     double the opponents' take. The Bear stays cheap: it cancels.
+    ///   • non-money before money,
+    ///   • non-special before special,
+    ///   • among money, the smallest denomination (don't overpay a lost trick),
+    ///   • then lowest trick strength.
     private static func cheapestShed(_ cards: [Card],
                                      led: CardColor?,
-                                     trump: CardColor) -> Card {
+                                     trump: CardColor,
+                                     bullIsCostly: Bool = false) -> Card {
         cards.min { a, b in
+            if bullIsCostly && a.isBull != b.isBull { return b.isBull }
             if a.isMoney != b.isMoney { return !a.isMoney }
             if a.isSpecial != b.isSpecial { return !a.isSpecial }
+            if a.moneyValue != b.moneyValue { return a.moneyValue < b.moneyValue }
             return strength(a, led: led, trump: trump)
                  < strength(b, led: led, trump: trump)
         }!

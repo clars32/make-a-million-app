@@ -257,6 +257,15 @@ struct GameBody: View {
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                     .zIndex(1)
             }
+
+            DealingAnimationOverlay(
+                trigger: dealAnimationToken(for: table),
+                cardWidth: isTabletLayout ? 78 : 44,
+                cardHeight: isTabletLayout ? 110 : 62,
+                spreadScale: isTabletLayout ? 0.86 : 0.68)
+            .padding(.top, isTabletLayout ? 90 : 62)
+            .padding(.bottom, handSectionHeight)
+            .zIndex(0.8)
         }
         .animation(.spring(response: 0.36, dampingFraction: 0.85), value: actionActive)
     }

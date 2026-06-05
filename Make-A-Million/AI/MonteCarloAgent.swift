@@ -93,25 +93,87 @@ struct MonteCarloAgent: PlayerAgent {
         /// get weaker hands, bidders stronger). 0 = ignore bids (uniform
         /// sampling); higher = read the auction more like a strong human.
         var bidLeanStrength: Double = 0.0
+        /// HARD deduction in world sampling: place the declarer's
+        /// un-discardable widow cards (Tiger/Bull/Bear/money — the engine
+        /// forbade discarding them) into the declarer's sampled hand instead
+        /// of letting them scatter to random seats. A PROVABLE fact the sampler
+        /// otherwise ignored (it averaged over impossible worlds). Now ON for
+        /// every tier — it only ever removes impossible worlds, and self-play
+        /// measured it positive (paired +~7pp, lower set-rate). Kept as a field,
+        /// not hard-wired, so it stays A/B-able (turn it off on one side).
+        var deduceWidowHoldings: Bool = true
 
-        static let easy   = Difficulty(samples: 10, blunderRate: 0.22,
-                                       bidAggression: 0.82, partnerRespect: 0.95,
-                                       matchAwareness: 0.7, trickCandidates: 3,
-                                       bidLeanStrength: 0.0)
-        // medium/hard bid up to (or just past) their honest hand valuation
-        // rather than shaving it: self-play shows this is win-rate neutral vs
-        // competent play while taking noticeably more bids — the behaviour a
-        // human opponent expects. partnerRespect eased so the team competes a
-        // little harder for contracts. Pushing aggression higher (1.2) only
-        // trades wins for set-backs, so we stop here.
-        static let medium = Difficulty(samples: 20, blunderRate: 0.06,
-                                       bidAggression: 1.00, partnerRespect: 0.78,
-                                       matchAwareness: 1.0, trickCandidates: 4,
-                                       bidLeanStrength: 1.0)
-        static let hard   = Difficulty(samples: 36, blunderRate: 0.0,
-                                       bidAggression: 1.05, partnerRespect: 0.68,
-                                       matchAwareness: 1.0, trickCandidates: 5,
-                                       bidLeanStrength: 1.6)
+        // ── Selectable strength tiers (Settings → Opponents) ───────────────
+        // The strength ladder is driven, in order, by: `samples` (search
+        // depth), `trickCandidates` (shortlist width) and `bidLeanStrength`
+        // (auction reading) — NOT by bid aggression, which self-play shows is
+        // ~win-rate-neutral (it's flavor, not strength). `blunderRate` injects
+        // only believable, BOUNDED mistakes (see `decideTrickPlay`) for the
+        // lower tiers; relying on it for difficulty feels random, not weak.
+
+        /// `Easy` — shallow search, narrow shortlist, ignores the auction, and
+        /// slips up now and then. Beatable, not erratic.
+        static let easy    = Difficulty(samples: 8,  blunderRate: 0.15,
+                                        bidAggression: 0.85, partnerRespect: 0.95,
+                                        matchAwareness: 0.5, trickCandidates: 3,
+                                        bidLeanStrength: 0.0)
+        /// `Normal` — the validated baseline (formerly `.medium`): a solid club
+        /// player. Bids up to its honest valuation and reads the auction.
+        static let normal  = Difficulty(samples: 20, blunderRate: 0.06,
+                                        bidAggression: 1.00, partnerRespect: 0.78,
+                                        matchAwareness: 1.0, trickCandidates: 4,
+                                        bidLeanStrength: 1.0)
+        /// `Hard` — deeper search, wider shortlist, strong auction read, no
+        /// deliberate mistakes.
+        static let hard    = Difficulty(samples: 36, blunderRate: 0.0,
+                                        bidAggression: 1.05, partnerRespect: 0.68,
+                                        matchAwareness: 1.0, trickCandidates: 5,
+                                        bidLeanStrength: 1.6)
+        /// `Extreme` — maximum search + table-reading. Widow deduction is now
+        /// universal (default-on); the planned count-exhaustion voids and
+        /// bid-derived shape priors in AIWorld/TableInference are what will
+        /// eventually set Extreme apart from Hard.
+        static let extreme = Difficulty(samples: 60, blunderRate: 0.0,
+                                        bidAggression: 1.05, partnerRespect: 0.60,
+                                        matchAwareness: 1.0, trickCandidates: 6,
+                                        bidLeanStrength: 2.0)
+
+        /// Player-facing strength tiers. A small, Codable, ordered enum so the
+        /// settings layer and UI deal in names, not tuning constants.
+        nonisolated enum Level: String, Codable, CaseIterable, Identifiable, Sendable {
+            case easy, normal, hard, extreme
+
+            var id: String { rawValue }
+
+            var displayName: String {
+                switch self {
+                case .easy:    return "Easy"
+                case .normal:  return "Normal"
+                case .hard:    return "Hard"
+                case .extreme: return "Extreme"
+                }
+            }
+
+            /// One-line description for the settings footer.
+            var blurb: String {
+                switch self {
+                case .easy:    return "Relaxed. Thinks shallowly, ignores the bidding, and slips up now and then."
+                case .normal:  return "A solid club player. Bids honestly and reads the auction. The default."
+                case .hard:    return "Searches deeper, reads the bidding closely, and rarely makes a mistake."
+                case .extreme: return "Maximum search and table-reading. (Card-counting deduction is coming.)"
+                }
+            }
+
+            /// The tuning profile this level plays with.
+            var profile: Difficulty {
+                switch self {
+                case .easy:    return .easy
+                case .normal:  return .normal
+                case .hard:    return .hard
+                case .extreme: return .extreme
+                }
+            }
+        }
     }
 
     let name: String
@@ -119,7 +181,7 @@ struct MonteCarloAgent: PlayerAgent {
     private let seedBox: RNGBox
 
     init(name: String = "AI",
-         difficulty: Difficulty = .medium,
+         difficulty: Difficulty = .normal,
          seed: UInt64) {
         self.name = name
         self.difficulty = difficulty
@@ -186,6 +248,21 @@ struct MonteCarloAgent: PlayerAgent {
             // ---- Partner is current high bidder: defer unless decisively stronger.
             if let hb = view.highBidder, let hbAmount = view.highBid,
                Seats.team(of: hb) == Seats.team(of: view.me), hb != view.me {
+                // Once BOTH opponents have passed, the contract is the team's to
+                // keep no matter who declares — raising our own partner only
+                // inflates the contract (and the set-back risk) for zero gain.
+                // Suppress the override. Exception: a partner sitting on the
+                // forced minimum open ($175k) may be a weak/forced opener (they
+                // didn't choose to bid that high), so allow a single rescue.
+                let opponentsLive = Seats.all.contains {
+                    Seats.team(of: $0) != Seats.team(of: view.me)
+                        && !view.passed.contains($0)
+                }
+                if !opponentsLive && hbAmount > Bidding.openingMinimum {
+                    notes.append("both opponents passed — not bidding partner up "
+                                 + "($\(hbAmount / 1000)k already holds the contract)")
+                    return passMove!
+                }
                 // Override threshold scales with partnerRespect.
                 // respect 1.0 → need rawGross >= hbAmount + $80k
                 // respect 0.0 → need rawGross >  hbAmount
@@ -353,7 +430,8 @@ struct MonteCarloAgent: PlayerAgent {
 
         for s in 0..<difficulty.samples {
             var det = Determinizer(view: view, seed: seedBox.nextRaw() &+ UInt64(s),
-                                   bidLeanStrength: difficulty.bidLeanStrength)
+                                   bidLeanStrength: difficulty.bidLeanStrength,
+                                   deduceWidowHoldings: difficulty.deduceWidowHoldings)
             guard let world = det.sample() ?? det.sampleUnconstrained() else { continue }
             for cand in shortlist {
                 guard let afterMine = try? world.state.applying(cand, by: view.me)
@@ -370,15 +448,42 @@ struct MonteCarloAgent: PlayerAgent {
             .map { ($0, totals[$0]! / Double(counts[$0]!)) }
             .sorted { $0.1 > $1.1 }
 
-        guard let best = scored.first else { return shortlist[0] }
+        guard let topMean = scored.first?.1 else { return shortlist[0] }
+
+        // Near-tie tiebreak: when several candidates score within MCTS noise of
+        // the best, prefer the most CONSERVATIVE card — don't burn the Tiger or a
+        // high trump on a trick a cheap one wins just as well. Side-suit and money
+        // cards carry no conservation penalty, so this never overrides "bank the
+        // money" (a genuinely better bank scores higher on its own and isn't a tie).
+        func conservationCost(_ m: Move) -> Int {
+            guard let c = m.playedCard, let trump = view.trump else { return 0 }
+            switch c {
+            case .tiger:                   return 1_000_000
+            case .colored(let col, let r): return col == trump ? 1_000 + r.rawValue : 0
+            case .bull, .bear:             return 0
+            }
+        }
+        let tieEps = 12_000.0   // TUNE: dollars of mean-net treated as "a tie"
+        let best = scored
+            .filter { $0.1 >= topMean - tieEps }
+            .min { conservationCost($0.0) < conservationCost($1.0) }
+            ?? scored[0]
 
         var blundered = false
         var chosen = best.0
         if shouldBlunder(), scored.count > 1 {
-            // Believable: pick a mid-pack move, never the worst.
-            let idx = min(scored.count - 1, 1 + intRand(scored.count - 1))
-            chosen = scored[idx].0
-            blundered = true
+            // Believable AND bounded: blunder only among non-best moves that cost
+            // no more than `blunderMaxRegret` vs the best, so an "easy" mistake is
+            // a slightly-wrong card, never a catastrophic giveaway (e.g. feeding
+            // the $40k). Picking the strictly worst card was the old behaviour.
+            let blunderMaxRegret = 60_000.0   // TUNE
+            let candidates = scored.filter {
+                $0.0 != best.0 && topMean - $0.1 <= blunderMaxRegret
+            }
+            if !candidates.isEmpty {
+                chosen = candidates[intRand(candidates.count)].0
+                blundered = true
+            }
         }
 
         // Debug capture (off in normal play and self-play): record the scored
@@ -731,8 +836,11 @@ struct MonteCarloAgent: PlayerAgent {
             }
         }
 
-        // D. Default — shed cheapest. Add a void-creating shed if available.
-        if let lo = cheapShed(pool, led: led, trump: trump) {
+        // D. Default — shed cheapest. When we're feeding an opponent-controlled
+        // trick that already holds money, the Bull would double their take, so it
+        // must NOT be offered as the cheap shed (the Bear stays cheap — it cancels).
+        let bullIsCostly = !partnerWinning && moneyOnTable > 0
+        if let lo = cheapShed(pool, led: led, trump: trump, bullIsCostly: bullIsCostly) {
             picks.append(lo)
         }
         if !mustFollow, let v = voidCreatingShed(pool: plays, view: view, trump: trump) {
@@ -813,11 +921,14 @@ struct MonteCarloAgent: PlayerAgent {
 
     private func cheapShed(_ cards: [Card],
                             led: CardColor?,
-                            trump: CardColor) -> Card? {
+                            trump: CardColor,
+                            bullIsCostly: Bool = false) -> Card? {
         guard !cards.isEmpty else { return nil }
         return cards.min { a, b in
+            if bullIsCostly && a.isBull != b.isBull { return b.isBull }
             if a.isMoney != b.isMoney { return !a.isMoney }
             if a.isSpecial != b.isSpecial { return !a.isSpecial }
+            if a.moneyValue != b.moneyValue { return a.moneyValue < b.moneyValue }
             return PlayoutPolicy.strength(a, led: led, trump: trump)
                  < PlayoutPolicy.strength(b, led: led, trump: trump)
         }

@@ -27,8 +27,8 @@ struct ClientGameView: View {
     @Namespace private var cardNS
 
     // Card sizing for a phone held in landscape.
-    private let cardW: CGFloat = 96
-    private let cardH: CGFloat = 136
+    private let cardW: CGFloat = 110
+    private let cardH: CGFloat = 156
 
     /// The hand to render. `pending` (a decision frame) takes priority so legal
     /// moves are accurate on this player's turn; otherwise the paced frame.
@@ -61,6 +61,14 @@ struct ClientGameView: View {
                 waitingView
             }
 
+            DealingAnimationOverlay(
+                trigger: dealAnimationToken(for: handView),
+                cardWidth: 62,
+                cardHeight: 88,
+                spreadScale: 0.58)
+            .padding(.horizontal, 26)
+            .padding(.bottom, cardH * 0.35)
+
             topBar
 
             if case .paused(let reason) = session.phase {
@@ -80,7 +88,10 @@ struct ClientGameView: View {
         }
         .onChange(of: pendingTick) { _, _ in
             // New decision arrived — clear any stale discard selection.
-            DispatchQueue.main.async { discardSelection = [] }
+            DispatchQueue.main.async {
+                discardSelection = []
+                if session.pending?.phase == .bidding { selectedBidIndex = 0 }
+            }
         }
     }
 
@@ -89,12 +100,13 @@ struct ClientGameView: View {
     private func handArea(_ view: PlayerView) -> some View {
         FannedHand(cards: view.myHand,
                    cardWidth: cardW,
-                   rotationPad: 120,
-                   preferredOverlap: cardW * 0.45,
+                   rotationPad: 136,
+                   preferredOverlap: cardW * 0.54,
+                   outerDip: 16,
                    liftedCards: discardSelection) { card, total in
             handCard(card, view: view, total: total)
         }
-        .frame(height: cardH + 60)
+        .frame(height: cardH + 74)
         .frame(maxWidth: .infinity)
     }
 
@@ -141,42 +153,40 @@ struct ClientGameView: View {
         let passMove = view.legalMoves.first { $0.isPass }
         let bidMoves = view.legalMoves.filter { $0.bidAmount != nil }
         let safeIndex = min(selectedBidIndex, max(0, bidMoves.count - 1))
+        let bidSelection = Binding<Int>(
+            get: { min(selectedBidIndex, max(0, bidMoves.count - 1)) },
+            set: { selectedBidIndex = $0 }
+        )
 
         return HStack(spacing: 10) {
             if !bidMoves.isEmpty {
-                ScrollViewReader { proxy in
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 8) {
-                            ForEach(Array(bidMoves.enumerated()), id: \.offset) { index, move in
-                                let isSel = index == safeIndex
-                                Button {
-                                    withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) {
-                                        selectedBidIndex = index
-                                        proxy.scrollTo(index, anchor: .center)
-                                    }
-                                } label: {
-                                    Text(move.label.replacingOccurrences(of: "Bid ", with: ""))
-                                        .font(TableTypography.display(.subheadline, weight: .bold))
-                                        .foregroundStyle(isSel ? .white : .white.opacity(0.72))
-                                        .padding(.horizontal, 14).frame(height: 40)
-                                        .background(Capsule().fill(isSel ? TableStyle.actionBlue : TableStyle.panelFill))
-                                        .overlay(Capsule().stroke(isSel ? .white.opacity(0.20) : TableStyle.panelStroke, lineWidth: 1))
-                                        .scaleEffect(isSel ? 1.05 : 0.95)
-                                }
-                                .buttonStyle(.plain)
-                                .id(index)
-                            }
-                        }
-                        .padding(.horizontal, 4)
+                Picker("Bid amount", selection: bidSelection) {
+                    ForEach(Array(bidMoves.enumerated()), id: \.offset) { index, move in
+                        Text(bidAmountText(move))
+                            .font(TableTypography.display(.headline, weight: .bold))
+                            .tag(index)
                     }
-                    .frame(maxWidth: 360)
                 }
+                .pickerStyle(.wheel)
+                .labelsHidden()
+                .frame(width: 102, height: 76)
+                .clipped()
+                .background(TableStyle.panelFill, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(TableStyle.panelStroke, lineWidth: 1))
             }
-            if let passMove {
-                actionButton("Pass", tint: TableStyle.passGray.opacity(0.82)) { session.submit(passMove) }
-            }
-            if !bidMoves.isEmpty {
-                actionButton("Bid", tint: TableStyle.actionBlue) { session.submit(bidMoves[safeIndex]) }
+
+            HStack(spacing: 8) {
+                if !bidMoves.isEmpty {
+                    actionButton("Bid", tint: TableStyle.actionBlue) {
+                        session.submit(bidMoves[safeIndex])
+                    }
+                }
+                if let passMove {
+                    actionButton("Pass", tint: TableStyle.passGray.opacity(0.82)) {
+                        session.submit(passMove)
+                    }
+                }
             }
         }
         .barChrome()
@@ -239,6 +249,11 @@ struct ClientGameView: View {
                 .overlay(Capsule().stroke(.white.opacity(0.18), lineWidth: 1))
         }
         .buttonStyle(.plain)
+    }
+
+    private func bidAmountText(_ move: Move) -> String {
+        guard let amount = move.bidAmount else { return "—" }
+        return "$\(amount / 1000)k"
     }
 
     // MARK: - Chrome

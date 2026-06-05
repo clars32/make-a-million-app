@@ -56,6 +56,21 @@ func keyedPlays(_ plays: [PlayedCard]) -> [(key: CardKey, play: PlayedCard)] {
     plays.map { (cardKey($0.card), $0) }
 }
 
+func dealAnimationToken(for view: PlayerView?) -> Int {
+    guard let view,
+          view.phase == .bidding,
+          !view.myHand.isEmpty,
+          view.currentTrick?.plays.isEmpty ?? true,
+          view.completedTricks.isEmpty else {
+        return -1
+    }
+
+    return view.myHand.reduce(view.opener.raw + 31) { partial, card in
+        let key = cardKey(card)
+        return partial &* 31 &+ key.g &* 101 &+ key.c &* 17 &+ key.r
+    }
+}
+
 // MARK: - Card face
 
 /// A single playing card. Sizes (font, dot, padding, corner) scale off the
@@ -247,6 +262,140 @@ struct MiniCardFace: View {
     #else
     private var miniAssetImage: Never? { nil }
     #endif
+}
+
+/// The scanned card back, used for transient shuffle/deal animation.
+struct CardBackFace: View {
+    var width: CGFloat = 60
+    var height: CGFloat = 85
+
+    private var corner: CGFloat { height * 0.14 }
+
+    var body: some View {
+        cardBody
+            .overlay(
+                RoundedRectangle(cornerRadius: corner, style: .continuous)
+                    .stroke(Color.black.opacity(0.18), lineWidth: 0.5))
+            .shadow(color: .black.opacity(0.24), radius: 5, y: 3)
+            .frame(width: width, height: height)
+    }
+
+    @ViewBuilder
+    private var cardBody: some View {
+        if let image = cardBackImage {
+            RoundedRectangle(cornerRadius: corner, style: .continuous)
+                .fill(Color.white)
+                .overlay {
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFit()
+                }
+                .clipShape(RoundedRectangle(cornerRadius: corner, style: .continuous))
+        } else {
+            RoundedRectangle(cornerRadius: corner, style: .continuous)
+                .fill(TableStyle.feltMid)
+                .overlay(
+                    RoundedRectangle(cornerRadius: corner * 0.7, style: .continuous)
+                        .stroke(TableStyle.teamAmber.opacity(0.8), lineWidth: 2)
+                        .padding(height * 0.10))
+        }
+    }
+
+    #if canImport(UIKit)
+    private var cardBackImage: UIImage? {
+        UIImage(named: "card_back")
+    }
+    #else
+    private var cardBackImage: Never? { nil }
+    #endif
+}
+
+/// A short decorative shuffle/deal overlay. It is deliberately non-interactive:
+/// the game can keep rendering frames while the animation adds table feel.
+struct DealingAnimationOverlay: View {
+    let trigger: Int
+    var cardWidth: CGFloat = 64
+    var cardHeight: CGFloat = 90
+    var spreadScale: CGFloat = 1.0
+
+    @State private var visible = false
+    @State private var shuffling = false
+    @State private var dealt = false
+
+    var body: some View {
+        GeometryReader { proxy in
+            ZStack {
+                if visible {
+                    ForEach(0..<12, id: \.self) { index in
+                        CardBackFace(width: cardWidth, height: cardHeight)
+                            .rotationEffect(.degrees(rotation(for: index)))
+                            .offset(offset(for: index, in: proxy.size))
+                            .opacity(dealt ? 0 : 1)
+                            .scaleEffect(dealt ? 0.92 : 1.0)
+                    }
+                    Text("Dealing")
+                        .font(TableTypography.display(.caption, weight: .bold))
+                        .foregroundStyle(.white.opacity(dealt ? 0 : 0.70))
+                        .offset(y: cardHeight * 0.82)
+                }
+            }
+            .frame(width: proxy.size.width, height: proxy.size.height)
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+        .onAppear { restartIfNeeded() }
+        .onChange(of: trigger) { _, _ in restartIfNeeded() }
+    }
+
+    private func restartIfNeeded() {
+        guard trigger >= 0 else { return }
+        visible = true
+        shuffling = false
+        dealt = false
+
+        withAnimation(.easeInOut(duration: 0.14).repeatCount(5, autoreverses: true)) {
+            shuffling = true
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.62) {
+            guard visible else { return }
+            withAnimation(.easeOut(duration: 0.52)) {
+                dealt = true
+            }
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.18) {
+            guard visible else { return }
+            visible = false
+        }
+    }
+
+    private func rotation(for index: Int) -> Double {
+        if dealt {
+            return [-18, 12, -10, 16][index % 4] + Double(index / 4) * 2
+        }
+        let base = Double(index - 6) * 1.8
+        return base + (shuffling ? Double((index % 3) - 1) * 9 : 0)
+    }
+
+    private func offset(for index: Int, in size: CGSize) -> CGSize {
+        if dealt {
+            let lane = index % 4
+            let depth = CGFloat(index / 4) * 0.16 + 0.82
+            let x = size.width * 0.33 * spreadScale * depth
+            let y = size.height * 0.30 * spreadScale * depth
+            switch lane {
+            case 0: return CGSize(width: 0, height: y)
+            case 1: return CGSize(width: -x, height: 0)
+            case 2: return CGSize(width: 0, height: -y)
+            default: return CGSize(width: x, height: 0)
+            }
+        }
+
+        let shuffleX = shuffling ? CGFloat((index % 4) - 1) * 5 : CGFloat(index - 6) * 0.6
+        let shuffleY = shuffling ? CGFloat((index % 3) - 1) * 3 : CGFloat(index - 6) * 0.4
+        return CGSize(width: shuffleX, height: shuffleY)
+    }
 }
 
 // MARK: - Fanned hand

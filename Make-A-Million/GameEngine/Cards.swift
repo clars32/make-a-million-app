@@ -89,6 +89,14 @@ nonisolated enum Card: Hashable, Codable {
         }
     }
 
+    /// True only for the Bull. Needed where Bull and Bear must be told apart —
+    /// e.g. the shed logic, where dropping the Bull onto an opponent's money
+    /// trick DOUBLES it (bad) while dropping the Bear CANCELS it (good).
+    var isBull: Bool { if case .bull = self { return true }; return false }
+
+    /// True only for the Bear.
+    var isBear: Bool { if case .bear = self { return true }; return false }
+
     /// The color this card behaves as for following/winning, given the trump
     /// color for the hand. The Tiger behaves as trump. Bull/Bear have no
     /// color — they can never win a trick (confirmed rule) so they never need

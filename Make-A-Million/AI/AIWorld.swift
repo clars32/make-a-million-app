@@ -63,11 +63,18 @@ struct Determinizer {
     /// Per hidden seat: + if they bid (scaled by amount), − if they passed.
     /// A human reads exactly this signal: "everyone passed, so they're weak."
     private let lean: [PlayerID: Double]
+    /// When true, the declarer's un-discardable widow cards are pinned into the
+    /// declarer's sampled hand (a hard fact) rather than scattered. See the
+    /// `Difficulty.deduceWidowHoldings` lever.
+    private let deduceWidowHoldings: Bool
 
-    init(view: PlayerView, seed: UInt64, bidLeanStrength: Double = 0.0) {
+    init(view: PlayerView, seed: UInt64,
+         bidLeanStrength: Double = 0.0,
+         deduceWidowHoldings: Bool = false) {
         self.view = view
         self.rng = SeededRNG(seed: seed)
         self.bidLeanStrength = bidLeanStrength
+        self.deduceWidowHoldings = deduceWidowHoldings
         self.lean = Determinizer.computeLean(view: view)
     }
 
@@ -144,6 +151,23 @@ struct Determinizer {
         return voids
     }
 
+    /// HARD widow deduction (principle 11). The engine forbids discarding the
+    /// Tiger / Bull / Bear / any money card from the widow, so any such card in
+    /// the publicly-revealed widow is GUARANTEED to be in the declarer's hand
+    /// right now — unless we've since seen it played. Returns the declarer and
+    /// the cards they must still hold. nil when there's nothing to pin (I'm the
+    /// declarer, pre-trick-play, or no locked cards remain unplayed).
+    private func widowLockedInDeclarer() -> (declarer: PlayerID, cards: [Card])? {
+        guard let declarer = view.highBidder,
+              declarer != view.me,
+              let widow = view.widow else { return nil }
+        let seen = Set(playedCards)
+        let locked = widow.filter {
+            ($0.isSpecial || $0.isMoney) && !seen.contains($0)
+        }
+        return locked.isEmpty ? nil : (declarer, locked)
+    }
+
     // MARK: Sampling
 
     /// Produce one determinized world consistent with the view. Returns nil
@@ -157,15 +181,35 @@ struct Determinizer {
         var pool = Deck.full
         let known = Set(view.myHand) .union(playedCards)
         pool.removeAll { known.contains($0) }
-        shuffle(&pool)
 
         let others = Seats.all.filter { $0 != view.me }
+
+        // HARD widow deduction: pin the declarer's un-discardable widow cards
+        // into their hand up front (Extreme tier). Removed from the pool and
+        // counted against the declarer's target so the remaining deal stays
+        // exact; they bypass the void deal since holding them is a fact.
+        var preplaced: [PlayerID: [Card]] = [:]
+        if deduceWidowHoldings, let (declarer, locked) = widowLockedInDeclarer() {
+            let pinnable = locked.filter { pool.contains($0) }
+            let cap = max(0, remainingCount(for: declarer))
+            let take = Array(pinnable.prefix(cap))
+            if !take.isEmpty {
+                preplaced[declarer] = take
+                let taken = Set(take)
+                pool.removeAll { taken.contains($0) }
+            }
+        }
+
+        shuffle(&pool)
+
         let trumpForVoids = view.trump
         let voids = trumpForVoids.map(inferredVoids(trump:)) ?? [:]
 
-        // Target hand sizes for the other seats.
+        // Target hand sizes for the other seats (minus anything pre-placed).
         var need: [PlayerID: Int] = [:]
-        for s in others { need[s] = max(0, remainingCount(for: s)) }
+        for s in others {
+            need[s] = max(0, remainingCount(for: s) - (preplaced[s]?.count ?? 0))
+        }
         let deadCount = pool.count - need.values.reduce(0, +)   // discarded widow etc.
 
         guard deadCount >= 0 else {
@@ -184,6 +228,9 @@ struct Determinizer {
                                    voids: voids,
                                    trump: trumpForVoids) {
                 var full = hands
+                for (seat, cards) in preplaced {
+                    full[seat, default: []].append(contentsOf: cards)
+                }
                 full[view.me] = view.myHand
                 if let st = rebuild(hands: full) {
                     return AIWorld(state: st, me: view.me)

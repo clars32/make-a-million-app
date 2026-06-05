@@ -14,7 +14,7 @@
 //  Call it from a unit test or a throwaway button:
 //
 //      let r = await AIArena.run(matches: 40,
-//                                difficulty: .medium,
+//                                difficulty: .normal,
 //                                baseSeed: 1)
 //      print(r.summary)
 //
@@ -70,7 +70,7 @@ enum AIArena {
     /// random partnership sits 1 & 3. Seats are swapped every other match so
     /// neither side gets a permanent dealer/opening-bid advantage.
     static func run(matches: Int,
-                    difficulty: MonteCarloAgent.Difficulty = .medium,
+                    difficulty: MonteCarloAgent.Difficulty = .normal,
                     baseSeed: UInt64 = 1) async -> Result {
 
         var mcWins = 0, randomWins = 0, failures = 0
@@ -312,7 +312,7 @@ enum AIArena {
     /// at the opening floor with its best trump and play the hand to settle
     /// under competent (MC) play. Compare evaluator estimate vs realized gross.
     static func runBidCalibration(deals: Int,
-                                  difficulty: MonteCarloAgent.Difficulty = .medium,
+                                  difficulty: MonteCarloAgent.Difficulty = .normal,
                                   baseSeed: UInt64 = 1) async -> CalibrationResult {
         var n = 0
         var sumEst = 0.0, sumReal = 0.0
@@ -420,7 +420,7 @@ enum AIArena {
     /// Quick single-hand trace for eyeballing *what* the AI does (the
     /// instrument-panel companion to the win-rate number). Prints each AI
     /// decision's phase and chosen move.
-    static func traceOneHand(difficulty: MonteCarloAgent.Difficulty = .medium,
+    static func traceOneHand(difficulty: MonteCarloAgent.Difficulty = .normal,
                              dealSeed: UInt64 = 1) async {
         let agents: [PlayerAgent] = [
             MonteCarloAgent(name: "MC-South", difficulty: difficulty, seed: 1),

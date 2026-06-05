@@ -132,7 +132,7 @@ final class NetSession: ObservableObject, RemoteSeatDelegate {
 
     private var runTask: Task<Void, Never>?
 
-    init(hostRole: HostRole, botDifficulty: MonteCarloAgent.Difficulty = .medium) {
+    init(hostRole: HostRole, botDifficulty: MonteCarloAgent.Difficulty = .normal) {
         self.hostRole = hostRole
         self.botDifficulty = botDifficulty
         

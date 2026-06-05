@@ -65,6 +65,14 @@ struct TabletopGameView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
 
+            DealingAnimationOverlay(
+                trigger: dealAnimationToken(for: tableView),
+                cardWidth: 86,
+                cardHeight: 121,
+                spreadScale: 0.92)
+            .padding(.top, 84)
+            .padding(.bottom, 118)
+
             if case .paused(let reason) = netSession.phase {
                 pausedOverlay(reason: reason)
             }
@@ -261,7 +269,7 @@ struct TabletopGameView: View {
                 HStack(spacing: 8) {
                     Text("Widow").font(TableTypography.display(.headline, weight: .bold)).foregroundStyle(.white.opacity(0.7))
                     ForEach(keyedHand(widow), id: \.key) { entry in
-                        CardFace(card: entry.card, width: 50, height: 70)
+                        CardFace(card: entry.card, width: 64, height: 90)
                     }
                 }
                 .padding(.horizontal, 14)
@@ -274,7 +282,7 @@ struct TabletopGameView: View {
                     Text("Last trick").font(TableTypography.display(.headline, weight: .bold)).foregroundStyle(.white.opacity(0.7))
                     ForEach(keyedPlays(last.plays), id: \.key) { entry in
                         CardFace(card: entry.play.card, faded: entry.play.player != last.winner,
-                                 width: 50, height: 70)
+                                 width: 64, height: 90)
                     }
                     Text("· \(seatShort(last.winner)) $\(last.value / 1000)k")
                         .font(TableTypography.money(.headline))
@@ -286,7 +294,7 @@ struct TabletopGameView: View {
             }
         }
         .frame(maxWidth: .infinity)
-        .frame(height: 82)
+        .frame(height: 108)
     }
 
     // MARK: - Chrome

@@ -64,6 +64,9 @@ final class GameSettings: ObservableObject {
     /// Append a full-information trace of every completed hand to a file you
     /// can export for AI review. Reveals hidden hands — debug/tuning only.
     @Published var logHandsToFile: Bool { didSet { persist() } }
+    /// How hard the AI opponents play. Read fresh at the start of each hand,
+    /// so a change applies on the next deal.
+    @Published var aiDifficulty: MonteCarloAgent.Difficulty.Level { didSet { persist() } }
 
     private enum Key {
         static let revealAll      = "settings.revealAllCardsAfterHand"
@@ -74,6 +77,7 @@ final class GameSettings: ObservableObject {
         static let misdealAmount  = "settings.misdealThreshold"
         static let endgame        = "settings.endgameTiebreak"
         static let logHands       = "settings.logHandsToFile"
+        static let aiDifficulty   = "settings.aiDifficulty"
     }
 
     private init() {
@@ -89,6 +93,8 @@ final class GameSettings: ObservableObject {
         endgameTiebreak = (d.string(forKey: Key.endgame)
             .flatMap(EndgameTiebreak.init(rawValue:))) ?? .standard
         logHandsToFile           = d.object(forKey: Key.logHands) as? Bool ?? false
+        aiDifficulty = (d.string(forKey: Key.aiDifficulty)
+            .flatMap(MonteCarloAgent.Difficulty.Level.init(rawValue:))) ?? .normal
     }
 
     private func persist() {
@@ -101,6 +107,7 @@ final class GameSettings: ObservableObject {
         d.set(misdealThreshold,         forKey: Key.misdealAmount)
         d.set(endgameTiebreak.rawValue, forKey: Key.endgame)
         d.set(logHandsToFile,           forKey: Key.logHands)
+        d.set(aiDifficulty.rawValue,    forKey: Key.aiDifficulty)
     }
 
     /// The engine's misdeal configuration built from the current toggles.
@@ -111,6 +118,9 @@ final class GameSettings: ObservableObject {
 
     /// The engine's endgame tiebreak rule (1:1 with the stored choice).
     var endgameRule: EndgameTiebreak { endgameTiebreak }
+
+    /// The tuning profile the bots play with, from the selected strength tier.
+    var botDifficulty: MonteCarloAgent.Difficulty { aiDifficulty.profile }
 }
 
 // MARK: - Shared seat labels (kept consistent with GameView's convention)
@@ -247,6 +257,24 @@ struct SettingsView: View {
                 } footer: {
                     Text("These change only what your table shows — they reveal no hidden information to the bots, and apply to the current hand immediately.")
                 }
+
+                Section {
+                    Picker("Difficulty", selection: $settings.aiDifficulty) {
+                        ForEach(MonteCarloAgent.Difficulty.Level.allCases) { level in
+                            Text(level.displayName).tag(level)
+                        }
+                    }
+                    .accessibilityIdentifier("settings.aiDifficultyPicker")
+                } header: {
+                    Text("Opponents")
+                } footer: {
+                    if rulesLocked {
+                        lockedHint
+                    } else {
+                        Text(settings.aiDifficulty.blurb)
+                    }
+                }
+                .disabled(rulesLocked)
 
                 if let dealSeed {
                     Section {
