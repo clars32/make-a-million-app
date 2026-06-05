@@ -112,18 +112,6 @@ private struct SoloGameBody: View {
             guard tableView == nil, session.finished == nil, !session.running else { return }
             session.startNewMatch(dealSeed: dealSeed)
         }
-        #if DEBUG
-        .onChange(of: pendingTick) { _, _ in
-            guard ProcessInfo.processInfo.environment["MAM_AUTOPLAY"] != nil,
-                  let p = human.pending, p.phase != .trickPlay else { return }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
-                guard let cur = human.pending, cur.phase != .trickPlay else { return }
-                if let move = cur.legalMoves.first(where: { $0.isPass }) ?? cur.legalMoves.first {
-                    human.submit(move)
-                }
-            }
-        }
-        #endif
     }
 }
 
@@ -396,10 +384,10 @@ struct GameBody: View {
             // (you), left, top (partner), right — mirroring the tabletop board.
             VStack {
                 seatChip(relativeSeat(2, from: table.me), table)
-                    .offset(y: -25)
+                    .offset(y: -35)
                 Spacer()
                 seatChip(table.me, table)
-                    .offset(y: 25)
+                    .offset(y: 35)
             }
             HStack {
                 seatChip(relativeSeat(1, from: table.me), table)

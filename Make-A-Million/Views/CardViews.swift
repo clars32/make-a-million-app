@@ -139,15 +139,23 @@ struct CardFace: View {
 
 private extension Card {
     var assetImageName: String {
+        "card_\(assetCode)"
+    }
+
+    var miniAssetImageName: String {
+        "mini_card_\(assetCode)"
+    }
+
+    private var assetCode: String {
         switch self {
         case .colored(let color, let rank):
-            return "card_\(color.assetCode)\(rank.assetCode)"
+            return "\(color.assetCode)\(rank.assetCode)"
         case .tiger:
-            return "card_tiger"
+            return "tiger"
         case .bull:
-            return "card_bull"
+            return "bull"
         case .bear:
-            return "card_bear"
+            return "bear"
         }
     }
 }
@@ -191,11 +199,30 @@ struct MiniCardFace: View {
     private var tint: Color { card.tint == .primary ? .black : card.tint }
 
     var body: some View {
-        RoundedRectangle(cornerRadius: 6, style: .continuous)
-            .fill(Color.white)
+        miniBody
             .overlay(
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
                     .stroke(Color.gray.opacity(0.3), lineWidth: 0.5))
+            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .frame(width: 38, height: 26)
+            .opacity(faded ? 0.5 : 1.0)
+    }
+
+    @ViewBuilder
+    private var miniBody: some View {
+        if let image = miniAssetImage {
+            Image(uiImage: image)
+                .resizable()
+                .scaledToFit()
+                .background(Color.white)
+        } else {
+            drawnMiniBody
+        }
+    }
+
+    private var drawnMiniBody: some View {
+        RoundedRectangle(cornerRadius: 6, style: .continuous)
+            .fill(Color.white)
             .overlay(
                 HStack(spacing: 2) {
                     Text(card.shortLabel)
@@ -206,9 +233,15 @@ struct MiniCardFace: View {
                 }
                 .padding(.horizontal, 4)
                 .foregroundStyle(tint))
-            .frame(width: 38, height: 26)
-            .opacity(faded ? 0.5 : 1.0)
     }
+
+    #if canImport(UIKit)
+    private var miniAssetImage: UIImage? {
+        UIImage(named: card.miniAssetImageName)
+    }
+    #else
+    private var miniAssetImage: Never? { nil }
+    #endif
 }
 
 // MARK: - Fanned hand

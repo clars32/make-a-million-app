@@ -39,7 +39,7 @@ struct CenterTrickView: View {
             ledDot: 22, idleFont: .system(.title3, design: .rounded).bold())
 
         static let phone = Metrics(
-            cardW: 56, cardH: 78, spread: 64, circle: 188, frame: 232,
+            cardW: 64, cardH: 90, spread: 68, circle: 200, frame: 244,
             ledDot: 16, idleFont: .system(.subheadline, design: .rounded).bold())
     }
 

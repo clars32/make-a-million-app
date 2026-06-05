@@ -77,13 +77,6 @@ struct AppRoot: View {
                 showingSettings = false
             }
         }
-        #if DEBUG
-        .onAppear {
-            if ProcessInfo.processInfo.environment["MAM_AUTOSTART"] != nil, mode == .picking {
-                mode = .solo
-            }
-        }
-        #endif
     }
 
     private var effectiveName: String {
