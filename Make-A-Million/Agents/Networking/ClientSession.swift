@@ -59,6 +59,7 @@ final class ClientSession: ObservableObject {
     @Published private(set) var phase: Phase = .connecting
     @Published private(set) var mySeat: PlayerID? = nil
     @Published private(set) var seatNames: [String] = []
+    @Published private(set) var isTabletopMode: Bool? = nil
 
     /// The paced table state — what the UI renders right now. Continuous
     /// across the whole hand; never nil between turns, so SwiftUI's view
@@ -130,6 +131,7 @@ final class ClientSession: ObservableObject {
         draining = false
         pendingRequestID = nil
         pending = nil
+        isTabletopMode = nil
     }
 
     /// Send hello with the player's chosen name. Call once after start().
@@ -183,6 +185,9 @@ final class ClientSession: ObservableObject {
 
     private func handle(_ msg: HostMessage) {
         switch msg {
+
+        case .tableMode(let isTabletop):
+            isTabletopMode = isTabletop
 
         case .seatAssignment(let seat, let names):
             mySeat = seat

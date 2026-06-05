@@ -30,11 +30,15 @@ struct ClientGameView: View {
     private let cardW: CGFloat = 110
     private let cardH: CGFloat = 156
 
-    /// The hand to render. `pending` (a decision frame) takes priority so legal
+    /// The view to render. `pending` (a decision frame) takes priority so legal
     /// moves are accurate on this player's turn; otherwise the paced frame.
-    private var handView: PlayerView? {
+    private var tableView: PlayerView? {
         session.pending ?? session.displayView ?? lastView
     }
+    private var decisionView: PlayerView? {
+        session.pending ?? session.displayView ?? lastView
+    }
+    private var handView: PlayerView? { decisionView }
     private var isMyTurn: Bool { session.pending != nil }
 
     private var displayTick: Int {
@@ -47,6 +51,48 @@ struct ClientGameView: View {
     }
 
     var body: some View {
+        ZStack {
+            switch session.isTabletopMode {
+            case .some(true):
+                tabletopClientBody
+            case .some(false):
+                phoneGameBody
+            case .none:
+                feltBackground
+                waitingView
+            }
+
+            topBar
+
+            if case .paused(let reason) = session.phase {
+                pausedOverlay(reason: reason)
+            } else if session.phase == .disconnected {
+                disconnectedOverlay
+            }
+        }
+        .onAppear {
+            setOrientationForMode()
+            lastView = tableView
+        }
+        .onDisappear { setOrientation(.portrait) }
+        .onChange(of: session.isTabletopMode) { _, _ in
+            setOrientationForMode()
+        }
+        .onChange(of: displayTick) { _, _ in
+            guard let d = session.displayView else { return }
+            DispatchQueue.main.async { lastView = d }
+        }
+        .onChange(of: pendingTick) { _, _ in
+            // New decision arrived — clear any stale discard selection.
+            DispatchQueue.main.async {
+                discardSelection = []
+                if session.pending?.phase == .bidding { selectedBidIndex = 0 }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var tabletopClientBody: some View {
         ZStack {
             feltBackground
 
@@ -69,31 +115,35 @@ struct ClientGameView: View {
             .padding(.horizontal, 26)
             .padding(.bottom, cardH * 0.35)
             .zIndex(2)
+        }
+        .onAppear { setOrientation(.landscape) }
+    }
 
-            topBar
+    private var phoneGameBody: some View {
+        GameBody(
+            tableView: tableView,
+            decisionView: decisionView ?? tableView,
+            isInteractive: isMyTurn,
+            caughtUp: session.caughtUp,
+            endOfHandSnapshot: nil,
+            pendingTick: pendingTick,
+            displayTick: displayTick,
+            seatNames: clientSeatNames,
+            submit: { move in session.submit(move) },
+            dealAnother: nil,
+            onCaptureLastView: { lastView = $0 })
+        .onAppear { setOrientation(.portrait) }
+    }
 
-            if case .paused(let reason) = session.phase {
-                pausedOverlay(reason: reason)
-            } else if session.phase == .disconnected {
-                disconnectedOverlay
-            }
+    private var clientSeatNames: [String] {
+        var names = session.seatNames
+        if names.count != Seats.count {
+            names = ["South", "West", "North", "East"]
         }
-        .onAppear {
-            setOrientation(.landscape)
-            lastView = handView
+        if let seat = session.mySeat, names.indices.contains(seat.raw) {
+            names[seat.raw] = "You"
         }
-        .onDisappear { setOrientation(.portrait) }
-        .onChange(of: displayTick) { _, _ in
-            guard let d = session.displayView else { return }
-            DispatchQueue.main.async { lastView = d }
-        }
-        .onChange(of: pendingTick) { _, _ in
-            // New decision arrived — clear any stale discard selection.
-            DispatchQueue.main.async {
-                discardSelection = []
-                if session.pending?.phase == .bidding { selectedBidIndex = 0 }
-            }
-        }
+        return names
     }
 
     // MARK: - Hand
@@ -364,9 +414,14 @@ struct ClientGameView: View {
 
     // MARK: - Orientation
 
+    private func setOrientationForMode() {
+        setOrientation(session.isTabletopMode == true ? .landscape : .portrait)
+    }
+
     private func setOrientation(_ mask: UIInterfaceOrientationMask) {
-        if let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene {
-            scene.requestGeometryUpdate(.iOS(interfaceOrientations: mask))
+        OrientationLock.shared.lock(mask)
+        DispatchQueue.main.async {
+            OrientationLock.shared.lock(mask)
         }
     }
 }

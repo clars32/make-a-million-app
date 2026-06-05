@@ -117,19 +117,12 @@ struct TabletopGameView: View {
             headerStrip(table)
 
             ZStack {
-                // North (top) and South (bottom)
-                VStack {
-                    seatMarker(PlayerID(2), table)
-                    Spacer(minLength: 0)
-                    seatMarker(PlayerID(0), table)
-                }
-                // West (left) and East (right)
-                HStack {
-                    seatMarker(PlayerID(1), table)
-                    Spacer(minLength: 0)
-                    seatMarker(PlayerID(3), table)
-                }
                 trickCenter(table)
+                ForEach(Seats.all, id: \.raw) { seat in
+                    seatMarker(seat, table)
+                        .rotationEffect(tabletopSeatRotation(seat))
+                        .offset(tabletopSeatOffset(seat))
+                }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .padding(.horizontal, 24)
@@ -205,6 +198,31 @@ struct TabletopGameView: View {
     }
 
     // MARK: Seat markers
+
+    private var tabletopSeatDistance: CGFloat {
+        318
+    }
+
+    private func tabletopSeatOffset(_ seat: PlayerID) -> CGSize {
+        let distance = tabletopSeatDistance
+        switch seat.raw {
+        case 0: return CGSize(width: 0, height: distance)
+        case 1: return CGSize(width: -distance, height: 0)
+        case 2: return CGSize(width: 0, height: -distance)
+        case 3: return CGSize(width: distance, height: 0)
+        default: return .zero
+        }
+    }
+
+    private func tabletopSeatRotation(_ seat: PlayerID) -> Angle {
+        switch seat.raw {
+        case 0: return .degrees(0)
+        case 1: return .degrees(90)
+        case 2: return .degrees(180)
+        case 3: return .degrees(-90)
+        default: return .degrees(0)
+        }
+    }
 
     @ViewBuilder
     private func seatMarker(_ seat: PlayerID, _ table: PlayerView) -> some View {

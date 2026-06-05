@@ -247,10 +247,12 @@ final class NetSession: ObservableObject, RemoteSeatDelegate {
             // 2. Guarantee handshakes are queued BEFORE the engine starts.
             // This prevents .handStarted from arriving late and erasing the first .observation.
             let names = self.seatNamesArray()
+            let isTabletopMode = self.isTabletopHost
             await withTaskGroup(of: Void.self) { group in
                 for assn in self.assignments.values where assn.kind == .remote {
                     if let r = assn.remote {
                         group.addTask {
+                            await r.sendTableMode(isTabletop: isTabletopMode)
                             await r.sendSeatAssignment(seatNames: names)
                             await r.sendHandStarted()
                         }
@@ -424,6 +426,7 @@ final class NetSession: ObservableObject, RemoteSeatDelegate {
         Task { [weak self] in
             guard let self else { return }
             await r.rebind(transport: transport, delegate: self)
+            await r.sendTableMode(isTabletop: self.isTabletopHost)
             await r.sendSeatAssignment(seatNames: names)
             if resuming {
                 await r.sendHandStarted()
@@ -506,6 +509,11 @@ final class NetSession: ObservableObject, RemoteSeatDelegate {
 
     private func seatNamesArray() -> [String] {
         Seats.all.map { assignments[$0]?.name ?? defaultBotName(for: $0) }
+    }
+
+    private var isTabletopHost: Bool {
+        if case .tabletopSpectator = hostRole { return true }
+        return false
     }
 
     private func defaultBotName(for seat: PlayerID) -> String {

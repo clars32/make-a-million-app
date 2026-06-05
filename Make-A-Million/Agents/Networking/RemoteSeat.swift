@@ -115,6 +115,10 @@ actor RemoteSeat {
         try? await transport.send(.seatAssignment(seat: seat, seatNames: seatNames))
     }
 
+    func sendTableMode(isTabletop: Bool) async {
+        try? await transport.send(.tableMode(isTabletop: isTabletop))
+    }
+
     func sendHandStarted() async {
         try? await transport.send(.handStarted)
     }

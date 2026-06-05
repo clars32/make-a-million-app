@@ -42,6 +42,11 @@ nonisolated enum HostMessage: Codable, Sendable {
     /// seatNames[1] is West, seatNames[2] is North, seatNames[3] is East.
     case seatAssignment(seat: PlayerID, seatNames: [String])
 
+    /// Sent before `seatAssignment` for a new hand. In tabletop mode, phones
+    /// should render the hand-only client. In normal local multiplayer, phones
+    /// should render the full phone play surface.
+    case tableMode(isTabletop: Bool)
+
     /// A new hand has begun. Clients should clear any leftover display
     /// state (animation queue, pending-decision view) and prepare for
     /// fresh observations.
