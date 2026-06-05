@@ -9,6 +9,9 @@
 //
 
 import SwiftUI
+#if canImport(UIKit)
+import UIKit
+#endif
 
 // MARK: - Stable identity for animation / ForEach
 
@@ -75,14 +78,42 @@ struct CardFace: View {
     private var pad: CGFloat { height * 0.075 }
 
     var body: some View {
-        RoundedRectangle(cornerRadius: corner, style: .continuous)
-            .fill(Color.white)
+        cardBody
             .overlay(
                 RoundedRectangle(cornerRadius: corner, style: .continuous)
                     .stroke(
                         selected ? Color.accentColor
                             : (highlighted ? Color.green : Color.gray.opacity(0.3)),
                         lineWidth: (selected || highlighted) ? 2.5 : 0.5))
+            .shadow(
+                color: .black.opacity(selected ? 0.3 : 0.15),
+                radius: selected ? 8 : 2,
+                y: selected ? 4 : 1)
+            .frame(width: width, height: height)
+            .opacity(faded ? 0.5 : 1.0)
+            .scaleEffect(selected ? 1.1 : 1.0)
+            .animation(.spring(response: 0.3, dampingFraction: 0.6), value: selected)
+    }
+
+    @ViewBuilder
+    private var cardBody: some View {
+        if let image = cardAssetImage {
+            RoundedRectangle(cornerRadius: corner, style: .continuous)
+                .fill(Color.white)
+                .overlay {
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFit()
+                }
+                .clipShape(RoundedRectangle(cornerRadius: corner, style: .continuous))
+        } else {
+            drawnCardBody
+        }
+    }
+
+    private var drawnCardBody: some View {
+        RoundedRectangle(cornerRadius: corner, style: .continuous)
+            .fill(Color.white)
             .overlay(
                 VStack(alignment: .leading, spacing: 0) {
                     Text(card.shortLabel)
@@ -95,14 +126,60 @@ struct CardFace: View {
                 .padding(.leading, pad)
                 .foregroundStyle(tint),
                 alignment: .topLeading)
-            .shadow(
-                color: .black.opacity(selected ? 0.3 : 0.15),
-                radius: selected ? 8 : 2,
-                y: selected ? 4 : 1)
-            .frame(width: width, height: height)
-            .opacity(faded ? 0.5 : 1.0)
-            .scaleEffect(selected ? 1.1 : 1.0)
-            .animation(.spring(response: 0.3, dampingFraction: 0.6), value: selected)
+    }
+
+    #if canImport(UIKit)
+    private var cardAssetImage: UIImage? {
+        UIImage(named: card.assetImageName)
+    }
+    #else
+    private var cardAssetImage: Never? { nil }
+    #endif
+}
+
+private extension Card {
+    var assetImageName: String {
+        switch self {
+        case .colored(let color, let rank):
+            return "card_\(color.assetCode)\(rank.assetCode)"
+        case .tiger:
+            return "card_tiger"
+        case .bull:
+            return "card_bull"
+        case .bear:
+            return "card_bear"
+        }
+    }
+}
+
+private extension CardColor {
+    var assetCode: String {
+        switch self {
+        case .red: return "r"
+        case .yellow: return "y"
+        case .black: return "b"
+        case .green: return "g"
+        }
+    }
+}
+
+private extension Card.Rank {
+    var assetCode: String {
+        switch self {
+        case .one: return "1"
+        case .two: return "2"
+        case .three: return "3"
+        case .four: return "4"
+        case .money5k: return "5"
+        case .seven: return "7"
+        case .eight: return "8"
+        case .nine: return "9"
+        case .money10k: return "10"
+        case .eleven: return "11"
+        case .money15k: return "15"
+        case .money30k: return "30"
+        case .money40k: return "40"
+        }
     }
 }
 

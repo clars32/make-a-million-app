@@ -19,8 +19,8 @@
 //
 //  ENGINE BINDING: GameState.{dealtHands, dealtWidow, bidHistory, trump,
 //  highBidder, highBid, dealer, completedTricks, matchScore, debugReveal()} ;
-//  GameState.trickWinner / trickValue ; Trick.ledColor ; Card.{shortLabel,
-//  moneyValue} ; Seats.{all, team} ; CardColor.displayName.
+//  GameState.trickWinner / trickValue ; Trick.ledColor ; Card.moneyValue ;
+//  Seats.{all, team}.
 //
 
 import Foundation
@@ -46,7 +46,7 @@ nonisolated enum HandLog {
         // ---- Header
         line("════════════════ HAND \(handIndex + 1) ════════════════")
         line("dealer: \(name(final.dealer, seatLabels))"
-             + "   trump: \(final.trump?.displayName ?? "—")"
+             + "   trump: \(final.trump.map(colorName) ?? "—")"
              + "   contract: \(money(final.highBid))")
         if let d = declarer { line("declarer: \(name(d, seatLabels))") }
         line()
@@ -95,7 +95,7 @@ nonisolated enum HandLog {
             let raw = t.plays.reduce(0) { $0 + $1.card.moneyValue }
             let eff = GameState.trickValue(t)
             running[Seats.team(of: winner), default: 0] += eff
-            let ledChar = t.ledColor(trump: trump).map { String($0.displayName.prefix(1)) } ?? "?"
+            let ledChar = t.ledColor(trump: trump).map(colorInitial) ?? "?"
             let plays = t.plays.map { pc -> String in
                 "\(short(pc.player)):\(token(pc.card))\(pc.player == winner ? "*" : "")"
             }.joined(separator: "  ")
@@ -173,10 +173,46 @@ nonisolated enum HandLog {
     static func token(_ c: Card) -> String {
         switch c {
         case .colored(let col, let r):
-            return ["R", "Y", "B", "G"][col.rawValue] + r.label
+            return colorInitial(col) + rankLabel(r)
         case .tiger: return "TGR"
         case .bull:  return "BUL"
         case .bear:  return "BER"
+        }
+    }
+
+    static func colorName(_ color: CardColor) -> String {
+        switch color {
+        case .red: return "Red"
+        case .yellow: return "Yellow"
+        case .black: return "Black"
+        case .green: return "Green"
+        }
+    }
+
+    static func colorInitial(_ color: CardColor) -> String {
+        switch color {
+        case .red: return "R"
+        case .yellow: return "Y"
+        case .black: return "B"
+        case .green: return "G"
+        }
+    }
+
+    private static func rankLabel(_ rank: Card.Rank) -> String {
+        switch rank {
+        case .one: return "1"
+        case .two: return "2"
+        case .three: return "3"
+        case .four: return "4"
+        case .money5k: return "$5"
+        case .seven: return "7"
+        case .eight: return "8"
+        case .nine: return "9"
+        case .money10k: return "$10"
+        case .eleven: return "11"
+        case .money15k: return "$15"
+        case .money30k: return "$30"
+        case .money40k: return "$40"
         }
     }
     /// Render one captured trick-play decision as indented trace lines:

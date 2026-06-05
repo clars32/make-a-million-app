@@ -436,7 +436,7 @@ struct MonteCarloAgent: PlayerAgent {
         let winner = GameState.trickWinner(trick, trump: trump)
         let partnerWinning = Seats.team(of: winner) == Seats.team(of: view.me)
                           && winner != view.me
-        n.append("following  led=\(led.map { String($0.displayName.prefix(1)) } ?? "—")"
+        n.append("following  led=\(led.map(HandLog.colorInitial) ?? "—")"
                  + "  currentWinner=\(HandLog.short(winner))"
                  + "  partnerWinning=\(partnerWinning)")
 
@@ -453,7 +453,7 @@ struct MonteCarloAgent: PlayerAgent {
                 : "partner-dump SAFE — partner's win is uncontested")
         }
         if let l = led, let hi = inference.highestOutInColor(l) {
-            n.append("highest \(l.displayName) still out (at someone else): \(HandLog.token(hi))")
+            n.append("highest \(HandLog.colorName(l)) still out (at someone else): \(HandLog.token(hi))")
         }
         let held = inference.knownDeclarerHoldings()
         if !held.isEmpty {

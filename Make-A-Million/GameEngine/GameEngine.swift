@@ -75,7 +75,7 @@ nonisolated struct Trick: Codable, Hashable {
     /// as a last card), so the led color is the leader's card's effective
     /// color. In the rules' forced-Bull/Bear-lead corner the next card sets
     /// the color; we resolve that in `ledColor(trump:)`.
-    func ledColor(trump: CardColor) -> CardColor? {
+    nonisolated func ledColor(trump: CardColor) -> CardColor? {
         for pc in plays {
             if let c = pc.card.effectiveColor(trump: trump) { return c }
         }
@@ -519,7 +519,7 @@ extension GameState {
     /// rule) — they only modify value at scoring time. Highest card of the
     /// led color wins, unless any trump was played, in which case the highest
     /// trump wins. The Tiger is the top trump.
-    static func trickWinner(_ trick: Trick, trump: CardColor) -> PlayerID {
+    nonisolated static func trickWinner(_ trick: Trick, trump: CardColor) -> PlayerID {
         let led = trick.ledColor(trump: trump)
 
         func strength(_ card: Card) -> Int {
@@ -547,7 +547,7 @@ extension GameState {
     /// Value of one captured trick: sum of Money cards, then Bull doubles /
     /// Bear cancels. If BOTH appear in the trick, only the one played LAST
     /// takes effect (confirmed rule).
-    static func trickValue(_ trick: Trick) -> Int {
+    nonisolated static func trickValue(_ trick: Trick) -> Int {
         let base = trick.plays.reduce(0) { $0 + $1.card.moneyValue }
         var lastModifier: Card? = nil
         for pc in trick.plays {
@@ -777,7 +777,7 @@ extension GameState {
     /// Hidden-information reveal for tuning. nil until the hand is over, so
     /// it cannot leak mid-hand. Deliberately NOT Codable and NOT part of the
     /// PlayerView projection — agents never receive this.
-    func debugReveal() -> DebugReveal? {
+    nonisolated func debugReveal() -> DebugReveal? {
         guard phase == .handComplete else { return nil }
         let g0 = (capturedByTeam[0] ?? []).reduce(0) { $0 + GameState.trickValue($1) }
         let g1 = (capturedByTeam[1] ?? []).reduce(0) { $0 + GameState.trickValue($1) }
