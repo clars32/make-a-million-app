@@ -456,6 +456,33 @@ final class GameEngineTests: XCTestCase {
         XCTAssertEqual(baseMoney, 400_000)
     }
 
+    /// REGRESSION: a misdeal redeal must never reproduce the NEXT scheduled
+    /// hand's deal. The session and match runner schedule hand seeds as
+    /// `base &+ handIndex`; the redeal stride used to be `&+ 1`, so hand k's
+    /// redeal landed on exactly hand k+1's seed and — deals being
+    /// seat-indexed — the next hand replayed the identical 55-card layout
+    /// (observed in real play, dealer rotation notwithstanding).
+    func testMisdealRedealDoesNotReplayTheNextHandsDeal() throws {
+        // Find a real auto-misdeal under the standard $15k rule.
+        var misdealSeed: UInt64? = nil
+        for s in 0..<20_000 {
+            if GameState.newHand(dealer: PlayerID(0), seed: UInt64(s)).phase == .misdealDecision {
+                misdealSeed = UInt64(s); break
+            }
+        }
+        guard let seed = misdealSeed else {
+            XCTFail("no auto-misdeal found in 20k seeds — threshold rule broken?")
+            return
+        }
+        let misdeal = GameState.newHand(dealer: PlayerID(0), seed: seed)
+        let redealt = try misdeal.applying(.callMisdeal, by: currentActor(misdeal))
+        let nextHand = GameState.newHand(dealer: PlayerID(0), seed: seed &+ 1)
+        XCTAssertNotEqual(redealt.dealSeed, nextHand.dealSeed,
+                          "redeal seed must not collide with the +1 hand-seed schedule")
+        XCTAssertNotEqual(redealt.hands, nextHand.hands,
+                          "a misdeal redeal must not reproduce the next scheduled hand's deal")
+    }
+
     /// Helper: whose turn is it (via any seat's view — toAct is public truth).
     private func currentActor(_ g: GameState) -> PlayerID {
         g.view(for: PlayerID(0)).toAct

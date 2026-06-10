@@ -61,10 +61,14 @@ enum PlayoutPolicy {
     /// `commandingPull`: A/B-gated rollout improvement — when the declarer
     /// draws trump, lead a commanding HIGH trump (one no other seat can beat)
     /// instead of always the lowest, so the round is won and the lead kept.
-    /// Default off preserves the previous rollout behaviour exactly (and keeps
+    /// `specialEscape`: A/B-gated rollout improvement — Bull endgame
+    /// management (shed the Bull on worthless tricks late; when trapped with
+    /// BER+BUL as the last two cards, spend the Bull small and keep the Bear).
+    /// Defaults off preserve the previous rollout behaviour exactly (and keep
     /// the `move(in:seat:)` API stable for the golden tactics tests).
     static func move(in state: GameState, seat: PlayerID,
-                     commandingPull: Bool = false) -> Move {
+                     commandingPull: Bool = false,
+                     specialEscape: Bool = false) -> Move {
         let moves = state.legalMoves(for: seat)
         precondition(!moves.isEmpty,
                      "PlayoutPolicy asked to move with no legal moves "
@@ -93,7 +97,8 @@ enum PlayoutPolicy {
 
         case .trickPlay:
             return trickMove(in: state, seat: seat, legal: moves,
-                             commandingPull: commandingPull)
+                             commandingPull: commandingPull,
+                             specialEscape: specialEscape)
 
         case .handComplete:
             return moves[0]
@@ -105,7 +110,8 @@ enum PlayoutPolicy {
     private static func trickMove(in state: GameState,
                                   seat: PlayerID,
                                   legal: [Move],
-                                  commandingPull: Bool) -> Move {
+                                  commandingPull: Bool,
+                                  specialEscape: Bool) -> Move {
         guard let trump = state.trump else { return legal[0] }
         let plays = legal.compactMap { $0.playedCard }
         guard !plays.isEmpty else { return legal[0] }
@@ -128,7 +134,8 @@ enum PlayoutPolicy {
                                       trickLeader: trick?.leader ?? seat,
                                       state: state,
                                       seat: seat,
-                                      trump: trump))
+                                      trump: trump,
+                                      specialEscape: specialEscape))
         }
     }
 
@@ -298,7 +305,8 @@ enum PlayoutPolicy {
                                      trickLeader: PlayerID,
                                      state: GameState,
                                      seat: PlayerID,
-                                     trump: CardColor) -> Card {
+                                     trump: CardColor,
+                                     specialEscape: Bool = false) -> Card {
         let provisional = Trick(leader: trickLeader, plays: onTable)
         let currentWinner = GameState.trickWinner(provisional, trump: trump)
         let partnerWinning = Seats.team(of: currentWinner) == Seats.team(of: seat)
@@ -340,9 +348,14 @@ enum PlayoutPolicy {
             if safe {
                 // A Bull doubles a partner-winning money trick — and flips an
                 // already-Beared one back to base×2 for us. Worth it whenever
-                // real base money is present, so try it first.
-                if !mustFollow, let bull = plays.first(where: { if case .bull = $0 { return true }; return false }),
-                   moneyOnTable > 0 {
+                // real base money is present, so try it first. Under
+                // specialEscape, partner's safe trick is ALSO the free exit
+                // for a Bull late in the hand (doubling $0 costs nothing, and
+                // a Bull carried to the last card is forced onto the final
+                // trick, doubling it for whoever wins).
+                if !mustFollow, let bull = plays.first(where: { $0.isBull }),
+                   moneyOnTable > 0
+                    || (specialEscape && (state.hands[seat]?.count ?? 13) <= 6) {
                     return bull
                 }
                 // VALUE-SAFETY (not just rank-safety): adding money is pointless
@@ -378,6 +391,39 @@ enum PlayoutPolicy {
                 }
             }
             // Not safe — fall through to "try to win or shed low" logic.
+        }
+
+        // ---- SPECIAL-ESCAPE (A/B-gated): Bull endgame management.
+        // The Bull only ever helps a trick OUR side wins; carried too long it
+        // is FORCED onto/into the final trick and doubles it for whoever wins
+        // (the recurring "$160k trick-13" leak). The default shed comparator
+        // sorts specials last unconditionally, so without this rule EVERY
+        // rollout's future self is endplayed the same way — the catastrophe is
+        // constant across root candidates and cancels out of the MCTS
+        // comparison, hiding the leak from search.
+        if specialEscape, !partnerWinning,
+           let bull = plays.first(where: { $0.isBull }) {
+            let myCount = state.hands[seat]?.count ?? 13
+            // Trapped with BER+BUL as the last two cards: spend the BULL on
+            // the small pot and keep the BEAR — it can still cancel a big
+            // trick, and a trapped Bear is harmless (a forced Bear lead
+            // cancels its own trick). The shed comparator alone does the
+            // exact opposite.
+            if myCount == 2, !beared, plays.contains(where: { $0.isBear }) {
+                let outstanding = state.hands
+                    .filter { $0.key != seat }
+                    .flatMap(\.value)
+                    .reduce(0) { $0 + $1.moneyValue }
+                if outstanding > 2 * effValue { return bull }
+            }
+            // Cheap exit late in the hand: ditch the Bull on a worthless pot
+            // rather than carry it into the forced final-trick double. (Never
+            // onto a Beared trick — a Bull after the Bear flips the trick
+            // back to ×2 for its winner.)
+            if myCount <= 6, !beared,
+               moneyOnTable == 0 || (amLastToPlay && effValue <= 5_000) {
+                return bull
+            }
         }
 
         // ---- I can take the trick AND it's worth taking.

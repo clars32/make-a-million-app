@@ -128,6 +128,61 @@ struct MonteCarloAgent: PlayerAgent {
         /// estimates → potentially better moves at every tier. Off by default
         /// until a paired A/B confirms it; promote globally if it helps.
         var rolloutCommandingPull: Bool = false
+        /// A/B-gated ROLLOUT-policy improvement: Bull endgame management.
+        /// With this on, rollout seats shed the Bull on worthless tricks late
+        /// in the hand, and when trapped with BER+BUL as the last two cards
+        /// they spend the BULL on the small pot and keep the BEAR for the big
+        /// one (a trapped Bear is harmless — a forced Bear lead cancels its
+        /// own trick).
+        ///
+        /// PARKED AT FALSE (June 2026): paired self-play at 60 matches /
+        /// baseSeed 1 measured control 63% → treatment 50% (challenger
+        /// set-rate 15%→19%) — negative-to-noise, so not promoted. The
+        /// UNGATED agent-side fixes (Bull-escape shortlist candidates +
+        /// specials rescue) are what cure the observed Bull endplays, and
+        /// they work BECAUSE rollouts stay pessimistic: the root candidate
+        /// "shed the Bull now" rolls out clean while "hold it" rolls out into
+        /// the forced final-trick double, giving MCTS the differential. This
+        /// rollout rule as written likely over-fires (any moneyless trick
+        /// late, for all four rollout seats), washing out futures where one
+        /// more trick lands the Bull on partner's money. Lever + golden tests
+        /// kept for a refined version.
+        var rolloutSpecialEscape: Bool = false
+        /// Bypass the heuristic shortlist gate entirely and let MCTS grade
+        /// EVERY legal move. The shortlist exists for compute (no longer
+        /// binding — worst case ~13 candidates vs 4) and to shield the search
+        /// from rollout blind spots; against that, every catastrophic bug
+        /// found so far has been a shortlist OMISSION, and full-width search
+        /// eliminates that failure class outright.
+        ///
+        /// MEASURED (June 2026, paired 60 / baseSeed 1): exactly neutral —
+        /// control 63% → treatment 63%, set-rates within a point. PROMOTED to
+        /// Hard + Extreme on robustness grounds (neutral strength + immunity
+        /// to the omission class; their higher sample counts only shrink the
+        /// selection-noise risk vs the Normal-profile A/B). Easy/Normal stay
+        /// curated: preserves the strength ladder, keeps the default tier
+        /// snappy, and keeps arena A/Bs (which run Normal) ~3× faster.
+        /// `trickCandidates` is ignored when this is on.
+        var searchAllLegalMoves: Bool = false
+        /// Match-aware trick-play OBJECTIVE: utility = teamNet ($) +
+        /// weight × P(win match | final scores). 0 = pure team net (off).
+        /// P is a logistic in the score difference (scale $300k) with hard
+        /// 0/1 at the $1M finish line (both-cross resolved bid-team-wins, as
+        /// the standard endgame rule does). The blend keeps a gradient
+        /// everywhere: in a lopsided match P is flat and dollars decide; on a
+        /// knife edge (set/made swinging the lead, someone near $1M) the P
+        /// term dominates and the agent plays the MATCH, not the hand.
+        /// Weight is in dollars per unit of win-probability; ~$400k makes a
+        /// decisive match swing outweigh any single-hand money difference.
+        ///
+        /// PARKED AT 0 (June 2026): paired 60 / baseSeed 1 at weight 400k
+        /// measured neutral (control 63% → treatment 63%, challenger set-rate
+        /// 15%→14%). Expected: match context is live in only a minority of
+        /// hands, so an all-phases 60-match A/B has little power here, and a
+        /// soft prior isn't promoted on a neutral read (declarerTrumpBias
+        /// lesson). Revisit with a conditional instrument — e.g. win rate
+        /// given a team reaches $700k first — before re-judging the lever.
+        var matchWinWeight: Double = 0
 
         // ── Selectable strength tiers (Settings → Opponents) ───────────────
         // The strength ladder is driven, in order, by: `samples` (search
@@ -149,12 +204,13 @@ struct MonteCarloAgent: PlayerAgent {
                                         bidAggression: 1.00, partnerRespect: 0.78,
                                         matchAwareness: 1.0, trickCandidates: 4,
                                         bidLeanStrength: 1.0)
-        /// `Hard` — deeper search, wider shortlist, strong auction read, no
-        /// deliberate mistakes.
+        /// `Hard` — deeper search over EVERY legal move (no shortlist gate),
+        /// strong auction read, no deliberate mistakes.
         static let hard    = Difficulty(samples: 36, blunderRate: 0.0,
                                         bidAggression: 1.05, partnerRespect: 0.68,
                                         matchAwareness: 1.0, trickCandidates: 5,
-                                        bidLeanStrength: 1.6)
+                                        bidLeanStrength: 1.6,
+                                        searchAllLegalMoves: true)
         /// `Extreme` — RIGHT-SIZED (June 2026). Paired self-play showed neither
         /// extra samples (60 vs 36) nor pushier bid knobs (bidLean 2.0,
         /// respect 0.60) beat Hard — the MCTS search has plateaued at Hard's
@@ -167,7 +223,8 @@ struct MonteCarloAgent: PlayerAgent {
                                         bidAggression: 1.05, partnerRespect: 0.68,
                                         matchAwareness: 1.0, trickCandidates: 6,
                                         bidLeanStrength: 1.6,
-                                        deepInference: true)
+                                        deepInference: true,
+                                        searchAllLegalMoves: true)
 
         /// Player-facing strength tiers. A small, Codable, ordered enum so the
         /// settings layer and UI deal in names, not tuning constants.
@@ -190,8 +247,8 @@ struct MonteCarloAgent: PlayerAgent {
                 switch self {
                 case .easy:    return "Relaxed. Thinks shallowly, ignores the bidding, and slips up now and then."
                 case .normal:  return "A solid club player. Bids honestly and reads the auction. The default."
-                case .hard:    return "Searches deeper, reads the bidding closely, and rarely makes a mistake."
-                case .extreme: return "Maximum search and table-reading. (Card-counting deduction is coming.)"
+                case .hard:    return "Searches deeper — every legal card is considered — and reads the bidding closely."
+                case .extreme: return "Maximum search, full card-counting deduction, and every legal card considered."
                 }
             }
 
@@ -460,7 +517,19 @@ struct MonteCarloAgent: PlayerAgent {
         var totals = [Move: Double]()
         var counts = [Move: Int]()
 
-        for s in 0..<difficulty.samples {
+        // ROLLOUT-BUDGET REALLOCATION: every sampled world is reused for every
+        // candidate, so a 13-candidate decision spends 13× the rollouts of a
+        // 2-candidate one — yet narrow decisions are where variance bites
+        // hardest ("R$5 or R$40 under a loose Tiger" hinges on one hidden
+        // card, and produced opposite $80k+ preferences on back-to-back
+        // identical deals). Hold the rollout budget roughly constant instead:
+        // few candidates → proportionally more sampled worlds, capped at 4×
+        // base; wide decisions keep the base sample count.
+        let budget = difficulty.samples * max(4, difficulty.trickCandidates)
+        let worldCount = min(difficulty.samples * 4,
+                             max(difficulty.samples, budget / max(1, shortlist.count)))
+
+        for s in 0..<worldCount {
             var det = Determinizer(view: view, seed: seedBox.nextRaw() &+ UInt64(s),
                                    bidLeanStrength: difficulty.bidLeanStrength,
                                    deduceWidowHoldings: difficulty.deduceWidowHoldings,
@@ -470,8 +539,8 @@ struct MonteCarloAgent: PlayerAgent {
                 guard let afterMine = try? world.state.applying(cand, by: view.me)
                 else { continue }
                 let final = rollout(afterMine)
-                let net = teamNet(final, myTeam: myTeam, baseline: baseline)
-                totals[cand, default: 0] += Double(net)
+                let u = utility(final, myTeam: myTeam, baseline: baseline)
+                totals[cand, default: 0] += u
                 counts[cand, default: 0] += 1
             }
         }
@@ -483,23 +552,42 @@ struct MonteCarloAgent: PlayerAgent {
 
         guard let topMean = scored.first?.1 else { return shortlist[0] }
 
-        // Near-tie tiebreak: when several candidates score within MCTS noise of
-        // the best, prefer the most CONSERVATIVE card — don't burn the Tiger or a
-        // high trump on a trick a cheap one wins just as well. Side-suit and money
-        // cards carry no conservation penalty, so this never overrides "bank the
-        // money" (a genuinely better bank scores higher on its own and isn't a tie).
-        func conservationCost(_ m: Move) -> Int {
-            guard let c = m.playedCard, let trump = view.trump else { return 0 }
-            switch c {
-            case .tiger:                   return 1_000_000
-            case .colored(let col, let r): return col == trump ? 1_000 + r.rawValue : 0
-            case .bull, .bear:             return 0
-            }
-        }
-        let tieEps = 12_000.0   // TUNE: dollars of mean-net treated as "a tie"
+        // Near-tie tiebreak: when candidates score within MCTS noise of the
+        // best, the dollars printed on the card and the conservation rules
+        // decide — those are CERTAIN, a sub-noise difference in rollout means
+        // is not. Ordering (see `tiePreference`): never spend specials on a
+        // tie, then feed an opponent-bound trick as LITTLE money as possible
+        // (or a safely-partner-bound trick as MUCH as possible), then
+        // conserve trump, then lowest rank. Full-width search made the money
+        // term necessary: dominated money-donations now reach MCTS, and a
+        // money-blind tie once donated the G$40 over the G$5 in real play.
+        let following = !(view.currentTrick?.plays.isEmpty ?? true)
+        let dumpToPartner: Bool = {
+            guard let trump = view.trump,
+                  let trick = view.currentTrick, !trick.plays.isEmpty
+            else { return false }
+            let winner = GameState.trickWinner(trick, trump: trump)
+            guard Seats.team(of: winner) == Seats.team(of: view.me),
+                  winner != view.me else { return false }
+            return trick.plays.count == Seats.count - 1
+                || !canBeOverturned(trick: trick, onTable: trick.plays,
+                                    trump: trump, inference: inference,
+                                    view: view)
+        }()
+        let tieEps = 20_000.0   // TUNE: dollars of mean-net treated as "a tie"
         let best = scored
             .filter { $0.1 >= topMean - tieEps }
-            .min { conservationCost($0.0) < conservationCost($1.0) }
+            .min {
+                guard let trump = view.trump,
+                      let a = $0.0.playedCard, let b = $1.0.playedCard
+                else { return false }
+                return Self.tiePreference(a, trump: trump,
+                                          dumpToPartner: dumpToPartner,
+                                          following: following)
+                     < Self.tiePreference(b, trump: trump,
+                                          dumpToPartner: dumpToPartner,
+                                          following: following)
+            }
             ?? scored[0]
 
         var blundered = false
@@ -604,9 +692,15 @@ struct MonteCarloAgent: PlayerAgent {
     /// Build the candidate list MCTS evaluates. This is where the human
     /// principles live: we trim from the full legal set down to "moves a
     /// strong player would seriously consider".
-    private func trickShortlist(view: PlayerView,
-                                legal: [Move],
-                                inference: TableInference) -> [Move] {
+    /// Internal (not private) so the specials-rescue invariant below is
+    /// directly testable without MCTS in the loop.
+    func trickShortlist(view: PlayerView,
+                        legal: [Move],
+                        inference: TableInference) -> [Move] {
+        // FULL-WIDTH SEARCH (A/B lever): no gate at all — MCTS grades every
+        // legal move. Omission failures become structurally impossible.
+        if difficulty.searchAllLegalMoves { return legal }
+
         let playCards = legal.compactMap { $0.playedCard }
         guard !playCards.isEmpty,
               let trump = view.trump else { return legal }
@@ -627,7 +721,18 @@ struct MonteCarloAgent: PlayerAgent {
         // De-dup, cap, and ensure non-empty.
         let dedup = uniq(candidates)
         let capped = Array(dedup.prefix(difficulty.trickCandidates))
-        let finalCards = capped.isEmpty ? Array(playCards.prefix(difficulty.trickCandidates)) : capped
+        var finalCards = capped.isEmpty ? Array(playCards.prefix(difficulty.trickCandidates)) : capped
+        // SPECIALS RESCUE: never let a legal Bull/Bear be silently dropped by
+        // a singleton shortlist. A singleton skips MCTS entirely, so a one-
+        // line shed comparator ends up deciding six-figure special sequencing
+        // on its own (it has kept the Bull and spent the Bear — backwards —
+        // letting the final trick get doubled against us). Appending the
+        // dropped special forces the search to arbitrate.
+        if finalCards.count == 1 {
+            for c in playCards where (c.isBull || c.isBear) && !finalCards.contains(c) {
+                finalCards.append(c)
+            }
+        }
         return finalCards.map { .play($0) }
     }
 
@@ -787,9 +892,12 @@ struct MonteCarloAgent: PlayerAgent {
             if safe {
                 // A Bull doubles a partner-winning money trick, and flips an
                 // already-Beared one back to base×2 for us — a candidate even
-                // when the trick is currently Beared.
-                if !mustFollow, let bull = plays.first(where: { if case .bull = $0 { return true }; return false }),
-                   moneyOnTable > 0 {
+                // when the trick is currently Beared. With NO money on the
+                // table it's still a candidate: doubling $0 costs nothing and
+                // partner's safe trick is a free exit for a Bull that would
+                // otherwise be FORCED onto the final trick (doubling it for
+                // whoever wins — the recurring endgame disaster).
+                if !mustFollow, let bull = plays.first(where: { if case .bull = $0 { return true }; return false }) {
                     picks.append(bull)
                 }
                 // VALUE-SAFETY: if the trick is already Beared (worth 0), or a
@@ -848,6 +956,17 @@ struct MonteCarloAgent: PlayerAgent {
                let bank = winners.filter({ $0.isMoney }).max(by: { $0.moneyValue < $1.moneyValue }) {
                 picks.append(bank)
             }
+            // BULL ESCAPE: winning a near-worthless pot is not obviously
+            // better than ditching the Bull on it (it's only legal here
+            // because we can't follow). Held too long, the Bull is FORCED
+            // onto the final trick and doubles it for whoever wins — offer
+            // the exit and let MCTS weigh it against taking the trick.
+            // (Never onto a Beared trick: a Bull after the Bear flips the
+            // trick back to ×2 for its winner.)
+            if !beared, effValue <= 10_000,
+               let bull = pool.first(where: { $0.isBull }) {
+                picks.append(bull)
+            }
             // Also a cheap shed in case "win" is more expensive than the
             // trick is worth.
             if let sh = cheapShed(pool, led: led, trump: trump) {
@@ -867,6 +986,15 @@ struct MonteCarloAgent: PlayerAgent {
                     picks.append(bear)
                 }
             }
+        }
+
+        // BULL ESCAPE on a trick we're not winning: when the pot is small the
+        // Bull costs little here, while holding it risks the forced final-
+        // trick double. Offer it; MCTS arbitrates. (Never onto a Beared
+        // trick — a Bull after the Bear flips it back to ×2 for its winner.)
+        if !partnerWinning, !beared, effValue <= 10_000,
+           let bull = pool.first(where: { $0.isBull }) {
+            picks.append(bull)
         }
 
         // D. Default — shed cheapest. When we're feeding an opponent-controlled
@@ -974,7 +1102,8 @@ struct MonteCarloAgent: PlayerAgent {
         var steps = 0
         while s.phase != .handComplete && steps < 600 {
             let mv = PlayoutPolicy.move(in: s, seat: s.toAct,
-                                        commandingPull: difficulty.rolloutCommandingPull)
+                                        commandingPull: difficulty.rolloutCommandingPull,
+                                        specialEscape: difficulty.rolloutSpecialEscape)
             guard let ns = try? s.applying(mv, by: s.toAct) else { break }
             s = ns
             steps += 1
@@ -990,7 +1119,72 @@ struct MonteCarloAgent: PlayerAgent {
         return mine - opp
     }
 
+    /// The value MCTS maximises for one rolled-out world. Pure team net
+    /// (dollars) by default; with `matchWinWeight > 0` it blends in match-win
+    /// probability so play becomes match-aware: utility = net + W·P(win).
+    /// teamNet already prices the made/set discontinuity (set-back flows
+    /// through scoring); the P term adds the MATCH context it lacks — risking
+    /// a set matters more at $900k than at $200k, and a hand that crosses the
+    /// $1M line is worth everything. Logistic P keeps a useful gradient when
+    /// the match is live and goes flat when it's lopsided, where the dollar
+    /// term takes back over (the blend, not pure win-prob, for exactly that
+    /// washout reason).
+    private func utility(_ final: GameState,
+                         myTeam: Int,
+                         baseline: [Int: Int]) -> Double {
+        let net = Double(teamNet(final, myTeam: myTeam, baseline: baseline))
+        let w = difficulty.matchWinWeight
+        guard w > 0 else { return net }
+
+        let mine = Double(final.matchScore[myTeam] ?? 0)
+        let theirs = Double(final.matchScore[1 - myTeam] ?? 0)
+        let goal = 1_000_000.0
+        let p: Double
+        if mine >= goal || theirs >= goal {
+            if mine >= goal && theirs >= goal {
+                // Both crossed on this hand: the standard endgame rule gives
+                // the match to the team that won the bid.
+                let bidTeam = final.highBidder.map { Seats.team(of: $0) }
+                p = (bidTeam == myTeam) ? 1.0 : 0.0
+            } else {
+                p = mine >= goal ? 1.0 : 0.0
+            }
+        } else {
+            // Logistic in the score lead; $300k of lead ≈ 73% to win. Scale
+            // chosen so typical hand swings (±$200-400k) move P meaningfully
+            // without saturating mid-match. TUNE alongside matchWinWeight.
+            p = 1.0 / (1.0 + exp(-(mine - theirs) / 300_000.0))
+        }
+        return net + w * p
+    }
+
     // MARK: - Small helpers
+
+    /// Near-tie preference for `decideTrickPlay` (lower tuple = preferred,
+    /// compared lexicographically). Layers, in order:
+    ///   1. specials are never spent on a tie (Tiger worst, then Bull/Bear);
+    ///   2. CERTAIN money — minimise what an opponent-bound trick is fed,
+    ///      maximise what a safely-partner-bound trick is given (sign flip);
+    ///      neutral when leading (no trick direction exists yet);
+    ///   3. conserve trump over off-suit;
+    ///   4. lowest rank.
+    /// Internal (not private) so the ordering is unit-testable without MCTS
+    /// in the loop.
+    static func tiePreference(_ c: Card, trump: CardColor,
+                              dumpToPartner: Bool,
+                              following: Bool) -> (Int, Int, Int, Int) {
+        let specialClass: Int
+        switch c {
+        case .tiger:       specialClass = 2
+        case .bull, .bear: specialClass = 1
+        default:           specialClass = 0
+        }
+        let signedMoney = !following ? 0
+                        : dumpToPartner ? -c.moneyValue
+                        : c.moneyValue
+        let isTrump = (c.effectiveColor(trump: trump) == trump) ? 1 : 0
+        return (specialClass, signedMoney, isTrump, PlayoutPolicy.rankOf(c))
+    }
 
     private func shouldBlunder() -> Bool {
         guard difficulty.blunderRate > 0 else { return false }

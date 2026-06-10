@@ -370,10 +370,19 @@ extension GameState {
 
             // MARK: Misdeal — automatic redeal
             case (.misdealDecision, .callMisdeal):
-                // Same dealer, next seed, same rule (so a future settings
+                // Same dealer, fresh seed, same rule (so a future settings
                 // change persists for the whole match, not just one deal).
+                // SEED STRIDE: must NOT be a small step. The session and the
+                // match runner schedule hand seeds as `base &+ handIndex`, so
+                // the old `&+ 1` made "hand k's redeal" land on exactly the
+                // seed of hand k+1 — and since deals are seat-indexed, the
+                // next hand replayed the IDENTICAL 55-card layout (observed
+                // in real play; the rotated dealer doesn't mask it). A large
+                // odd golden-ratio stride keeps redeals deterministic and
+                // reproducible while staying out of reach of any small-stride
+                // hand schedule.
                 return GameState.newHand(dealer: s.dealer,
-                                         seed: s.dealSeed &+ 1,
+                                         seed: s.dealSeed &+ 0x9E37_79B9_7F4A_7C15,
                                          carryScore: s.matchScore,
                                          misdealRule: s.misdealRule,
                                          endgameRule: s.endgameRule)

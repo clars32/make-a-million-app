@@ -179,6 +179,72 @@ final class AIArenaTests: XCTestCase {
         print(r.summary)
     }
 
+    /// Probe for the (PARKED) `rolloutSpecialEscape` rollout change (Bull
+    /// endgame management in rollouts: shed the Bull on worthless tricks late;
+    /// when trapped with BER+BUL, spend the Bull small and keep the Bear).
+    /// NOTE: the agent-side shortlist changes (Bull-escape candidates +
+    /// specials rescue) shipped ungated and affect BOTH sides here — this A/B
+    /// isolates the ROLLOUT half only. Read TREATMENT against the same-seed
+    /// control, not 50%. Measured paired at 60 matches / baseSeed 1:
+    /// control 63% → treatment 50% (challenger set-rate 15%→19%) — i.e.
+    /// negative-to-noise, so the flag is parked off. The root-candidate fixes
+    /// alone cure the observed Bull endplays, and they rely on rollouts
+    /// staying pessimistic (the held-Bull catastrophe is the differential
+    /// signal MCTS uses to prefer the escape candidate).
+    func testSelfPlaySpecialEscape() async {
+        let control = await AIArena.runSelfPlay(matches: 60, challenger: .normal,
+                                                champion: .normal, baseSeed: 1)
+        print("CONTROL (normal vs normal):\n" + control.summary)
+        var withEscape = MonteCarloAgent.Difficulty.normal
+        withEscape.rolloutSpecialEscape = true
+        let r = await AIArena.runSelfPlay(matches: 60, challenger: withEscape,
+                                          champion: .normal, baseSeed: 1)
+        print("TREATMENT (specialEscape vs normal):\n" + r.summary)
+    }
+
+    /// Probe for `searchAllLegalMoves` (no shortlist gate — MCTS grades every
+    /// legal move). Eliminates the omission failure class outright at ~2-3×
+    /// rollout cost; the risk to measure is selection noise (more candidates,
+    /// more chances of a lucky 20-sample mean). Read TREATMENT against the
+    /// same-seed control, not 50%. Measured paired at 60 / baseSeed 1:
+    /// control 63% → treatment 63% (set 15/23% → 16/24%) — exactly NEUTRAL,
+    /// i.e. the noise risk did not materialise. PROMOTED to Hard + Extreme on
+    /// robustness grounds (immunity to the omission class at no strength
+    /// cost; their higher sample counts only shrink the noise risk further).
+    /// Easy/Normal stay curated for the ladder, latency, and arena speed.
+    func testSelfPlayAllLegalMoves() async {
+        let control = await AIArena.runSelfPlay(matches: 60, challenger: .normal,
+                                                champion: .normal, baseSeed: 1)
+        print("CONTROL (normal vs normal):\n" + control.summary)
+        var fullWidth = MonteCarloAgent.Difficulty.normal
+        fullWidth.searchAllLegalMoves = true
+        let r = await AIArena.runSelfPlay(matches: 60, challenger: fullWidth,
+                                          champion: .normal, baseSeed: 1)
+        print("TREATMENT (all-legal vs normal):\n" + r.summary)
+    }
+
+    /// Probe for the (PARKED) `matchWinWeight` lever (match-aware trick-play
+    /// objective: utility = teamNet + W·P(win match)). Expect any edge to
+    /// show as a MATCH-win-rate gain (the lever deliberately trades
+    /// hand-dollars for match equity near the $1M line and on set/made knife
+    /// edges). Read TREATMENT against the same-seed control, not 50%.
+    /// Measured paired at 60 / baseSeed 1, weight 400k: control 63% →
+    /// treatment 63% (challenger set 15%→14%) — NEUTRAL, so parked at 0 (soft
+    /// priors aren't promoted on neutral reads). Caveat: match context is
+    /// live in only a minority of hands, so this all-phases A/B has little
+    /// power; a fair re-test needs a conditional instrument (e.g. win rate
+    /// given a team reaches $700k first).
+    func testSelfPlayMatchObjective() async {
+        let control = await AIArena.runSelfPlay(matches: 60, challenger: .normal,
+                                                champion: .normal, baseSeed: 1)
+        print("CONTROL (normal vs normal):\n" + control.summary)
+        var matchAware = MonteCarloAgent.Difficulty.normal
+        matchAware.matchWinWeight = 400_000
+        let r = await AIArena.runSelfPlay(matches: 60, challenger: matchAware,
+                                          champion: .normal, baseSeed: 1)
+        print("TREATMENT (matchWinWeight 400k vs normal):\n" + r.summary)
+    }
+
     /// Isolates Extreme's STRENGTH levers from its (suspect, unvalidated) bid
     /// knobs: challenger = Hard + Extreme's search/deduction (samples 60,
     /// shortlist 6, deepInference) but Hard's bidding (bidLean 1.6, respect

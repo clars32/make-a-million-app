@@ -206,4 +206,138 @@ final class AITacticsTests: XCTestCase {
             toAct: P(0))
         XCTAssertEqual(PlayoutPolicy.move(in: state, seat: P(0)), .play(.bear))
     }
+
+    // MARK: - Bull endgame: escape the forced final-trick double
+    //
+    // The Bull only ever helps a trick OUR side wins, and it can only be
+    // played when its holder cannot follow (or as the last card). Carried to
+    // the last card it is FORCED onto/into the final trick and doubles it for
+    // whoever wins — a repeated six-figure leak in real hands. These lock the
+    // `specialEscape` rollout rules (and the legacy flag-off behaviour, so the
+    // stable `move(in:seat:)` golden API is unchanged).
+
+    func testShedsBullOnWorthlessOpponentTrickLate() {
+        // Late in the hand (≤6 cards left), an opponent (seat 3) is winning a
+        // $0 pot and I cannot follow. I could ruff with low trump — but the
+        // trick is worthless, and I'm carrying the Bull. With specialEscape,
+        // ditch the Bull now for free (doubling $0 costs nothing) instead of
+        // winning a nothing trick and staying trapped.
+        let hands: [PlayerID: [Card]] = [
+            P(0): [.bull, .colored(.red, .four), .colored(.red, .seven)],
+            P(1): [y(.money40k), grn(.one)],
+            P(2): [grn(.two), grn(.three)],
+            P(3): [y(.money30k), grn(.four)],
+        ]
+        let state = trickState(
+            hands: hands, trump: .red, leader: P(1),
+            onTable: [(P(1), y(.one)), (P(2), y(.two)), (P(3), y(.three))],
+            toAct: P(0))
+        XCTAssertEqual(PlayoutPolicy.move(in: state, seat: P(0), specialEscape: true),
+                       .play(.bull))
+        XCTAssertEqual(PlayoutPolicy.move(in: state, seat: P(0)),
+                       .play(.colored(.red, .four)),
+                       "legacy path (flag off) still ruffs cheaply")
+    }
+
+    func testSpendsBullAndKeepsBearWhenTrappedWithBoth() {
+        // Trapped holding exactly BER+BUL. An opponent is winning a small $5k
+        // pot while the other hands still hold $70k that the remaining tricks
+        // will decide. The shed comparator's instinct (Bear is "cheap", Bull
+        // is "costly") spends the Bear here — leaving the Bull to be FORCED
+        // onto the big final trick, doubling it for the opponents. Correct
+        // sequencing is the reverse: pay the small double now, keep the Bear
+        // to cancel the big trick.
+        let hands: [PlayerID: [Card]] = [
+            P(0): [.bull, .bear],
+            P(1): [y(.money40k), y(.money30k)],   // opponents' big money still live
+            P(2): [grn(.one), grn(.two)],
+            P(3): [y(.two)],
+        ]
+        let state = trickState(
+            hands: hands, trump: .red, leader: P(3),
+            onTable: [(P(3), y(.money5k))],
+            toAct: P(0))
+        XCTAssertEqual(PlayoutPolicy.move(in: state, seat: P(0), specialEscape: true),
+                       .play(.bull))
+        XCTAssertEqual(PlayoutPolicy.move(in: state, seat: P(0)),
+                       .play(.bear),
+                       "legacy comparator sheds the Bear first — locked as the flag-off behaviour")
+    }
+
+    func testShortlistRescuesDroppedSpecialFromSingleton() {
+        // Agent-level invariant (no MCTS in the loop): when the heuristic
+        // shortlist narrows a Bull/Bear-bearing legal set to a single card,
+        // the dropped special must be appended so the search — not a one-line
+        // comparator — decides the sequencing. Position: BER+BUL are my whole
+        // hand and the pot is big enough ($15k) that only the Bear survives
+        // the heuristic branches; the rescue must re-add the Bull.
+        let hands: [PlayerID: [Card]] = [
+            P(0): [.bull, .bear],
+            P(1): [y(.money40k), y(.money30k)],
+            P(2): [grn(.one), grn(.two)],
+            P(3): [y(.two)],
+        ]
+        let state = trickState(
+            hands: hands, trump: .red, leader: P(3),
+            onTable: [(P(3), y(.money15k))],
+            toAct: P(0))
+        let view = state.view(for: P(0))
+        let agent = MonteCarloAgent(name: "T", difficulty: .normal, seed: 1)
+        let shortlist = agent.trickShortlist(
+            view: view, legal: view.legalMoves,
+            inference: TableInference(view: view))
+        XCTAssertTrue(shortlist.contains(.play(.bear)),
+                      "Bear (cancel the pot) must be a candidate")
+        XCTAssertTrue(shortlist.contains(.play(.bull)),
+                      "rescued Bull must reach MCTS — sequencing the specials is the search's call")
+    }
+
+    // MARK: - Near-tie preference ordering (the decideTrickPlay tiebreak)
+    //
+    // When MCTS means are within noise of each other, the dollars printed on
+    // the card decide — they are certain, the means are not. Full-width
+    // search made this matter: dominated money-donations now reach MCTS, and
+    // a money-blind tie once donated a G$40 over a G$5 in real play.
+
+    func testTiePreferenceStarvesOpponentBoundTricks() {
+        // Feeding a trick the opponents own: less money strictly preferred.
+        let cheap = MonteCarloAgent.tiePreference(grn(.money5k), trump: .red,
+                                                  dumpToPartner: false, following: true)
+        let dear = MonteCarloAgent.tiePreference(grn(.money40k), trump: .red,
+                                                 dumpToPartner: false, following: true)
+        XCTAssertTrue(cheap < dear, "tied shed onto opponents must give the $5k, never the $40k")
+        // And a free card beats any money at all.
+        let free = MonteCarloAgent.tiePreference(grn(.one), trump: .red,
+                                                 dumpToPartner: false, following: true)
+        XCTAssertTrue(free < cheap)
+    }
+
+    func testTiePreferenceFeedsPartnerBoundTricks() {
+        // Partner safely owns the trick: MORE money preferred (the dump).
+        let dump = MonteCarloAgent.tiePreference(y(.money15k), trump: .red,
+                                                 dumpToPartner: true, following: true)
+        let hold = MonteCarloAgent.tiePreference(grn(.seven), trump: .red,
+                                                 dumpToPartner: true, following: true)
+        XCTAssertTrue(dump < hold, "tied choice on partner's safe trick must prefer the money dump")
+    }
+
+    func testTiePreferenceNeverSpendsSpecialsOrTigerOnATie() {
+        let low = MonteCarloAgent.tiePreference(grn(.one), trump: .red,
+                                                dumpToPartner: false, following: true)
+        let bear = MonteCarloAgent.tiePreference(.bear, trump: .red,
+                                                 dumpToPartner: false, following: true)
+        let tiger = MonteCarloAgent.tiePreference(.tiger, trump: .red,
+                                                  dumpToPartner: false, following: true)
+        XCTAssertTrue(low < bear, "specials outrank any plain card in a tie")
+        XCTAssertTrue(bear < tiger, "the Tiger is the last card a tie should ever spend")
+    }
+
+    func testTiePreferenceConservesTrumpAfterMoney() {
+        // Equal money (none): off-suit shed preferred over breaking trump.
+        let offSuit = MonteCarloAgent.tiePreference(grn(.one), trump: .red,
+                                                    dumpToPartner: false, following: true)
+        let trumpLow = MonteCarloAgent.tiePreference(.colored(.red, .four), trump: .red,
+                                                     dumpToPartner: false, following: true)
+        XCTAssertTrue(offSuit < trumpLow)
+    }
 }
