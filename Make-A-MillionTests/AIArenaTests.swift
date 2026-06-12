@@ -271,4 +271,100 @@ final class AIArenaTests: XCTestCase {
                                                 baseSeed: 1)
         print(r.summary)
     }
+
+    /// Bid-frame check for the calibrated evaluator: the per-card refit was
+    /// fitted on PLAYING hands; this confirms the pre-widow estimate (which
+    /// adds widowEV) is unbiased against realized gross. `widowEV` in the
+    /// `.calibrated` branch is the re-zero knob if this reads hot or cold.
+    func testBidCalibrationCalibrated() async {
+        var profile = MonteCarloAgent.Difficulty.normal
+        profile.calibratedValuation = true
+        let r = await AIArena.runBidCalibration(deals: 60, difficulty: profile,
+                                                baseSeed: 11)
+        print(r.summary)
+    }
+
+    /// Distillation instrument: mines positions where PlayoutPolicy's move
+    /// disagrees with its 1-ply ensemble rollout teacher (full-info argmax
+    /// over legal moves, ε-perturbed playouts of the true world, paired sign
+    /// test). Prints the recurring disagreement patterns ranked by total
+    /// regret, with exemplars — the shopping list for PlayoutPolicy patches.
+    /// Not pass/fail; deterministic given (hands, baseSeed, teacher).
+    ///
+    /// METHOD NOTE: the ε that controls rollout chaos also biases the
+    /// teacher toward cashing money early (sloppy futures squander held
+    /// money), so only believe patterns that appear under BOTH the standard
+    /// and the gentle teacher. This entry runs the gentle config; the
+    /// standard-config table for the same hands is in the session notes /
+    /// re-run with `teacher: .standard`.
+    func testPolicyDisagreementMining() async {
+        let r = await PolicyMiner.mine(hands: 200, difficulty: .normal,
+                                       baseSeed: 1, teacher: .gentle)
+        print(r.summary)
+    }
+
+    /// A/B for the PolicyMiner-derived rollout fix `rolloutTopPull` (the #1
+    /// mined pattern: the rollout declarer's low-trump pull loop). Challenger
+    /// rolls out with pull-from-the-top (Tiger included, skip-if-no-
+    /// commander); champion is today's default. Fresh control included —
+    /// the calibrated-valuation promotion moved the baseline.
+    func testSelfPlayRolloutTopPull() async {
+        // 60-match read (June 12 2026): control 52% → treatment 58%, set-rate
+        // 28/28 vs control 32/32 — promising, so per protocol it must be
+        // confirmed at ≥100 matches (commandingPull looked +5pp at 60 and
+        // flattened at 100).
+        var topPull = MonteCarloAgent.Difficulty.normal
+        topPull.rolloutTopPull = true
+        let control = await AIArena.runSelfPlay(matches: 100, challenger: .normal,
+                                                champion: .normal, baseSeed: 1)
+        print("CONTROL (normal vs normal):\n" + control.summary)
+        let r = await AIArena.runSelfPlay(matches: 100, challenger: topPull,
+                                          champion: .normal, baseSeed: 1)
+        print("TREATMENT (rolloutTopPull vs normal):\n" + r.summary)
+    }
+
+    /// A/B for the calibrated evaluator tables: challenger bids / discards /
+    /// names trump from the data-fitted `.calibrated` constants, champion
+    /// from the original hand-set ones. Trick play is identical on both
+    /// sides, so any delta is pure valuation quality. Watch the set-rate as
+    /// closely as the win-rate — the refit raises most estimates, so the
+    /// failure mode to catch is over-bidding into sets.
+    ///
+    /// MEASURED (June 2026, the run that PROMOTED `calibratedValuation`):
+    /// control 60% → treatment 60% (exactly neutral), bid share 52% → 60%,
+    /// avg contract $210k vs $219k, set-rate 26%/26%. Since the default is
+    /// now ON, this test reproduces the measurement with the roles flipped:
+    /// `calibrated` here is the default profile and the explicit `original`
+    /// below is the challenger's old behavior.
+    func testSelfPlayCalibratedValuation() async {
+        var original = MonteCarloAgent.Difficulty.normal
+        original.calibratedValuation = false
+        let control = await AIArena.runSelfPlay(matches: 60, challenger: .normal,
+                                                champion: .normal, baseSeed: 1)
+        print("CONTROL (normal vs normal):\n" + control.summary)
+        let r = await AIArena.runSelfPlay(matches: 60, challenger: original,
+                                          champion: .normal, baseSeed: 1)
+        print("TREATMENT (original valuation vs calibrated default):\n" + r.summary)
+    }
+
+    /// Per-card calibration harvest: prints observed vs predicted realization
+    /// rates for every money card in forced declarers' playing hands, plus the
+    /// residual block. Not pass/fail — this is the instrument that retunes
+    /// `keepProbability` / `offSuitWinProbability` / the non-money components
+    /// from data instead of by hand. (Edit deals/baseSeed here per run — the
+    /// clean-env wrapper in scripts/xcode-env.sh strips TEST_RUNNER_ vars, so
+    /// there is no env override. ~2s per deal at .normal.)
+    ///
+    /// The fitted `.calibrated` tables came from 360 deals pooled across two
+    /// seeds (1 and 100_001) measured against `.original`. The profile below
+    /// now has `calibratedValuation` ON, so a re-run verifies the fit:
+    /// predicted should track observed across cells.
+    func testCardCalibrationHarvest() async {
+        var profile = MonteCarloAgent.Difficulty.normal
+        profile.calibratedValuation = true
+        let r = await AIArena.runCardCalibration(deals: 120,
+                                                 difficulty: profile,
+                                                 baseSeed: 7)
+        print(r.summary)
+    }
 }

@@ -718,6 +718,21 @@ struct GameBody: View {
                                              height: miniCardHeight)
                             }
                         }
+                        // Public discard announcement: trump count spoken,
+                        // money shown face-up. Stays visible all hand, like
+                        // the widow itself.
+                        if let ann = table.discardAnnouncement {
+                            HStack(spacing: isTabletLayout ? 6 : 4) {
+                                Text(ann.summaryText)
+                                    .font(TableTypography.display(isTabletLayout ? .callout : .caption2))
+                                    .foregroundStyle(.white.opacity(0.7))
+                                ForEach(keyedHand(ann.moneyCards), id: \.key) { entry in
+                                    MiniCardFace(card: entry.card,
+                                                 width: miniCardWidth * 0.8,
+                                                 height: miniCardHeight * 0.8)
+                                }
+                            }
+                        }
                     }
                     .padding(.horizontal, isTabletLayout ? 12 : 8)
                     .padding(.vertical, isTabletLayout ? 10 : 7)
@@ -1011,7 +1026,7 @@ struct GameBody: View {
                 .frame(width: panelWidth, alignment: .leading)
                 .fixedSize(horizontal: false, vertical: true)
             if ready && legalMove == nil {
-                Text("That discard isn't legal — you can only discard money cards when you have no other choice.")
+                Text("That discard isn't legal — discard your other colors first, then trump, and money only when nothing else is left.")
                     .font(TableTypography.display(.caption))
                     .foregroundStyle(TableStyle.teamAmber)
                     .frame(width: panelWidth, alignment: .leading)
@@ -1051,7 +1066,7 @@ struct GameBody: View {
     
     private func discardHelpText(for view: PlayerView) -> String {
         if let trump = view.trump {
-            return "Tap three cards in your hand to discard. Tiger, Bull, Bear, and \(trump.displayName) (trump) cards cannot be discarded."
+            return "Tap three cards in your hand to discard. Tiger, Bull, and Bear never go. \(trump.displayName) (trump) only if nothing else can fill the three — the count is announced. Money only as a last resort — those cards are shown to everyone."
         } else {
             return "Tap three cards in your hand to discard. Tiger, Bull, and Bear cannot be discarded."
         }
@@ -1067,25 +1082,29 @@ struct GameBody: View {
     private func isDiscardSelectable(_ card: Card, in view: PlayerView) -> Bool {
         guard view.phase == .widowDiscard else { return false }
         if card.isSpecial { return false }
-        if let trump = view.trump, card.effectiveColor(trump: trump) == trump {
-            // Trump is protected, except when the hand simply doesn't have
-            // three non-special non-trump cards to fill the discard. The
-            // engine's legality check is the authority; this mirror keeps
-            // the UI from offering taps the engine would reject.
-            let safePool = view.myHand.filter {
-                !$0.isSpecial && $0.effectiveColor(trump: trump) != trump
+        // Mirror of GameState.isLegalWidowDiscard's tier order: plain cards
+        // fill the discard first, then trump (announced by count), then
+        // money (shown face-up). A protected card is only tappable when the
+        // safer tiers combined can't fill the three slots. The engine's
+        // legality check is the authority; this mirror keeps the UI from
+        // offering taps the engine would reject.
+        let plainPool = view.myHand.filter { candidate in
+            guard !candidate.isSpecial, !candidate.isMoney else { return false }
+            if let trump = view.trump {
+                return candidate.effectiveColor(trump: trump) != trump
             }
-            return safePool.count < 3
+            return true
         }
         if card.isMoney {
-            let safeNonMoney = view.myHand.filter { candidate in
-                guard !candidate.isSpecial, !candidate.isMoney else { return false }
-                if let trump = view.trump {
-                    return candidate.effectiveColor(trump: trump) != trump
-                }
-                return true
+            let trumpPool = view.myHand.filter { candidate in
+                guard let trump = view.trump else { return false }
+                return !candidate.isSpecial && !candidate.isMoney
+                    && candidate.effectiveColor(trump: trump) == trump
             }
-            return safeNonMoney.count < 3
+            return plainPool.count + trumpPool.count < 3
+        }
+        if let trump = view.trump, card.effectiveColor(trump: trump) == trump {
+            return plainPool.count < 3
         }
         return true
     }

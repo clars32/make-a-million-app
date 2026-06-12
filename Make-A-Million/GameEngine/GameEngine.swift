@@ -83,6 +83,22 @@ nonisolated struct Trick: Codable, Hashable {
     }
 }
 
+// MARK: - Widow discard announcement
+
+/// PUBLIC record of what the high bidder's discard gave away, per the table
+/// rules: discarded trump is announced aloud by COUNT (the cards themselves
+/// stay face-down), and discarded Money cards are shown face-up (exact
+/// identities). Plain discards reveal nothing and are not recorded here.
+/// `trumpCount == 0 && moneyCards.isEmpty` is itself public information at a
+/// real table — "no announcement" tells everyone nothing protected was buried.
+nonisolated struct DiscardAnnouncement: Codable, Hashable {
+    /// Number of non-Money trump cards discarded (announced, never shown).
+    let trumpCount: Int
+    /// The exact Money cards discarded, shown to every player. Money of the
+    /// trump color counts here (it is revealed face-up), not in `trumpCount`.
+    let moneyCards: [Card]
+}
+
 // MARK: - GameState  (the single source of truth)
 
 nonisolated struct GameState: Codable {
@@ -107,6 +123,9 @@ nonisolated struct GameState: Codable {
 
     // Hand setup
     private(set) var trump: CardColor?
+    /// Public record of the high bidder's widow discard (trump count
+    /// announced, money shown). nil until the discard happens.
+    private(set) var discardAnnouncement: DiscardAnnouncement?
     /// House rule governing automatic redeals on low-money hands. Stored on
     /// state so a redeal carries the same rule forward, and so `legalMoves`
     /// in `.misdealDecision` can reason about it.
@@ -179,6 +198,7 @@ nonisolated struct GameState: Codable {
             passed: [],
             bidHistory: [],
             trump: nil,
+            discardAnnouncement: nil,
             misdealRule: misdealRule,
             endgameRule: endgameRule,
             currentTrick: nil,
@@ -307,11 +327,16 @@ extension GameState {
     }
 
     /// Protection ordering, strictest first:
-    ///   specials > trump > money > everything else
-    /// Each upper tier may only be touched when the strictly-safer pool
-    /// can't supply 3 cards. The trump tier exists because trump is named
-    /// BEFORE the discard now — the bidder always knows which color they're
-    /// committed to.
+    ///   specials > money > trump > everything else
+    /// The discard fills from the safest tier outward, with EXACT counts:
+    /// every plain (non-special, non-trump, non-money) card is used before
+    /// any trump may go, and every non-money trump before any money. A
+    /// protected card is never legal while a safer one could take its place.
+    /// Money outranks trump because a forced trump discard is only announced
+    /// by count, while a forced money discard is revealed face-up. Money of
+    /// the trump color sits in the money tier (it gets revealed). Trump is
+    /// named BEFORE the discard, so the bidder always knows which color
+    /// they're committed to.
     static func isLegalWidowDiscard(_ discard: [Card],
                                     from hand: [Card],
                                     trump: CardColor) -> Bool {
@@ -320,21 +345,25 @@ extension GameState {
         // 1. Tiger / Bull / Bear: never. Hard rule.
         if discard.contains(where: { $0.isSpecial }) { return false }
 
-        // 2. Trump: only legal if there aren't enough non-special non-trump
-        //    cards to fill the discard.
-        let nonSpecialNonTrump = hand.filter {
-            !$0.isSpecial && $0.effectiveColor(trump: trump) != trump
+        // Tier of a non-special card: money > trump > plain.
+        func isTrumpTier(_ c: Card) -> Bool {
+            !c.isMoney && c.effectiveColor(trump: trump) == trump
         }
-        let trumpInDiscard = discard.contains { $0.effectiveColor(trump: trump) == trump }
-        if trumpInDiscard && nonSpecialNonTrump.count >= 3 { return false }
+        func isPlainTier(_ c: Card) -> Bool {
+            !c.isMoney && c.effectiveColor(trump: trump) != trump
+        }
 
-        // 3. Money: only legal if there aren't enough non-special non-trump
-        //    non-money cards to fill the discard.
-        let nonMoneyNonSpecialNonTrump = nonSpecialNonTrump.filter { !$0.isMoney }
-        let moneyInDiscard = discard.contains { $0.isMoney }
-        if moneyInDiscard && nonMoneyNonSpecialNonTrump.count >= 3 { return false }
+        let plainInHand = hand.filter { !$0.isSpecial && isPlainTier($0) }.count
+        let trumpInHand = hand.filter { !$0.isSpecial && isTrumpTier($0) }.count
 
-        return true
+        // 2. Forced tier sizes: plain fills first, then trump, then money.
+        let plainForced = min(3, plainInHand)
+        let trumpForced = min(3 - plainForced, trumpInHand)
+        let moneyForced = 3 - plainForced - trumpForced
+
+        return discard.filter(isPlainTier).count == plainForced
+            && discard.filter(isTrumpTier).count == trumpForced
+            && discard.filter(\.isMoney).count == moneyForced
     }
 
     static func combinations<T>(_ arr: [T], choose k: Int) -> [[T]] {
@@ -396,6 +425,14 @@ extension GameState {
                   GameState.isLegalWidowDiscard(cards, from: hand, trump: trump)
             else { throw MoveError.illegalDiscard }
             s.hands[player] = hand.filter { !cards.contains($0) }
+            // Table announcement: forced trump discards are declared by
+            // count; forced money discards are shown face-up. Both are
+            // public from here on (projected into every PlayerView).
+            s.discardAnnouncement = DiscardAnnouncement(
+                trumpCount: cards.filter {
+                    !$0.isMoney && $0.effectiveColor(trump: trump) == trump
+                }.count,
+                moneyCards: cards.filter(\.isMoney))
             // Discard is the LAST setup step now — go straight to trick play.
             s.phase = .trickPlay
             s.toAct = s.highBidder!
@@ -642,6 +679,9 @@ nonisolated struct PlayerView: Codable {
     /// The three widow cards from this deal, public once the high bidder has
     /// taken the bid and the hand moves past misdeal (if any).
     let widow: [Card]?
+    /// Public announcement of the high bidder's discard: trump count spoken
+    /// aloud, money cards shown face-up. nil until the discard happens.
+    let discardAnnouncement: DiscardAnnouncement?
     let currentTrick: Trick?
     let completedTrickCount: Int
     /// Full public trick history, oldest first. Empty until the first trick
@@ -683,6 +723,7 @@ nonisolated struct PlayerView: Codable {
                 opener: opener,
                 bidHistory: bidHistory,
                 widow: widow,
+                discardAnnouncement: discardAnnouncement,
                 currentTrick: Trick(leader: leader, plays: plays),
                 completedTrickCount: completedTrickCount,
                 completedTricks: completedTricks,
@@ -717,6 +758,7 @@ nonisolated struct PlayerView: Codable {
             opener: opener,
             bidHistory: bidHistory,
             widow: widow,
+            discardAnnouncement: discardAnnouncement,
             currentTrick: Trick(leader: trick.leader, plays: plays),
             completedTrickCount: completedTrickCount,
             completedTricks: completedTricks,
@@ -761,6 +803,7 @@ extension GameState {
             opener: Seats.next(dealer),
             bidHistory: bidHistory,
             widow: publicWidow,
+            discardAnnouncement: discardAnnouncement,
             currentTrick: currentTrick,
             completedTrickCount: completedTricks.count,
             completedTricks: history,

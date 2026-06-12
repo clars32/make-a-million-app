@@ -36,6 +36,7 @@ final class AIWorldTests: XCTestCase {
             opener: declarer,
             bidHistory: [],
             widow: widow,
+            discardAnnouncement: nil,
             currentTrick: Trick(leader: declarer),
             completedTrickCount: 0,
             completedTricks: [],
@@ -87,6 +88,45 @@ final class AIWorldTests: XCTestCase {
                           "Without deduction the Tiger should sometimes land elsewhere")
     }
 
+    /// The public discard announcement is a HARD sampling constraint:
+    /// revealed money discards land in NOBODY's hand, and exactly the
+    /// announced number of trump cards is buried — every other unseen trump
+    /// must be dealt to a seat.
+    func testDiscardAnnouncementConstrainsSampledWorlds() {
+        let me = PlayerID(0)
+        let declarer = PlayerID(1)
+        let myHand: [Card] = Card.Rank.allCases.map { .colored(.yellow, $0) }
+        let revealed: Card = .colored(.red, .money30k)
+        let view = PlayerView(
+            me: me, myHand: myHand, phase: .trickPlay, toAct: declarer,
+            trump: .black, highBid: 200_000, highBidder: declarer,
+            passed: [], opener: declarer, bidHistory: [],
+            widow: [revealed, .colored(.green, .three), .colored(.green, .four)],
+            discardAnnouncement: DiscardAnnouncement(trumpCount: 1,
+                                                     moneyCards: [revealed]),
+            currentTrick: Trick(leader: declarer), completedTrickCount: 0,
+            completedTricks: [], matchScore: [0: 0, 1: 0], legalMoves: [])
+
+        for s in 0..<30 {
+            var det = Determinizer(view: view, seed: UInt64(s) &+ 1)
+            guard let world = det.sample() else { XCTFail("sample \(s) failed"); continue }
+            let hands = world.state.hands
+            for seat in Seats.all {
+                XCTAssertEqual(hands[seat]?.count, 13, "hand size (seed \(s))")
+                XCTAssertFalse(hands[seat]!.contains(revealed),
+                               "revealed money discard dealt to seat \(seat.raw) (seed \(s))")
+            }
+            // Of the 8 non-money black (trump) cards — none in my yellow
+            // hand, none played — exactly 1 is buried, so 7 are in hands.
+            let trumpInHands = hands.values.joined().filter {
+                !$0.isSpecial && !$0.isMoney
+                    && $0.effectiveColor(trump: .black) == .black
+            }.count
+            XCTAssertEqual(trumpInHands, 7,
+                           "announced trump count violated (seed \(s))")
+        }
+    }
+
     /// `declarerTrumpBias` (shape prior) should give the declarer MORE trump on
     /// average than uniform dealing. I'm a defender holding a full red suit (so
     /// zero trump), trump is black, nothing played — all 14 trumps are free to
@@ -99,6 +139,7 @@ final class AIWorldTests: XCTestCase {
             me: me, myHand: myHand, phase: .trickPlay, toAct: declarer,
             trump: .black, highBid: 200_000, highBidder: declarer,
             passed: [], opener: declarer, bidHistory: [], widow: nil,
+            discardAnnouncement: nil,
             currentTrick: nil, completedTrickCount: 0, completedTricks: [],
             matchScore: [0: 0, 1: 0], legalMoves: [])
 

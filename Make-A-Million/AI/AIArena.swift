@@ -328,17 +328,20 @@ enum AIArena {
             let deal = GameState.newHand(dealer: PlayerID(0), seed: seed,
                                          misdealRule: .disabled)
             for seat in Seats.all {
-                // Evaluator estimate from the 13-card pre-widow hand.
+                // Evaluator estimate from the 13-card pre-widow hand, using
+                // the table set the difficulty profile plays with.
                 let view = deal.view(for: seat)
-                let est = HandEvaluator.bestValuation(view: view, hand: view.myHand).expectedGross
+                let est = HandEvaluator.bestValuation(view: view, hand: view.myHand,
+                                                      tables: difficulty.evaluatorTables).expectedGross
 
                 // Force this seat to be the declarer at the floor and play out.
                 let agents: [PlayerAgent] = Seats.all.map {
                     MonteCarloAgent(name: "MC\($0.raw)", difficulty: difficulty,
                                     seed: seed &+ UInt64($0.raw) &* 97 &+ 7)
                 }
-                guard let realized = await playOutAsDeclarer(
-                    deal: deal, declarer: seat, contract: floor, agents: agents)
+                guard let final = await playOutAsDeclarer(
+                    deal: deal, declarer: seat, contract: floor, agents: agents),
+                      let realized = final.debugReveal()?.bidTeamGross
                 else { continue }
 
                 n += 1
@@ -376,11 +379,11 @@ enum AIArena {
 
     /// Build the post-bidding state with `declarer` holding the bid at
     /// `contract`, then drive to `.handComplete` with `agents`. Returns the
-    /// bidding team's realized gross, or nil if the hand failed to settle.
+    /// settled final state, or nil if the hand failed to settle.
     private static func playOutAsDeclarer(deal: GameState,
                                           declarer: PlayerID,
                                           contract: Int,
-                                          agents: [PlayerAgent]) async -> Int? {
+                                          agents: [PlayerAgent]) async -> GameState? {
         // Replicate the engine's end-of-bidding transition: declarer takes the
         // widow (16 cards), everyone else has passed, phase → namingTrump.
         var hands = deal.hands
@@ -397,6 +400,7 @@ enum AIArena {
             passed: Set(Seats.all.filter { $0 != declarer }),
             bidHistory: [],
             trump: nil,
+            discardAnnouncement: nil,
             misdealRule: .disabled,
             endgameRule: .standard,
             currentTrick: nil,
@@ -413,8 +417,244 @@ enum AIArena {
             guard let ns = try? s.applying(move, by: mover) else { return nil }
             s = ns; steps += 1
         }
-        guard s.phase == .handComplete, let rv = s.debugReveal() else { return nil }
-        return rv.bidTeamGross
+        guard s.phase == .handComplete else { return nil }
+        return s
+    }
+
+    // MARK: - Per-card valuation calibration (the evaluator's probability tables)
+    //
+    // `runBidCalibration` zeroes the evaluator's AGGREGATE bias, but it cannot
+    // say WHICH constant is wrong — a pessimistic keepProbability can hide
+    // behind an optimistic partnerSupport and still sum to "well-calibrated".
+    // This instrument measures the tables at per-card resolution: for every
+    // money card in a forced declarer's final playing hand, did the declarer's
+    // team actually realize its value? Realized value carries the trick
+    // multiplier (Bull ×2, Bear ×0), so observed rates compare directly to the
+    // moneyValue × p products the evaluator sums. The residual (team gross
+    // minus the declarer's own realized money) is reported per trump-length
+    // bucket against the evaluator's non-money components (control / specials /
+    // voids / length / partnerSupport), which predict exactly that residual —
+    // so refitting the tables AND re-zeroing the residual keeps the aggregate
+    // calibration intact by construction.
+
+    struct CardCalibrationResult {
+        struct CardObs {
+            let inTrump: Bool
+            let rank: Card.Rank
+            let suitLen: Int      // effective-color length in the playing hand
+            let trumpLen: Int     // evaluator's definition (Tiger counts)
+            let hasTiger: Bool
+            let face: Int
+            let realized: Int     // face × trick multiplier if declarer's team captured, else 0
+            let predicted: Double // face × current-model p
+        }
+        struct HandObs {
+            let trumpLen: Int
+            let hasTiger: Bool
+            let teamGross: Int
+            let ownMoneyRealized: Int
+            let predictedOwnMoney: Int
+            let predictedResidual: Int
+        }
+        let playouts: Int
+        let cardObs: [CardObs]
+        let handObs: [HandObs]
+
+        var summary: String {
+            let lenLabels = ["≤2", "3", "4", "5", "6", "7+"]
+            func lenBucket(_ n: Int) -> Int { n <= 2 ? 0 : (n >= 7 ? 5 : n - 2) }
+            let suitLabels = ["1", "2", "3", "4+"]
+            func suitBucket(_ n: Int) -> Int { n <= 1 ? 0 : (n >= 4 ? 3 : n - 1) }
+            let offTrumpLabels = ["≤3", "4", "5", "6+"]
+            func offTrumpBucket(_ n: Int) -> Int { n <= 3 ? 0 : (n >= 6 ? 3 : n - 3) }
+            let ranks: [(Card.Rank, String)] = [
+                (.money40k, "$40k"), (.money30k, "$30k"), (.money15k, "$15k"),
+                (.money10k, "$10k"), (.money5k, "$5k")]
+
+            func pad(_ s: String, _ w: Int) -> String {
+                s.count >= w ? s + " " : s.padding(toLength: w, withPad: " ", startingAt: 0)
+            }
+            // Value-weighted rates: Σrealized/Σface vs Σpredicted/Σface.
+            func cell(_ obs: [CardObs]) -> String {
+                let face = obs.reduce(0) { $0 + $1.face }
+                guard face > 0 else { return "—" }
+                let real = obs.reduce(0) { $0 + $1.realized }
+                let pred = obs.reduce(0.0) { $0 + $1.predicted }
+                return String(format: "%.0f/%.0f n=%d",
+                              100 * Double(real) / Double(face),
+                              100 * pred / Double(face), obs.count)
+            }
+            func money(_ d: Double) -> String { String(format: "$%.0fk", d / 1000) }
+
+            var t = "AIArena card calibration — \(playouts) forced-declarer playouts, "
+                  + "\(cardObs.count) money-card observations\n"
+                  + "Cells: realized%/predicted% of face value (n cards). Bull ×2 / "
+                  + "Bear ×0 are in realized, so >100 is possible.\n"
+
+            t += "\nTRUMP MONEY — rank × declarer trump length (keepProbability)\n"
+            t += pad("", 6)
+            for l in lenLabels { t += pad(l, 15) }
+            for (rank, label) in ranks {
+                t += "\n" + pad(label, 6)
+                for b in 0..<lenLabels.count {
+                    let sel = cardObs.filter {
+                        $0.inTrump && $0.rank == rank && lenBucket($0.trumpLen) == b
+                    }
+                    t += pad(cell(sel), 15)
+                }
+            }
+            let trumpAll = cardObs.filter(\.inTrump)
+            t += "\n  Tiger marginal (all trump money): with Tiger "
+               + cell(trumpAll.filter(\.hasTiger)) + "   without "
+               + cell(trumpAll.filter { !$0.hasTiger })
+
+            t += "\n\nOFF-SUIT MONEY — rank × suit length (offSuitWinProbability)\n"
+            t += pad("", 6)
+            for l in suitLabels { t += pad(l, 15) }
+            for (rank, label) in ranks {
+                t += "\n" + pad(label, 6)
+                for b in 0..<suitLabels.count {
+                    let sel = cardObs.filter {
+                        !$0.inTrump && $0.rank == rank && suitBucket($0.suitLen) == b
+                    }
+                    t += pad(cell(sel), 15)
+                }
+            }
+            let offAll = cardObs.filter { !$0.inTrump }
+            t += "\n  Trump-length marginal (all off-suit money): "
+            for b in 0..<offTrumpLabels.count {
+                let sel = offAll.filter { offTrumpBucket($0.trumpLen) == b }
+                t += offTrumpLabels[b] + "=" + cell(sel) + "   "
+            }
+            t += "\n  Tiger marginal ($40k off-suit): with Tiger "
+               + cell(offAll.filter { $0.rank == .money40k && $0.hasTiger })
+               + "   without "
+               + cell(offAll.filter { $0.rank == .money40k && !$0.hasTiger })
+
+            t += "\n\nRESIDUAL — team gross minus declarer's own realized money, "
+               + "vs the evaluator's non-money components\n"
+            t += pad("trumpLen", 10) + pad("n", 6)
+               + pad("own r/p", 16) + pad("resid r/p", 16) + pad("gross r/p", 16)
+            func residRow(_ sel: [HandObs], label: String) -> String {
+                guard !sel.isEmpty else { return "" }
+                let n = Double(sel.count)
+                let ownR  = Double(sel.reduce(0) { $0 + $1.ownMoneyRealized }) / n
+                let ownP  = Double(sel.reduce(0) { $0 + $1.predictedOwnMoney }) / n
+                let resP  = Double(sel.reduce(0) { $0 + $1.predictedResidual }) / n
+                let gross = Double(sel.reduce(0) { $0 + $1.teamGross }) / n
+                return "\n" + pad(label, 10) + pad("\(sel.count)", 6)
+                    + pad(money(ownR) + "/" + money(ownP), 16)
+                    + pad(money(gross - ownR) + "/" + money(resP), 16)
+                    + pad(money(gross) + "/" + money(ownP + resP), 16)
+            }
+            for b in 0..<lenLabels.count {
+                t += residRow(handObs.filter { lenBucket($0.trumpLen) == b },
+                              label: lenLabels[b])
+            }
+            t += residRow(handObs, label: "ALL")
+            return t
+        }
+    }
+
+    /// Deal `deals` hands; for EACH seat, force it to declare at the opening
+    /// floor (same counterfactual as `runBidCalibration`) and play to settle
+    /// under competent (MC) play. Records one observation per money card in
+    /// the declarer's final 13-card playing hand — reconstructed exactly from
+    /// the cards the declarer played — plus one residual observation per hand.
+    static func runCardCalibration(deals: Int,
+                                   difficulty: MonteCarloAgent.Difficulty = .normal,
+                                   baseSeed: UInt64 = 1) async -> CardCalibrationResult {
+        var cardObs: [CardCalibrationResult.CardObs] = []
+        var handObs: [CardCalibrationResult.HandObs] = []
+        var playouts = 0
+        let floor = Bidding.openingMinimum
+
+        for d in 0..<deals {
+            let seed = baseSeed &+ UInt64(d) &* 2_654_435_761
+            let deal = GameState.newHand(dealer: PlayerID(0), seed: seed,
+                                         misdealRule: .disabled)
+            for seat in Seats.all {
+                let agents: [PlayerAgent] = Seats.all.map {
+                    MonteCarloAgent(name: "MC\($0.raw)", difficulty: difficulty,
+                                    seed: seed &+ UInt64($0.raw) &* 97 &+ 7)
+                }
+                guard let final = await playOutAsDeclarer(
+                          deal: deal, declarer: seat, contract: floor, agents: agents),
+                      let rv = final.debugReveal(), let trump = final.trump
+                else { continue }
+                playouts += 1
+                let declTeam = Seats.team(of: seat)
+
+                // The declarer's final playing hand is exactly the 13 cards
+                // they played (discards leave the hand before trick play and
+                // score for no one). Reconstruct it, and each card's trick.
+                var playingHand: [Card] = []
+                var trickFor: [Card: Trick] = [:]
+                for trick in final.completedTricks {
+                    for pc in trick.plays where pc.player == seat {
+                        playingHand.append(pc.card)
+                        trickFor[pc.card] = trick
+                    }
+                }
+
+                // Features computed exactly as HandEvaluator computes them.
+                let trumpLen = playingHand.filter {
+                    $0.effectiveColor(trump: trump) == trump
+                }.count
+                let hasTiger = playingHand.contains {
+                    if case .tiger = $0 { return true }; return false
+                }
+                var suitLen: [CardColor: Int] = [:]
+                for c in playingHand {
+                    if let ec = c.effectiveColor(trump: trump) {
+                        suitLen[ec, default: 0] += 1
+                    }
+                }
+
+                var ownRealized = 0
+                for card in playingHand {
+                    guard case .colored(let color, let r) = card, r.isMoney,
+                          let trick = trickFor[card] else { continue }
+                    let face = r.moneyValue
+                    let captured = Seats.team(of:
+                        GameState.trickWinner(trick, trump: trump)) == declTeam
+                    let base = trick.plays.reduce(0) { $0 + $1.card.moneyValue }
+                    let mult = base > 0
+                        ? Double(GameState.trickValue(trick)) / Double(base) : 1
+                    let realized = captured ? Int(Double(face) * mult) : 0
+                    ownRealized += realized
+                    let inTrump = (color == trump)
+                    let p = inTrump
+                        ? HandEvaluator.keepProbability(
+                              rank: r, trumpLen: trumpLen, hasTiger: hasTiger,
+                              tables: difficulty.evaluatorTables)
+                        : HandEvaluator.offSuitWinProbability(
+                              rank: r, suitLen: suitLen[color] ?? 0,
+                              trumpLen: trumpLen, hasTiger: hasTiger,
+                              tables: difficulty.evaluatorTables)
+                    cardObs.append(.init(
+                        inTrump: inTrump, rank: r, suitLen: suitLen[color] ?? 0,
+                        trumpLen: trumpLen, hasTiger: hasTiger,
+                        face: face, realized: realized,
+                        predicted: Double(face) * p))
+                }
+
+                // Residual block: phase is handComplete so widowEV is 0 and
+                // the breakdown is the pure playing-hand valuation.
+                let bd = HandEvaluator.breakdown(view: final.view(for: seat),
+                                                 hand: playingHand, trump: trump,
+                                                 tables: difficulty.evaluatorTables)
+                let ownPred = bd.trumpMoney + bd.offSuitMoney
+                handObs.append(.init(
+                    trumpLen: trumpLen, hasTiger: hasTiger,
+                    teamGross: rv.bidTeamGross,
+                    ownMoneyRealized: ownRealized,
+                    predictedOwnMoney: ownPred,
+                    predictedResidual: bd.total - ownPred))
+            }
+        }
+        return CardCalibrationResult(playouts: playouts,
+                                     cardObs: cardObs, handObs: handObs)
     }
 
     /// Quick single-hand trace for eyeballing *what* the AI does (the

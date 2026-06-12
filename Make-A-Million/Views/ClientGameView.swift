@@ -390,24 +390,26 @@ struct ClientGameView: View {
     }
 
     /// Mirror of GameBody.isDiscardSelectable — keeps the UI from offering taps
-    /// the engine would reject. (Tiger/Bull/Bear and trump are protected unless
-    /// the hand can't otherwise fill three discards.)
+    /// the engine would reject. (Tier order: plain fills first, then trump —
+    /// announced by count — then money, which is shown face-up.)
     private func isDiscardSelectable(_ card: Card, in view: PlayerView) -> Bool {
         guard view.phase == .widowDiscard else { return false }
         if card.isSpecial { return false }
-        if let trump = view.trump, card.effectiveColor(trump: trump) == trump {
-            let safePool = view.myHand.filter {
-                !$0.isSpecial && $0.effectiveColor(trump: trump) != trump
-            }
-            return safePool.count < 3
+        let plainPool = view.myHand.filter { candidate in
+            guard !candidate.isSpecial, !candidate.isMoney else { return false }
+            if let trump = view.trump { return candidate.effectiveColor(trump: trump) != trump }
+            return true
         }
         if card.isMoney {
-            let safeNonMoney = view.myHand.filter { candidate in
-                guard !candidate.isSpecial, !candidate.isMoney else { return false }
-                if let trump = view.trump { return candidate.effectiveColor(trump: trump) != trump }
-                return true
+            let trumpPool = view.myHand.filter { candidate in
+                guard let trump = view.trump else { return false }
+                return !candidate.isSpecial && !candidate.isMoney
+                    && candidate.effectiveColor(trump: trump) == trump
             }
-            return safeNonMoney.count < 3
+            return plainPool.count + trumpPool.count < 3
+        }
+        if let trump = view.trump, card.effectiveColor(trump: trump) == trump {
+            return plainPool.count < 3
         }
         return true
     }

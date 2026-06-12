@@ -3,9 +3,13 @@
 # Build/test Make-A-Million with a clean Xcode environment.
 #
 # Usage:
-#   scripts/xcode-test.sh              # run tests on MAM-iPhone-1 if present
+#   scripts/xcode-test.sh              # quick verification: non-arena unit tests
+#   scripts/xcode-test.sh quick        # same as default
 #   scripts/xcode-test.sh build        # compile generic iOS Simulator app
-#   scripts/xcode-test.sh test --quiet # pass extra args through to xcodebuild
+#   scripts/xcode-test.sh smoke        # cheap AI arena smoke tests
+#   scripts/xcode-test.sh arena        # all AI arena benchmarks/experiments
+#   scripts/xcode-test.sh all          # every test target, including arena + UI
+#   scripts/xcode-test.sh quick -quiet # pass extra args through to xcodebuild
 #
 # Overrides:
 #   MAM_DESTINATION='id=<UDID>' scripts/xcode-test.sh
@@ -23,13 +27,50 @@ cd "$PROJECT_DIR"
 SCHEME="${MAM_SCHEME:-Make-A-Million}"
 PROJECT="${MAM_PROJECT:-$SCHEME.xcodeproj}"
 DERIVED_DATA="${MAM_DERIVED_DATA:-$PROJECT_DIR/.derivedData}"
-ACTION="${1:-test}"
+MODE="${1:-quick}"
 if [[ $# -gt 0 ]]; then shift; fi
 
-case "$ACTION" in
-  test|build) ;;
+XCODE_ACTION="test"
+MODE_ARGS=()
+
+case "$MODE" in
+  build)
+    XCODE_ACTION="build"
+    ;;
+  quick|test)
+    # Everyday correctness/regression pass: skip statistical AI experiments
+    # and UI tests. Use `all` when you truly want the whole suite.
+    MODE_ARGS=(
+      "-skip-testing:Make-A-MillionTests/AIArenaTests"
+      "-skip-testing:Make-A-MillionUITests"
+    )
+    ;;
+  smoke|ai-smoke)
+    # Fast arena wiring sanity without the long self-play benchmarks.
+    MODE_ARGS=(
+      "-only-testing:Make-A-MillionTests/AIArenaTests/testTraceOneHand"
+      "-only-testing:Make-A-MillionTests/AIArenaTests/testArenaSmall"
+    )
+    ;;
+  arena|ai|bench|benchmark)
+    # Statistical AI benchmark/instrument suite. This can take a long time.
+    MODE_ARGS=(
+      "-only-testing:Make-A-MillionTests/AIArenaTests"
+    )
+    ;;
+  all|full)
+    ;;
   *)
-    echo "usage: scripts/xcode-test.sh [test|build] [extra xcodebuild args...]" >&2
+    cat >&2 <<'EOF'
+usage: scripts/xcode-test.sh [quick|build|smoke|arena|all] [extra xcodebuild args...]
+
+Modes:
+  quick   default; non-arena unit tests, skips UI tests
+  build   compile the app for a generic iOS Simulator
+  smoke   cheap AI arena smoke tests only
+  arena   all AI arena benchmarks/experiments; intentionally slow
+  all     every test target, including arena + UI
+EOF
     exit 64
     ;;
 esac
@@ -62,7 +103,7 @@ fallback_sim_udid() {
 
 if [[ -n "${MAM_DESTINATION:-}" ]]; then
   DESTINATION="$MAM_DESTINATION"
-elif [[ "$ACTION" == "test" ]]; then
+elif [[ "$XCODE_ACTION" == "test" ]]; then
   UDID="$(find_sim_udid || true)"
   [[ -n "$UDID" ]] || UDID="$(fallback_sim_udid || true)"
   if [[ -z "$UDID" ]]; then
@@ -83,13 +124,46 @@ else
   DESTINATION="generic/platform=iOS Simulator"
 fi
 
-echo "==> $ACTION $SCHEME"
+echo "==> $MODE $SCHEME"
+echo "==> xcode action: $XCODE_ACTION"
 echo "==> destination: $DESTINATION"
 echo "==> derived data: $DERIVED_DATA"
 
-mam_xcodebuild "$ACTION" \
+# Serialize runs. Concurrent xcodebuild sessions against the same simulator
+# tear each other's test runners down mid-run (each boots the device and
+# shuts it down when it exits) — xcodebuild surfaces that as "Mach error
+# -308 ... (ipc/mig) server died" / "Test crashed with signal term", which
+# looks like a crashing test but is pure infrastructure (observed 2026-06-11
+# when several test invocations overlapped on MAM-iPhone-1). Concurrent
+# builds also race on the shared derived data, so the lock covers both
+# actions. Fixed /tmp path (not $TMPDIR): sessions get distinct TMPDIRs,
+# and the whole point is locking ACROSS sessions.
+LOCK="/tmp/mam-xcode-test.$(id -u).lock"
+waited=0
+while ! mkdir "$LOCK" 2>/dev/null; do
+  owner="$(cat "$LOCK/pid" 2>/dev/null || true)"
+  if [[ -n "$owner" ]] && ! kill -0 "$owner" >/dev/null 2>&1; then
+    rm -rf "$LOCK"   # stale: owning process is gone
+    continue
+  fi
+  if (( waited == 0 )); then
+    echo "==> another xcode-test.sh run (pid ${owner:-?}) is active; waiting…"
+  fi
+  sleep 5
+  waited=$(( waited + 5 ))
+  if (( waited >= 1200 )); then
+    echo "error: gave up waiting for $LOCK (held by pid ${owner:-?})." >&2
+    echo "       If no other test run is really active: rm -rf '$LOCK'" >&2
+    exit 75
+  fi
+done
+echo "$$" > "$LOCK/pid"
+trap 'rm -rf "$LOCK"' EXIT
+
+mam_xcodebuild "$XCODE_ACTION" \
   -project "$PROJECT" \
   -scheme "$SCHEME" \
   -destination "$DESTINATION" \
   -derivedDataPath "$DERIVED_DATA" \
+  ${MODE_ARGS[@]+"${MODE_ARGS[@]}"} \
   "$@"

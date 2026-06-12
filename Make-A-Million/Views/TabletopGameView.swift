@@ -363,6 +363,16 @@ struct TabletopGameView: View {
                     ForEach(keyedHand(widow), id: \.key) { entry in
                         CardFace(card: entry.card, width: 64, height: 90)
                     }
+                    // Public discard announcement: trump count spoken, money
+                    // shown face-up.
+                    if let ann = table.discardAnnouncement {
+                        Text(ann.summaryText)
+                            .font(TableTypography.display(.subheadline))
+                            .foregroundStyle(.white.opacity(0.7))
+                        ForEach(keyedHand(ann.moneyCards), id: \.key) { entry in
+                            CardFace(card: entry.card, width: 50, height: 70)
+                        }
+                    }
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)

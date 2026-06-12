@@ -64,11 +64,17 @@ enum PlayoutPolicy {
     /// `specialEscape`: A/B-gated rollout improvement — Bull endgame
     /// management (shed the Bull on worthless tricks late; when trapped with
     /// BER+BUL as the last two cards, spend the Bull small and keep the Bear).
+    /// `topPull`: A/B-gated rollout improvement (PolicyMiner, June 2026 —
+    /// the #1 mined pattern): the declarer pulls from the TOP (Tiger
+    /// included), and with no commanding trump skips the pull instead of
+    /// donating the round by leading its lowest. Subsumes `commandingPull`
+    /// when on.
     /// Defaults off preserve the previous rollout behaviour exactly (and keep
     /// the `move(in:seat:)` API stable for the golden tactics tests).
     static func move(in state: GameState, seat: PlayerID,
                      commandingPull: Bool = false,
-                     specialEscape: Bool = false) -> Move {
+                     specialEscape: Bool = false,
+                     topPull: Bool = false) -> Move {
         let moves = state.legalMoves(for: seat)
         precondition(!moves.isEmpty,
                      "PlayoutPolicy asked to move with no legal moves "
@@ -98,7 +104,8 @@ enum PlayoutPolicy {
         case .trickPlay:
             return trickMove(in: state, seat: seat, legal: moves,
                              commandingPull: commandingPull,
-                             specialEscape: specialEscape)
+                             specialEscape: specialEscape,
+                             topPull: topPull)
 
         case .handComplete:
             return moves[0]
@@ -111,7 +118,8 @@ enum PlayoutPolicy {
                                   seat: PlayerID,
                                   legal: [Move],
                                   commandingPull: Bool,
-                                  specialEscape: Bool) -> Move {
+                                  specialEscape: Bool,
+                                  topPull: Bool) -> Move {
         guard let trump = state.trump else { return legal[0] }
         let plays = legal.compactMap { $0.playedCard }
         guard !plays.isEmpty else { return legal[0] }
@@ -127,7 +135,8 @@ enum PlayoutPolicy {
                                     seat: seat,
                                     trump: trump,
                                     amDeclarer: amDeclarer,
-                                    commandingPull: commandingPull))
+                                    commandingPull: commandingPull,
+                                    topPull: topPull))
         } else {
             return .play(chooseFollow(plays: plays,
                                       onTable: onTable,
@@ -146,7 +155,8 @@ enum PlayoutPolicy {
                                    seat: PlayerID,
                                    trump: CardColor,
                                    amDeclarer: Bool,
-                                   commandingPull: Bool = false) -> Card {
+                                   commandingPull: Bool = false,
+                                   topPull: Bool = false) -> Card {
 
         // Helper: has this color been led in any completed trick?
         func colorLed(_ color: CardColor) -> Bool {
@@ -183,23 +193,54 @@ enum PlayoutPolicy {
         // other seat can beat, lead THAT instead — the round still wins and we
         // keep the lead, rather than donating it (and any banked money) to an
         // opponent's higher trump. Full-info rollout, so we can read the table.
+        //
+        // `topPull` (A/B, PolicyMiner June 2026 — the #1 mined pattern, stable
+        // across both teacher configs): the LOW pull below donates the round
+        // (and any banked money) to the highest trump still out, and with real
+        // length the rule LOOPS, donating several consecutive rounds — mined
+        // exemplars showed monster declarer hands (Tiger + 7 trump) rolling
+        // out to −$500k this way. With `topPull`, pull from the TOP instead:
+        // lead a commanding trump, Tiger included (it is the one card that
+        // always commands), preferring a non-special commander — banks own
+        // trump money on a round that cannot lose, keeps the Tiger in reserve.
+        // With NO commander, don't donate: skip the pull and fall through to
+        // the cashing rules (2/3) and the safe low lead (5).
         if amDeclarer && trumpStillOut >= 2 && myTrump.count >= 4 {
-            if commandingPull {
+            if topPull {
                 let highestOtherTrump = state.hands
                     .filter { $0.key != seat }
                     .flatMap { $0.value }
                     .filter { $0.effectiveColor(trump: trump) == trump }
                     .map { rankOf($0) }
                     .max() ?? -1
-                let commander = myTrump
-                    .filter { !$0.isSpecial && rankOf($0) > highestOtherTrump }
-                    .max { rankOf($0) < rankOf($1) }
-                if let c = commander { return c }
+                let commanders = myTrump.filter { rankOf($0) > highestOtherTrump }
+                if let c = commanders
+                    .filter({ !$0.isSpecial })
+                    .max(by: { ($0.moneyValue, rankOf($0)) < ($1.moneyValue, rankOf($1)) }) {
+                    return c
+                }
+                if let boss = commanders.max(by: { rankOf($0) < rankOf($1) }) {
+                    return boss   // the Tiger as the sole commander
+                }
+                // No commander — fall through to rules 2/3/5.
+            } else {
+                if commandingPull {
+                    let highestOtherTrump = state.hands
+                        .filter { $0.key != seat }
+                        .flatMap { $0.value }
+                        .filter { $0.effectiveColor(trump: trump) == trump }
+                        .map { rankOf($0) }
+                        .max() ?? -1
+                    let commander = myTrump
+                        .filter { !$0.isSpecial && rankOf($0) > highestOtherTrump }
+                        .max { rankOf($0) < rankOf($1) }
+                    if let c = commander { return c }
+                }
+                let lowTrump = myTrump
+                    .filter { !$0.isMoney && !$0.isSpecial }
+                    .min { rankOf($0) < rankOf($1) }
+                if let c = lowTrump { return c }
             }
-            let lowTrump = myTrump
-                .filter { !$0.isMoney && !$0.isSpecial }
-                .min { rankOf($0) < rankOf($1) }
-            if let c = lowTrump { return c }
         }
 
         // ---- 2. $40k of a virgin side suit.

@@ -23,12 +23,15 @@
 //    Seats.count / .all / .team(of:) / .next(_:)    PlayerID(_:).raw
 //    Trick(leader:) / .plays / PlayedCard           Phase cases
 //    PlayerView.{me,myHand,phase,toAct,trump,highBid,highBidder,
-//                passed,currentTrick,completedTricks,matchScore}
+//                passed,currentTrick,completedTricks,matchScore,
+//                discardAnnouncement}
 //    CompletedTrickInfo.{leader,plays,winner}
+//    DiscardAnnouncement.{trumpCount,moneyCards}
 //    GameState memberwise init (declaration order):
 //      (dealSeed,dealer,hands,widow,phase,toAct,highBid,highBidder,
-//       passed,bidHistory,trump,misdealRule,currentTrick,
-//       completedTricks,capturedByTeam,matchScore,dealtHands,dealtWidow)
+//       passed,bidHistory,trump,discardAnnouncement,misdealRule,
+//       currentTrick,completedTricks,capturedByTeam,matchScore,
+//       dealtHands,dealtWidow)
 //
 //    PlayerView.bidHistory : [BidRecord]  (public; opener also on the view)
 //
@@ -157,18 +160,22 @@ struct Determinizer {
     }
 
     /// HARD widow deduction (principle 11). The engine forbids discarding the
-    /// Tiger / Bull / Bear / any money card from the widow, so any such card in
-    /// the publicly-revealed widow is GUARANTEED to be in the declarer's hand
-    /// right now — unless we've since seen it played. Returns the declarer and
-    /// the cards they must still hold. nil when there's nothing to pin (I'm the
-    /// declarer, pre-trick-play, or no locked cards remain unplayed).
+    /// Tiger / Bull / Bear from the widow, and any money card it DOES allow
+    /// out (last-resort rule) is revealed in the public announcement — so a
+    /// special or money card in the publicly-revealed widow that was neither
+    /// played nor revealed as discarded is GUARANTEED to be in the declarer's
+    /// hand right now. Returns the declarer and the cards they must still
+    /// hold. nil when there's nothing to pin (I'm the declarer,
+    /// pre-trick-play, or no locked cards remain unplayed).
     private func widowLockedInDeclarer() -> (declarer: PlayerID, cards: [Card])? {
         guard let declarer = view.highBidder,
               declarer != view.me,
               let widow = view.widow else { return nil }
         let seen = Set(playedCards)
+        let revealed = Set(view.discardAnnouncement?.moneyCards ?? [])
         let locked = widow.filter {
-            ($0.isSpecial || $0.isMoney) && !seen.contains($0)
+            ($0.isSpecial || $0.isMoney)
+                && !seen.contains($0) && !revealed.contains($0)
         }
         return locked.isEmpty ? nil : (declarer, locked)
     }
@@ -186,6 +193,17 @@ struct Determinizer {
         var pool = Deck.full
         let known = Set(view.myHand) .union(playedCards)
         pool.removeAll { known.contains($0) }
+
+        // Announced discard facts (public, hard): money discards were shown
+        // face-up — they are DEAD, in nobody's hand. Remove them like played
+        // cards. The face-down remainder of the discard (announced trump
+        // count + plain filler) is drawn per attempt inside the retry loop
+        // below, so the dead pile's composition matches what the whole table
+        // heard without one unlucky identity pick wedging the void deal.
+        if let ann = view.discardAnnouncement {
+            let revealed = Set(ann.moneyCards)
+            pool.removeAll { revealed.contains($0) }
+        }
 
         let others = Seats.all.filter { $0 != view.me }
 
@@ -205,8 +223,6 @@ struct Determinizer {
             }
         }
 
-        shuffle(&pool)
-
         let trumpForVoids = view.trump
         let voids = trumpForVoids.map(inferredVoids(trump:)) ?? [:]
 
@@ -215,18 +231,31 @@ struct Determinizer {
         for s in others {
             need[s] = max(0, remainingCount(for: s) - (preplaced[s]?.count ?? 0))
         }
-        let deadCount = pool.count - need.values.reduce(0, +)   // discarded widow etc.
-
-        guard deadCount >= 0 else {
-            // Bookkeeping mismatch — should never happen; bail to fallback.
-            return nil
-        }
 
         // Constrained deal with bounded backtracking. Cards with a concrete
         // effective color may not go to a seat void in that color. Specials
         // (nil effective color) and the dead pile are unconstrained.
         for _ in 0..<24 {
-            if let hands = tryDeal(pool: pool,
+            // Per-attempt pool: bury the face-down part of the announced
+            // discard (exact trump count, plain filler) with fresh random
+            // identities each try — only the COMPOSITION is public.
+            var attempt = pool
+            if let ann = view.discardAnnouncement, let t = view.trump {
+                removeRandomDead(from: &attempt, count: ann.trumpCount) {
+                    !$0.isSpecial && !$0.isMoney && $0.effectiveColor(trump: t) == t
+                }
+                removeRandomDead(from: &attempt,
+                                 count: 3 - ann.trumpCount - ann.moneyCards.count) {
+                    !$0.isSpecial && !$0.isMoney && $0.effectiveColor(trump: t) != t
+                }
+            }
+            let deadCount = attempt.count - need.values.reduce(0, +)   // discarded widow etc.
+            guard deadCount >= 0 else {
+                // Bookkeeping mismatch — should never happen; bail to fallback.
+                return nil
+            }
+            shuffle(&attempt)
+            if let hands = tryDeal(pool: attempt,
                                    to: others,
                                    sizes: need,
                                    dead: deadCount,
@@ -242,18 +271,36 @@ struct Determinizer {
                 }
                 return nil
             }
-            shuffle(&pool)
         }
         return nil
+    }
+
+    /// Remove up to `count` randomly-chosen cards matching `match` from the
+    /// pool — dead cards that belong to no seat (the face-down part of the
+    /// announced discard). A shortfall is tolerated: an inconsistent
+    /// announcement (impossible in engine-produced views) degrades to the
+    /// count-only dead handling in `tryDeal` rather than failing the sample.
+    private mutating func removeRandomDead(from pool: inout [Card],
+                                           count: Int,
+                                           where match: (Card) -> Bool) {
+        var remaining = count
+        while remaining > 0 {
+            let candidates = pool.indices.filter { match(pool[$0]) }
+            guard !candidates.isEmpty else { return }
+            pool.remove(at: candidates[Int(rng.next() % UInt64(candidates.count))])
+            remaining -= 1
+        }
     }
 
     /// Best-effort fallback: ignore void constraints, just respect counts.
     /// Used only if `sample()` fails repeatedly, so rare it barely affects
     /// the average — but it guarantees the agent always has worlds to reason
-    /// over rather than stalling.
+    /// over rather than stalling. Revealed money discards are still excluded
+    /// — that is a hard public fact, not a void inference.
     mutating func sampleUnconstrained() -> AIWorld? {
         var pool = Deck.full
-        let known = Set(view.myHand).union(playedCards)
+        var known = Set(view.myHand).union(playedCards)
+        known.formUnion(view.discardAnnouncement?.moneyCards ?? [])
         pool.removeAll { known.contains($0) }
         shuffle(&pool)
 
@@ -411,6 +458,7 @@ struct Determinizer {
             // carried faithfully from the view.
             bidHistory: view.bidHistory,
             trump: view.trump,
+            discardAnnouncement: view.discardAnnouncement,
             misdealRule: .disabled,
             // Rollouts never reach a match-deciding settle, so the endgame
             // tiebreak is irrelevant here; the standard rule is a safe default.

@@ -62,7 +62,10 @@ struct CenterTrickView: View {
     /// namespace (animating from the fanned hand) instead of an edge fly-in.
     var cardNS: Namespace.ID? = nil
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var sweep: SweepState? = nil
+    @State private var animalCue: AnimalPlayCue? = nil
+    @State private var animalCueID: Int = 0
 
     /// A just-completed trick animating out toward its winner.
     private struct SweepState: Equatable {
@@ -110,6 +113,12 @@ struct CenterTrickView: View {
                 }
             }
 
+            if let cue = animalCue {
+                AnimalPlayAnimation(cue: cue, metrics: metrics, reduceMotion: reduceMotion)
+                    .id(cue.id)
+                    .allowsHitTesting(false)
+            }
+
             if idle && showsIdleText {
                 if let last = lastTrick {
                     Text("\(seatName(last.winner)) won $\(last.value / 1000)k")
@@ -125,6 +134,9 @@ struct CenterTrickView: View {
         }
         .frame(width: metrics.frame, height: metrics.frame)
         .animation(.spring(response: 0.34, dampingFraction: 0.8), value: plays.count)
+        .onChange(of: plays.count) { _, _ in
+            triggerAnimalCueForLatestPlay()
+        }
         .onChange(of: completedTricks.count) { _, count in
             guard count > 0, let last = lastTrick else { sweep = nil; return }
             startSweep(last, index: count)
@@ -159,6 +171,25 @@ struct CenterTrickView: View {
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) {
             if sweep?.index == index { sweep = nil }
+        }
+    }
+
+    private func triggerAnimalCueForLatestPlay() {
+        guard let play = plays.last,
+              let kind = AnimalPlayKind(card: play.card) else { return }
+
+        animalCueID &+= 1
+        let id = animalCueID
+        animalCue = AnimalPlayCue(
+            id: id,
+            kind: kind,
+            playedOffset: centerOffset(for: play.player))
+
+        let duration = reduceMotion ? 0.42 : 0.95
+        DispatchQueue.main.asyncAfter(deadline: .now() + duration) {
+            if animalCue?.id == id {
+                animalCue = nil
+            }
         }
     }
 
@@ -198,5 +229,215 @@ struct CenterTrickView: View {
 
     private func colorSwatch(_ color: CardColor) -> Color {
         TableStyle.suitSwatch(color)
+    }
+}
+
+private struct AnimalPlayCue: Equatable, Identifiable {
+    let id: Int
+    let kind: AnimalPlayKind
+    let playedOffset: CGSize
+}
+
+private enum AnimalPlayKind: Equatable {
+    case tiger
+    case bull
+    case bear
+
+    init?(card: Card) {
+        switch card {
+        case .tiger: self = .tiger
+        case .bull: self = .bull
+        case .bear: self = .bear
+        case .colored: return nil
+        }
+    }
+
+    var assetName: String {
+        switch self {
+        case .tiger: return "card_tiger"
+        case .bull: return "card_bull"
+        case .bear: return "card_bear"
+        }
+    }
+
+    var burstText: String {
+        switch self {
+        case .tiger: return "TIGER"
+        case .bull: return "$ x2"
+        case .bear: return "$0"
+        }
+    }
+
+    var tint: Color {
+        switch self {
+        case .tiger: return Color(red: 1.00, green: 0.61, blue: 0.10)
+        case .bull: return Color(red: 0.95, green: 0.12, blue: 0.10)
+        case .bear: return Color(red: 0.66, green: 0.56, blue: 0.43)
+        }
+    }
+
+    var accent: Color {
+        switch self {
+        case .tiger: return Color(red: 0.08, green: 0.07, blue: 0.05)
+        case .bull: return Color(red: 1.00, green: 0.94, blue: 0.78)
+        case .bear: return Color(red: 0.92, green: 0.95, blue: 0.98)
+        }
+    }
+
+    var echoOpacity: Double {
+        switch self {
+        case .tiger: return 0.24
+        case .bull: return 0.22
+        case .bear: return 0.20
+        }
+    }
+
+    var echoRotation: Double {
+        switch self {
+        case .tiger: return -7
+        case .bull: return 4
+        case .bear: return -3
+        }
+    }
+}
+
+private struct AnimalPlayAnimation: View {
+    let cue: AnimalPlayCue
+    let metrics: CenterTrickView.Metrics
+    let reduceMotion: Bool
+
+    @State private var active = false
+
+    var body: some View {
+        ZStack {
+            if cue.kind == .bear {
+                bearCancelWash
+            }
+
+            impactGlow
+            animalEcho
+
+            if !reduceMotion {
+                AnimalImpactLines(kind: cue.kind, metrics: metrics, active: active)
+            }
+
+            burstLabel
+        }
+        .frame(width: metrics.frame, height: metrics.frame)
+        .offset(
+            x: cue.playedOffset.width * (reduceMotion ? 0.16 : 0.28),
+            y: cue.playedOffset.height * (reduceMotion ? 0.16 : 0.28))
+        .compositingGroup()
+        .onAppear {
+            let response = reduceMotion ? 0.24 : 0.44
+            withAnimation(.spring(response: response, dampingFraction: 0.72)) {
+                active = true
+            }
+        }
+    }
+
+    private var impactGlow: some View {
+        Circle()
+            .fill(
+                RadialGradient(
+                    colors: [
+                        cue.kind.tint.opacity(reduceMotion ? 0.26 : 0.38),
+                        cue.kind.tint.opacity(0.14),
+                        .clear
+                    ],
+                    center: .center,
+                    startRadius: metrics.cardW * 0.2,
+                    endRadius: metrics.frame * 0.48))
+            .frame(width: metrics.frame * 0.92, height: metrics.frame * 0.92)
+            .scaleEffect(active ? 1.12 : 0.36)
+            .opacity(active ? 0 : 1)
+            .animation(.easeOut(duration: reduceMotion ? 0.34 : 0.78), value: active)
+    }
+
+    private var animalEcho: some View {
+        Image(cue.kind.assetName)
+            .resizable()
+            .scaledToFit()
+            .saturation(cue.kind == .bear ? 0.25 : 1.12)
+            .contrast(cue.kind == .bear ? 1.05 : 1.18)
+            .frame(width: metrics.cardW * (reduceMotion ? 1.55 : 2.85))
+            .scaleEffect(active ? 1.16 : 0.64)
+            .rotationEffect(.degrees(active ? cue.kind.echoRotation : 0))
+            .opacity(active ? 0 : cue.kind.echoOpacity)
+            .blendMode(cue.kind == .bear ? .normal : .screen)
+            .animation(.easeOut(duration: reduceMotion ? 0.34 : 0.72), value: active)
+    }
+
+    private var burstLabel: some View {
+        Text(cue.kind.burstText)
+            .font(TableTypography.display(size: max(18, metrics.cardH * 0.38), weight: .heavy))
+            .lineLimit(1)
+            .minimumScaleFactor(0.7)
+            .foregroundStyle(.white)
+            .shadow(color: cue.kind.tint.opacity(0.95), radius: 8, y: 2)
+            .shadow(color: .black.opacity(0.55), radius: 2, y: 1)
+            .scaleEffect(active ? 1.0 : 0.45)
+            .opacity(active ? 0 : 1)
+            .animation(.easeOut(duration: reduceMotion ? 0.32 : 0.64).delay(0.08), value: active)
+    }
+
+    private var bearCancelWash: some View {
+        Circle()
+            .fill(Color.white.opacity(0.16))
+            .frame(width: metrics.frame * 0.58, height: metrics.frame * 0.58)
+            .blur(radius: metrics.cardW * 0.12)
+            .scaleEffect(active ? 1.0 : 0.2)
+            .opacity(active ? 0 : 1)
+            .animation(.easeOut(duration: reduceMotion ? 0.28 : 0.58), value: active)
+    }
+}
+
+private struct AnimalImpactLines: View {
+    let kind: AnimalPlayKind
+    let metrics: CenterTrickView.Metrics
+    let active: Bool
+
+    private var lineCount: Int {
+        switch kind {
+        case .tiger: return 10
+        case .bull: return 12
+        case .bear: return 8
+        }
+    }
+
+    var body: some View {
+        ZStack {
+            ForEach(0..<lineCount, id: \.self) { index in
+                Capsule(style: .continuous)
+                    .fill(index.isMultiple(of: 2) ? kind.tint : kind.accent)
+                    .frame(
+                        width: metrics.cardW * lineWidthMultiplier(for: index),
+                        height: max(2, metrics.cardW * 0.035))
+                    .offset(x: active ? metrics.frame * 0.24 : metrics.cardW * 0.15)
+                    .rotationEffect(.degrees(angle(for: index)))
+                    .opacity(active ? 0 : 0.78)
+                    .animation(
+                        .easeOut(duration: 0.48)
+                            .delay(Double(index) * 0.012),
+                        value: active)
+            }
+        }
+    }
+
+    private func angle(for index: Int) -> Double {
+        let base = 360.0 / Double(lineCount) * Double(index)
+        switch kind {
+        case .tiger: return base - 18
+        case .bull: return base
+        case .bear: return base + 9
+        }
+    }
+
+    private func lineWidthMultiplier(for index: Int) -> CGFloat {
+        switch kind {
+        case .tiger: return index.isMultiple(of: 3) ? 0.78 : 0.52
+        case .bull: return index.isMultiple(of: 2) ? 0.92 : 0.64
+        case .bear: return 0.56
+        }
     }
 }

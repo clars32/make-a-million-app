@@ -315,6 +315,7 @@ final class ClientSession: ObservableObject {
             opener: resolved.opener,
             bidHistory: resolved.bidHistory,
             widow: resolved.widow,
+            discardAnnouncement: resolved.discardAnnouncement,
             currentTrick: Trick(leader: finished.leader, plays: finished.plays),
             completedTrickCount: live.completedTricks.count,
             completedTricks: live.completedTricks,

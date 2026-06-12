@@ -49,6 +49,7 @@ final class TableInferenceTests: XCTestCase {
             me: me, myHand: myHand, phase: .trickPlay, toAct: me,
             trump: .black, highBid: 200_000, highBidder: declarer,
             passed: [], opener: declarer, bidHistory: [], widow: nil,
+            discardAnnouncement: nil,
             currentTrick: nil, completedTrickCount: tricks.count,
             completedTricks: tricks, matchScore: [0: 0, 1: 0], legalMoves: [])
     }
@@ -75,5 +76,38 @@ final class TableInferenceTests: XCTestCase {
             XCTAssertFalse(inf.isKnownVoid(seat, in: .yellow),
                            "seat \(seat.raw) should not be flagged void without deep inference")
         }
+    }
+
+    /// The discard announcement is public counting information: a revealed
+    /// money discard is DEAD (not still "out", and no longer locked into the
+    /// declarer's hand), and the announced trump count comes straight off
+    /// "trump still out".
+    func testDiscardAnnouncementSharpensCounting() {
+        // I'm South holding all 13 yellows (zero trump). Trump is black. The
+        // declarer's forced discard was announced as 2 trump plus the shown
+        // red $40k (which had been dealt to the widow).
+        let me = PlayerID(0)
+        let declarer = PlayerID(1)
+        let myHand: [Card] = Card.Rank.allCases.map { .colored(.yellow, $0) }
+        let revealed: Card = .colored(.red, .money40k)
+        let widow: [Card] = [revealed, .colored(.black, .one), .colored(.green, .two)]
+        let view = PlayerView(
+            me: me, myHand: myHand, phase: .trickPlay, toAct: me,
+            trump: .black, highBid: 200_000, highBidder: declarer,
+            passed: [], opener: declarer, bidHistory: [], widow: widow,
+            discardAnnouncement: DiscardAnnouncement(trumpCount: 2,
+                                                     moneyCards: [revealed]),
+            currentTrick: nil, completedTrickCount: 0, completedTricks: [],
+            matchScore: [0: 0, 1: 0], legalMoves: [])
+        let inf = TableInference(view: view)
+
+        // The revealed $40k is dead: it is NOT a known declarer holding…
+        XCTAssertFalse(inf.knownDeclarerHoldings().contains(revealed),
+                       "a revealed money discard must not stay locked in the declarer")
+        // …and no longer the highest red still out — that is now the $30k.
+        XCTAssertEqual(inf.highestOutInColor(.red), .colored(.red, .money30k))
+        // Trump accounting: 13 black + Tiger unseen, none in my hand, minus
+        // the 2 announced face-down trump = 12 still in actual hands.
+        XCTAssertEqual(inf.trumpStillOutInOpponentsAndPartner, 12)
     }
 }

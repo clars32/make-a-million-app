@@ -94,8 +94,8 @@ struct MonteCarloAgent: PlayerAgent {
         /// sampling); higher = read the auction more like a strong human.
         var bidLeanStrength: Double = 0.0
         /// HARD deduction in world sampling: place the declarer's
-        /// un-discardable widow cards (Tiger/Bull/Bear/money — the engine
-        /// forbade discarding them) into the declarer's sampled hand instead
+        /// un-discardable widow cards (Tiger/Bull/Bear always; money unless
+        /// revealed in the discard announcement) into the declarer's sampled hand instead
         /// of letting them scatter to random seats. A PROVABLE fact the sampler
         /// otherwise ignored (it averaged over impossible worlds). Now ON for
         /// every tier — it only ever removes impossible worlds, and self-play
@@ -148,6 +148,15 @@ struct MonteCarloAgent: PlayerAgent {
         /// more trick lands the Bull on partner's money. Lever + golden tests
         /// kept for a refined version.
         var rolloutSpecialEscape: Bool = false
+        /// A/B-gated ROLLOUT-policy improvement (PolicyMiner, June 2026 —
+        /// the #1 mined disagreement pattern, stable across both teacher
+        /// configs): the rollout declarer pulls trump from the TOP (Tiger
+        /// included) instead of leading its LOWEST trump, and with no
+        /// commanding trump skips the pull rather than donating the round.
+        /// The low-pull loop was the largest source of student-vs-teacher
+        /// regret (mined exemplars: monster declarer hands rolling out to
+        /// −$500k). Off by default until a paired A/B confirms it.
+        var rolloutTopPull: Bool = false
         /// Bypass the heuristic shortlist gate entirely and let MCTS grade
         /// EVERY legal move. The shortlist exists for compute (no longer
         /// binding — worst case ~13 candidates vs 4) and to shield the search
@@ -183,6 +192,30 @@ struct MonteCarloAgent: PlayerAgent {
         /// lesson). Revisit with a conditional instrument — e.g. win rate
         /// given a team reaches $700k first — before re-judging the lever.
         var matchWinWeight: Double = 0
+        /// EVALUATOR refit: use HandEvaluator's `.calibrated` tables —
+        /// keepProbability / offSuitWinProbability / partnerSupport / widowEV
+        /// fitted to the per-card realization rates measured by
+        /// `AIArena.runCardCalibration` (June 2026) — instead of the original
+        /// hand-set constants. Affects bidding, widow discard, and trump
+        /// naming.
+        ///
+        /// MEASURED (June 2026, paired 60 / baseSeed 1): win-rate exactly
+        /// neutral (control 60% → treatment 60%) while taking 60% of the
+        /// contracts (vs 52%) at cheaper average contracts ($210k vs $219k)
+        /// and a set-rate equal to the opponent's (26%/26%). PROMOTED to all
+        /// tiers on correctness grounds (the full-width-search precedent):
+        /// the per-card harvest verified the tables unbiased component-by-
+        /// component (gross $233k obs / $237k pred at a fresh seed vs
+        /// $240k/$217k under the original), and the bid frame reads +$4k.
+        /// Honest valuation costs nothing and every future tuning pass
+        /// starts from an unbiased base. Kept as a field so it stays
+        /// A/B-able (turn it off on one side).
+        var calibratedValuation: Bool = true
+
+        /// The HandEvaluator constant set this profile plays with.
+        var evaluatorTables: HandEvaluator.Tables {
+            calibratedValuation ? .calibrated : .original
+        }
 
         // ── Selectable strength tiers (Settings → Opponents) ───────────────
         // The strength ladder is driven, in order, by: `samples` (search
@@ -304,7 +337,8 @@ struct MonteCarloAgent: PlayerAgent {
         }.sorted { $0.1 < $1.1 }
 
         // Hand value as if I become declarer with best trump.
-        let valuation = HandEvaluator.bestValuation(view: view, hand: view.myHand)
+        let valuation = HandEvaluator.bestValuation(view: view, hand: view.myHand,
+                                                    tables: difficulty.evaluatorTables)
         let rawGross = Double(valuation.expectedGross)
 
         // Match awareness — see below.
@@ -455,7 +489,8 @@ struct MonteCarloAgent: PlayerAgent {
         for (move, cards, _) in ranked {
             var hand = view.myHand
             for c in cards { if let i = hand.firstIndex(of: c) { hand.remove(at: i) } }
-            let score = HandEvaluator.evaluate(view: view, hand: hand, assumingTrump: trump)
+            let score = HandEvaluator.evaluate(view: view, hand: hand, assumingTrump: trump,
+                                               tables: difficulty.evaluatorTables)
             if score > best.1 { best = (move, score) }
         }
         return best.0
@@ -470,7 +505,8 @@ struct MonteCarloAgent: PlayerAgent {
     // MARK: - Naming trump
 
     private func decideTrump(_ view: PlayerView, legal: [Move]) -> Move {
-        let valuation = HandEvaluator.bestValuation(view: view, hand: view.myHand)
+        let valuation = HandEvaluator.bestValuation(view: view, hand: view.myHand,
+                                                    tables: difficulty.evaluatorTables)
         // Find the .nameTrump move corresponding to bestTrump.
         for m in legal {
             if case .nameTrump(let c) = m, c == valuation.bestTrump { return m }
@@ -1103,7 +1139,8 @@ struct MonteCarloAgent: PlayerAgent {
         while s.phase != .handComplete && steps < 600 {
             let mv = PlayoutPolicy.move(in: s, seat: s.toAct,
                                         commandingPull: difficulty.rolloutCommandingPull,
-                                        specialEscape: difficulty.rolloutSpecialEscape)
+                                        specialEscape: difficulty.rolloutSpecialEscape,
+                                        topPull: difficulty.rolloutTopPull)
             guard let ns = try? s.applying(mv, by: s.toAct) else { break }
             s = ns
             steps += 1

@@ -46,6 +46,7 @@ final class AITacticsTests: XCTestCase {
             passed: [],
             bidHistory: [],
             trump: trump,
+            discardAnnouncement: nil,
             misdealRule: .disabled,
             endgameRule: .standard,
             currentTrick: Trick(leader: leader, plays: plays),
@@ -339,5 +340,65 @@ final class AITacticsTests: XCTestCase {
         let trumpLow = MonteCarloAgent.tiePreference(.colored(.red, .four), trump: .red,
                                                      dumpToPartner: false, following: true)
         XCTAssertTrue(offSuit < trumpLow)
+    }
+
+    // MARK: - Mined fix: pull from the top (`topPull`, PolicyMiner June 2026)
+
+    private func red(_ r: Card.Rank) -> Card { .colored(.red, r) }
+
+    func testTopPullBanksCommandingTrumpMoneyInsteadOfLowPull() {
+        // Declarer (seat 0) leads holding 4 red trump including the R$30,
+        // which commands (no other seat's red outranks rank 11). The default
+        // low-pull donates the round to seat 1's R11; topPull leads the R$30
+        // — the round cannot lose, the $30k banks, and trump still drains.
+        let hands: [PlayerID: [Card]] = [
+            P(0): [red(.money30k), red(.nine), red(.two), red(.one), grn(.one)],
+            P(1): [red(.eleven), red(.seven), y(.one)],
+            P(2): [grn(.two), y(.two)],
+            P(3): [grn(.four), y(.three)],
+        ]
+        let state = trickState(hands: hands, trump: .red, leader: P(0),
+                               onTable: [], toAct: P(0), highBidder: P(0))
+        XCTAssertEqual(PlayoutPolicy.move(in: state, seat: P(0), topPull: true),
+                       .play(red(.money30k)))
+        // Gate intact: default behaviour is still the lowest-trump pull.
+        XCTAssertEqual(PlayoutPolicy.move(in: state, seat: P(0)),
+                       .play(red(.one)))
+    }
+
+    func testTopPullLeadsTigerWhenItIsTheSoleCommander() {
+        // Declarer's only boss is the Tiger (seat 1 holds the R$30 above all
+        // of seat 0's plain trump). topPull pulls with the Tiger — it always
+        // commands — rather than leading R2 into the R$30.
+        let hands: [PlayerID: [Card]] = [
+            P(0): [.tiger, red(.two), red(.three), red(.four), grn(.one)],
+            P(1): [red(.money30k), red(.nine), y(.one)],
+            P(2): [grn(.two), y(.two)],
+            P(3): [grn(.four), y(.three)],
+        ]
+        let state = trickState(hands: hands, trump: .red, leader: P(0),
+                               onTable: [], toAct: P(0), highBidder: P(0))
+        XCTAssertEqual(PlayoutPolicy.move(in: state, seat: P(0), topPull: true),
+                       .play(.tiger))
+        XCTAssertEqual(PlayoutPolicy.move(in: state, seat: P(0)),
+                       .play(red(.two)))
+    }
+
+    func testTopPullSkipsThePullWithNoCommander() {
+        // Declarer has trump length but no commander (seat 1's R$30 and R11
+        // outrank everything). The default donates R2 to the pull; topPull
+        // declines to donate and falls through to the safe low side lead.
+        let hands: [PlayerID: [Card]] = [
+            P(0): [red(.nine), red(.seven), red(.four), red(.two), grn(.one)],
+            P(1): [red(.money30k), red(.eleven), y(.one)],
+            P(2): [grn(.two), y(.two)],
+            P(3): [grn(.four), y(.three)],
+        ]
+        let state = trickState(hands: hands, trump: .red, leader: P(0),
+                               onTable: [], toAct: P(0), highBidder: P(0))
+        XCTAssertEqual(PlayoutPolicy.move(in: state, seat: P(0), topPull: true),
+                       .play(grn(.one)))
+        XCTAssertEqual(PlayoutPolicy.move(in: state, seat: P(0)),
+                       .play(red(.two)))
     }
 }

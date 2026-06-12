@@ -18,7 +18,8 @@
 //  cards the declarer actually played.
 //
 //  ENGINE BINDING: GameState.{dealtHands, dealtWidow, bidHistory, trump,
-//  highBidder, highBid, dealer, completedTricks, matchScore, debugReveal()} ;
+//  highBidder, highBid, dealer, completedTricks, matchScore,
+//  discardAnnouncement, debugReveal()} ;
 //  GameState.trickWinner / trickValue ; Trick.ledColor ; Card.moneyValue ;
 //  Seats.{all, team}.
 //
@@ -73,6 +74,11 @@ nonisolated enum HandLog {
                 line("  discard (\(short(d))): "
                      + discard.map(token).joined(separator: " ")
                      + "   [reconstructed]")
+            }
+            if let ann = final.discardAnnouncement {
+                line("  announced: \(ann.trumpCount) trump"
+                     + (ann.moneyCards.isEmpty ? "" : " · money shown: "
+                        + ann.moneyCards.map(token).joined(separator: " ")))
             }
         }
         if !decisions.bids.isEmpty {

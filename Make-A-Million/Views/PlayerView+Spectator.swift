@@ -20,6 +20,7 @@ extension PlayerView {
             opener: self.opener,
             bidHistory: self.bidHistory,
             widow: self.widow,
+            discardAnnouncement: self.discardAnnouncement,
             currentTrick: self.currentTrick,
             completedTrickCount: self.completedTrickCount,
             completedTricks: self.completedTricks,

@@ -19,12 +19,15 @@
 //  No private info crosses this boundary. It is built strictly from a
 //  PlayerView — the same redacted projection every agent gets — and
 //  treats the visible widow exactly as a human treats it: as cards the
-//  declarer has SEEN, three of which they have since discarded (which
-//  we cannot identify), the rest of which are now in their hand.
+//  declarer has SEEN, three of which they have since discarded, the rest
+//  of which are now in their hand. The discard announcement (trump count
+//  spoken, money shown face-up) is public too, and sharpens the counting.
 //
 //  ENGINE BINDING: PlayerView.{me, myHand, trump, widow, currentTrick,
-//  completedTricks, highBidder} ; CompletedTrickInfo.{leader, plays,
-//  winner} ; PlayedCard.{player, card} ; Card.{effectiveColor, isMoney,
+//  completedTricks, highBidder, discardAnnouncement} ;
+//  CompletedTrickInfo.{leader, plays, winner} ;
+//  DiscardAnnouncement.{trumpCount, moneyCards} ;
+//  PlayedCard.{player, card} ; Card.{effectiveColor, isMoney,
 //  isSpecial, moneyValue} ; CardColor.allCases ; Seats.{all, partner,
 //  team, next, count} ; Deck.full.
 //
@@ -48,11 +51,15 @@ struct TableInference {
     /// completed). Widow cards in the declarer's hand show up here too —
     /// because they might still be played.
     private let stillOut: [CardColor: Set<Card>]
-    /// Widow cards that CANNOT have been discarded (Tiger / Bull / Bear /
-    /// money — the engine forbids discarding any of these). These are
-    /// guaranteed to be in the declarer's hand right now, if not yet
-    /// played. Principle 11: "remember what was in the widow."
+    /// Widow cards that CANNOT have been discarded (Tiger / Bull / Bear
+    /// always; money unless it was revealed in the discard announcement).
+    /// These are guaranteed to be in the declarer's hand right now, if not
+    /// yet played. Principle 11: "remember what was in the widow."
     private let knownWidowInDeclarer: Set<Card>
+    /// Announced count of trump cards buried in the discard. They sit in the
+    /// unaccounted pool (identities unknown) but can never be played, so the
+    /// trump-counting queries subtract them.
+    private let deadTrumpCount: Int
     /// Who took the widow (declarer). nil before bidding settled.
     private let declarer: PlayerID?
     /// The Tiger / Bull / Bear if they have not yet been played.
@@ -131,6 +138,10 @@ struct TableInference {
         var pool = Set(Deck.full)
         pool.subtract(myHand)
         pool.subtract(played)
+        // Money discards are revealed face-up at the table — they are DEAD
+        // (in nobody's hand), so they leave the pool just like played cards.
+        let revealedMoneyDiscards = Set(view.discardAnnouncement?.moneyCards ?? [])
+        pool.subtract(revealedMoneyDiscards)
         // If I'm not the declarer, leave widow cards in the pool — they
         // might be in declarer's hand.
         if let widow = view.widow, view.highBidder == view.me {
@@ -157,18 +168,20 @@ struct TableInference {
         }
         self.stillOut = bucket
 
-        // 4b. Widow knowledge (principle 11). The engine forbids
-        //     discarding Tiger / Bull / Bear / money cards from the widow,
-        //     so any of those that appear in the publicly revealed widow
-        //     are GUARANTEED to be in the declarer's hand right now —
-        //     unless we've since seen them played.
+        // 4b. Widow knowledge (principle 11). The engine forbids discarding
+        //     Tiger / Bull / Bear from the widow, and money only as a last
+        //     resort — in which case it is revealed in the announcement. So
+        //     any special or money card in the publicly revealed widow that
+        //     was neither played nor revealed as discarded is GUARANTEED to
+        //     be in the declarer's hand right now.
         var widowLocked: Set<Card> = []
         if let widow = view.widow {
             let played = Set(view.completedTricks.flatMap { $0.plays.map(\.card) })
             let inProgress = Set(view.currentTrick?.plays.map(\.card) ?? [])
             for card in widow {
                 let undiscardable = card.isSpecial || card.isMoney
-                if undiscardable && !played.contains(card) && !inProgress.contains(card) {
+                if undiscardable && !played.contains(card) && !inProgress.contains(card)
+                    && !revealedMoneyDiscards.contains(card) {
                     // The declarer must still hold it (or have just played
                     // it in the current trick — handled by inProgress).
                     widowLocked.insert(card)
@@ -178,9 +191,12 @@ struct TableInference {
         self.knownWidowInDeclarer = widowLocked
         self.declarer = view.highBidder
 
-        // 5. Trump remaining.
+        // 5. Trump remaining. The announced trump discards stay in the pool
+        //    (their identities are unknown) but can never be played —
+        //    subtract their count from "trump still out".
+        self.deadTrumpCount = view.discardAnnouncement?.trumpCount ?? 0
         if let t = view.trump {
-            self.trumpRemainingOut = bucket[t]?.count ?? 0
+            self.trumpRemainingOut = max(0, (bucket[t]?.count ?? 0) - deadTrumpCount)
         } else {
             self.trumpRemainingOut = 0
         }
@@ -211,9 +227,16 @@ struct TableInference {
             // ruff of an otherwise-"boss" side card whose suit has run dry.
             // Provable: `bucket[color]` is exactly the still-unaccounted pool.
             // (Conservative w.r.t. the widow: undiscardable widow cards stay in
-            // the pool, so a suit never falsely reads as exhausted.)
+            // the pool, so a suit never falsely reads as exhausted. For TRUMP
+            // the announced dead count is provably buried in the discard, so
+            // it can be subtracted; the discard's plain cards have unknown
+            // colors, so the other suits stay conservative.)
             if deepInference {
-                for color in CardColor.allCases where (bucket[color]?.isEmpty ?? true) {
+                let deadTrump = view.discardAnnouncement?.trumpCount ?? 0
+                for color in CardColor.allCases {
+                    let live = (bucket[color]?.count ?? 0)
+                        - (color == t ? deadTrump : 0)
+                    guard live <= 0 else { continue }
                     for s in Seats.all where s != view.me {
                         voids[s, default: []].insert(color)
                     }
@@ -326,11 +349,12 @@ struct TableInference {
         // stillOut[trump] already includes the Tiger (Tiger.effectiveColor
         // == trump). So trumpRemainingOut is correct, but minus any trump
         // I'm still holding. Easier: directly recompute from stillOut[trump]
-        // minus my own trump cards.
+        // minus my own trump cards, then drop the announced dead trump —
+        // buried in the discard, in nobody's hand.
         guard let t = trump else { return 0 }
         let pool = stillOut[t] ?? []
         let mine = Set(myHand.filter { $0.effectiveColor(trump: t) == t })
-        return pool.subtracting(mine).count
+        return max(0, pool.subtracting(mine).count - deadTrumpCount)
     }
 
     /// My cards of a given effective color.

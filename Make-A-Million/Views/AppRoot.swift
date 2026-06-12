@@ -37,12 +37,15 @@ struct AppRoot: View {
         case solo
         case hosting
         case joining
+        case hostingOnline
+        case joiningOnline
     }
 
     @State private var mode: Mode = .picking
     @State private var showingSettings = false
     @AppStorage("playerName") private var playerName: String = ""
     @EnvironmentObject private var settings: GameSettings
+    @ObservedObject private var gameCenter = GameCenterManager.shared
 
     var body: some View {
         Group {
@@ -53,6 +56,8 @@ struct AppRoot: View {
                     onPickSolo: { mode = .solo },
                     onPickHost: { mode = .hosting },
                     onPickJoin: { mode = .joining },
+                    onPickHostOnline: { mode = .hostingOnline },
+                    onPickJoinOnline: { mode = .joiningOnline },
                     onOpenSettings: { showingSettings = true })
 
             case .solo:
@@ -69,12 +74,35 @@ struct AppRoot: View {
                 ClientLobbyView(
                     playerName: effectiveName,
                     onExit: { mode = .picking })
+
+            case .hostingOnline:
+                OnlineHostLobbyView(
+                    playerName: effectiveName,
+                    onExit: { mode = .picking })
+
+            case .joiningOnline:
+                OnlineClientLobbyView(
+                    onExit: { mode = .picking })
             }
         }
         .onAppear {
             #if canImport(UIKit)
             OrientationLock.shared.lock(.portrait)
             #endif
+            // Install the Game Center authenticate handler early so an
+            // invite that launches the app is caught no matter what
+            // screen is showing. Sign-in UI stays deferred until the
+            // user actually enters an online mode.
+            gameCenter.configureAuthentication()
+        }
+        .onChange(of: gameCenter.acceptedInvite) { _, invite in
+            // An accepted invite routes to the online client lobby — but
+            // never yank the player out of a running mode; if they're
+            // mid-hand the invite stays pending and connects if they
+            // enter "Join Online" themselves.
+            if invite != nil && mode == .picking {
+                mode = .joiningOnline
+            }
         }
         .onChange(of: mode) { _, mode in
             #if canImport(UIKit)
@@ -105,6 +133,8 @@ private struct ModePickerView: View {
     let onPickSolo: () -> Void
     let onPickHost: () -> Void
     let onPickJoin: () -> Void
+    let onPickHostOnline: () -> Void
+    let onPickJoinOnline: () -> Void
     let onOpenSettings: () -> Void
 
     var body: some View {
@@ -148,7 +178,7 @@ private struct ModePickerView: View {
 
                     Spacer()
 
-                    VStack(spacing: 12) {
+                    VStack(spacing: 10) {
                         ModeButton(
                             title: "Play Solo",
                             subtitle: "Just you against three bots",
@@ -167,6 +197,18 @@ private struct ModePickerView: View {
                             systemImage: "person.2.fill",
                             color: TableStyle.teamAmber,
                             action: onPickJoin)
+                        ModeButton(
+                            title: "Host Online",
+                            subtitle: "Invite friends anywhere via Game Center",
+                            systemImage: "globe",
+                            color: TableStyle.teamBlue,
+                            action: onPickHostOnline)
+                        ModeButton(
+                            title: "Join Online",
+                            subtitle: "Accept a Game Center invitation",
+                            systemImage: "envelope.open.fill",
+                            color: TableStyle.teamAmber,
+                            action: onPickJoinOnline)
                     }
                     .frame(maxWidth: contentWidth)
                     .padding(.horizontal)

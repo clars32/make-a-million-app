@@ -59,21 +59,33 @@ struct HandValuation {
 
 enum HandEvaluator {
 
+    /// Which constant set the valuation uses. `.original` is the hand-set
+    /// baseline; `.calibrated` is fitted to the per-card realization rates
+    /// measured by `AIArena.runCardCalibration` (June 2026). A/B lever —
+    /// agents opt in via `MonteCarloAgent.Difficulty.calibratedValuation`,
+    /// so challenger-vs-champion self-play can grade the refit before it
+    /// becomes the default.
+    nonisolated enum Tables { case original, calibrated }
+
     // MARK: - Public entry points
 
     /// Evaluate a hand assuming a specific trump color.
     static func evaluate(view: PlayerView,
                          hand: [Card],
-                         assumingTrump trump: CardColor) -> Int {
-        let breakdown = breakdown(view: view, hand: hand, trump: trump)
+                         assumingTrump trump: CardColor,
+                         tables: Tables = .original) -> Int {
+        let breakdown = breakdown(view: view, hand: hand, trump: trump,
+                                  tables: tables)
         return breakdown.total
     }
 
     /// Try all four colors as trump and pick the best.
-    static func bestValuation(view: PlayerView, hand: [Card]) -> HandValuation {
+    static func bestValuation(view: PlayerView, hand: [Card],
+                              tables: Tables = .original) -> HandValuation {
         var scores: [(CardColor, Int)] = []
         for color in CardColor.allCases {
-            scores.append((color, evaluate(view: view, hand: hand, assumingTrump: color)))
+            scores.append((color, evaluate(view: view, hand: hand,
+                                           assumingTrump: color, tables: tables)))
         }
         scores.sort { $0.1 > $1.1 }
         return HandValuation(
@@ -101,22 +113,25 @@ enum HandEvaluator {
 
     static func breakdown(view: PlayerView,
                           hand: [Card],
-                          trump: CardColor) -> Breakdown {
+                          trump: CardColor,
+                          tables: Tables = .original) -> Breakdown {
         var b = Breakdown()
 
         let trumpCards = hand.filter { $0.effectiveColor(trump: trump) == trump }
         let trumpLen = trumpCards.count
         let hasTiger = hand.contains { if case .tiger = $0 { return true }; return false }
 
-        b.trumpMoney   = scoreTrumpMoney(trumpCards, trumpLen: trumpLen, hasTiger: hasTiger)
+        b.trumpMoney   = scoreTrumpMoney(trumpCards, trumpLen: trumpLen, hasTiger: hasTiger,
+                                         tables: tables)
         b.trumpControl = scoreTrumpControl(trumpCards, trumpLen: trumpLen)
         b.offSuitMoney = scoreOffSuitMoney(hand: hand, trump: trump, trumpLen: trumpLen,
-                                           hasTiger: hasTiger)
+                                           hasTiger: hasTiger, tables: tables)
         b.specials     = scoreSpecials(hand: hand, trump: trump, trumpLen: trumpLen)
         b.voids        = scoreVoidsAndShortness(hand: hand, trump: trump, trumpLen: trumpLen)
         b.lengthBonus  = scoreLengthBonus(trumpLen: trumpLen, hasTiger: hasTiger)
-        b.partnerSupport = scorePartnerSupport(trumpLen: trumpLen, hasTiger: hasTiger)
-        b.widowEV      = scoreWidowEV(view: view)
+        b.partnerSupport = scorePartnerSupport(trumpLen: trumpLen, hasTiger: hasTiger,
+                                               tables: tables)
+        b.widowEV      = scoreWidowEV(view: view, tables: tables)
 
         return b
     }
@@ -129,11 +144,13 @@ enum HandEvaluator {
     /// trumps in over them (Tiger or higher trump) before you can cash them.
     private static func scoreTrumpMoney(_ trumpCards: [Card],
                                         trumpLen: Int,
-                                        hasTiger: Bool) -> Int {
+                                        hasTiger: Bool,
+                                        tables: Tables) -> Int {
         var sum = 0
         for c in trumpCards {
             guard case .colored(_, let r) = c, r.isMoney else { continue }
-            let p = keepProbability(rank: r, trumpLen: trumpLen, hasTiger: hasTiger)
+            let p = keepProbability(rank: r, trumpLen: trumpLen, hasTiger: hasTiger,
+                                    tables: tables)
             sum += Int(Double(r.moneyValue) * p)
         }
         return sum
@@ -163,7 +180,8 @@ enum HandEvaluator {
     private static func scoreOffSuitMoney(hand: [Card],
                                           trump: CardColor,
                                           trumpLen: Int,
-                                          hasTiger: Bool) -> Int {
+                                          hasTiger: Bool,
+                                          tables: Tables) -> Int {
         var sum = 0
         let byColor = Dictionary(grouping: hand) {
             $0.effectiveColor(trump: trump)
@@ -175,7 +193,8 @@ enum HandEvaluator {
                 let p = offSuitWinProbability(rank: r,
                                               suitLen: suit.count,
                                               trumpLen: trumpLen,
-                                              hasTiger: hasTiger)
+                                              hasTiger: hasTiger,
+                                              tables: tables)
                 sum += Int(Double(r.moneyValue) * p)
             }
         }
@@ -265,7 +284,27 @@ enum HandEvaluator {
     /// — their high cards in non-trump suits, their occasional ability to
     /// take an opponent's money. Scales with your trump control: the
     /// stronger you are, the more your partner can capitalise.
-    private static func scorePartnerSupport(trumpLen: Int, hasTiger: Bool) -> Int {
+    private static func scorePartnerSupport(trumpLen: Int, hasTiger: Bool,
+                                            tables: Tables) -> Int {
+        // CALIBRATED (June 2026, runCardCalibration residual block, pooled
+        // 360 deals): the non-money components under-predict the realized
+        // residual (team gross minus the declarer's own realized money) by
+        // +$37k at trump length 5 and +$9k at 6+; length 4 measured +$54k
+        // but on n=68 hands, so it gets a damped +$43k. Short-trump
+        // declarers still harvest $130k+ of partner/incidental capture —
+        // the original constants over-penalised them. This is the
+        // per-length knob, so the correction lands here.
+        if case .calibrated = tables {
+            switch (trumpLen, hasTiger) {
+            case (6..., true):  return 81_000
+            case (6..., false): return 71_000
+            case (5,    true):  return 101_000
+            case (5,    false): return 91_000
+            case (4,    true):  return 95_000
+            case (4,    false): return 88_000
+            default:            return 40_000   // ≤3: unmeasured (rare post-widow)
+            }
+        }
         // Partner statistically has ~$94k of money; when you control the
         // play, they routinely contribute $40-50k of incidental capture.
         // Earlier numbers were calibrated against a weaker estimator and
@@ -289,8 +328,18 @@ enum HandEvaluator {
     /// Expected value of the widow if it has not been revealed to us yet.
     /// Once we're past bidding the widow is in our hand and worth nothing
     /// extra to count here.
-    private static func scoreWidowEV(view: PlayerView) -> Int {
+    private static func scoreWidowEV(view: PlayerView, tables: Tables) -> Int {
         guard view.phase == .bidding else { return 0 }
+        // CALIBRATED (June 2026): the 1.30 fudge below was silently absorbing
+        // the per-card under-prediction that the calibrated tables now carry
+        // honestly. Back to the plain exchange value: ~$22k of average widow
+        // money plus a little selection value (declarer keeps the best 13 of
+        // 16). This is the bid-frame re-zero knob — runBidCalibration
+        // adjudicates it after any table change.
+        if case .calibrated = tables {
+            let avg = (3 * Deck.totalMoneyInDeck) / 55       // ~$21.8k
+            return avg + 4_000                                // net ~$26k
+        }
         // Average widow gross is ~$22k (3 cards × $400k/55 cards).
         // We discard 3 low cards worth ~$5k of capture potential, so net
         // gain is ~$17k. Slightly discount further because not every widow
@@ -303,13 +352,44 @@ enum HandEvaluator {
     }
 
     // MARK: - Probability helpers (TUNE)
+    //
+    // Internal (not private) so AIArena.runCardCalibration can print the
+    // model's predicted p next to the observed realization rate per cell —
+    // these tables are tuned against that instrument, not by hand.
 
     /// How likely a trump money card survives to be captured.
     /// Length protects (your low trump shields the high). Tiger protects
     /// the top (no over-trump above $40k).
-    private static func keepProbability(rank: Card.Rank,
-                                        trumpLen: Int,
-                                        hasTiger: Bool) -> Double {
+    static func keepProbability(rank: Card.Rank,
+                                trumpLen: Int,
+                                hasTiger: Bool,
+                                tables: Tables = .original) -> Double {
+        // CALIBRATED (June 2026, runCardCalibration, pooled 360 deals /
+        // 1440 playouts at two independent seeds): the original table was
+        // too optimistic at short trump length — observed realization ran
+        // well below prediction at length 4-5 and was calibrated at 6.
+        // Fitted as a direct (rank × trump length) table because the length
+        // slope is RANK-DEPENDENT — an additive adjustment can't express it:
+        // low money needs length protection badly (the $5k climbs 66→81%
+        // from length 5 to 7+) while the $30k is flat ~88% at 5+, and the
+        // $40k only loses to the Tiger/Bear at all. The small Tiger overlay
+        // is deliberately gentler than the raw with/without marginal (~11pp),
+        // which is mostly length confounding — Tiger holders have longer
+        // trump, and the Tiger itself counts toward length.
+        if case .calibrated = tables {
+            let row: [Double]   // trump length ≤2, 3, 4, 5, 6, 7+
+            switch rank {
+            case .money40k: row = [0.64, 0.72, 0.84, 0.89, 0.96, 0.97]
+            case .money30k: row = [0.54, 0.62, 0.74, 0.87, 0.90, 0.88]
+            case .money15k: row = [0.46, 0.54, 0.66, 0.73, 0.84, 0.86]
+            case .money10k: row = [0.45, 0.53, 0.65, 0.70, 0.80, 0.81]
+            case .money5k:  row = [0.33, 0.41, 0.53, 0.64, 0.73, 0.79]
+            default:        return 0
+            }
+            let col = trumpLen <= 2 ? 0 : (trumpLen >= 7 ? 5 : trumpLen - 2)
+            let tigerAdj: Double = hasTiger ? 0.025 : -0.010
+            return max(0.10, min(0.99, row[col] + tigerAdj))
+        }
         // Base probability climbs with rank — the $40k of trump is nearly
         // safe, the $5k is exposed unless protected by length.
         var p: Double
@@ -339,10 +419,43 @@ enum HandEvaluator {
     /// (the $40k is the top of its color so it usually wins on a clean
     /// lead) and by SUIT LENGTH (if you have many of a color, opponents
     /// are short, less likely to be void early, more likely to follow).
-    private static func offSuitWinProbability(rank: Card.Rank,
-                                              suitLen: Int,
-                                              trumpLen: Int,
-                                              hasTiger: Bool) -> Double {
+    static func offSuitWinProbability(rank: Card.Rank,
+                                      suitLen: Int,
+                                      trumpLen: Int,
+                                      hasTiger: Bool,
+                                      tables: Tables = .original) -> Double {
+        // CALIBRATED (June 2026, runCardCalibration, pooled 360 deals /
+        // 1440 playouts at two independent seeds): the original model
+        // asked "does this card win its own trick?" — but value is realized
+        // whenever the TEAM captures the trick the card lands in (shed onto
+        // partner's winner, banked on a won trick), and a declarer's team
+        // wins well over half the tricks. Observed: low money realizes a
+        // ~40-50% team baseline; mid money ($15k/$10k) rises gently with
+        // suit length; the $30k sits ~70% except as a singleton (~50% — one
+        // shot, loses to the $40k holder); the $40k cashes ~90-100% with a
+        // NEGATIVE length slope (a singleton cashes round one before voids
+        // develop — the original positive length adjustment pointed the
+        // wrong way). Fitted as a direct (rank × suit length) table; trump
+        // length measured flat ≥4, small penalty kept for unmeasured ≤3;
+        // no Tiger effect measured (92.0 vs 91.7 on the off-suit $40k).
+        if case .calibrated = tables {
+            let p: Double
+            switch rank {
+            case .money40k: p = suitLen <= 1 ? 0.98 : suitLen == 2 ? 0.94
+                              : suitLen == 3 ? 0.90 : 0.90
+            case .money30k: p = suitLen <= 1 ? 0.50 : suitLen == 2 ? 0.68
+                              : suitLen == 3 ? 0.73 : 0.70
+            case .money15k: p = suitLen <= 1 ? 0.40 : suitLen == 2 ? 0.48
+                              : suitLen == 3 ? 0.56 : 0.54
+            case .money10k: p = suitLen <= 1 ? 0.40 : suitLen == 2 ? 0.44
+                              : suitLen == 3 ? 0.49 : 0.51
+            case .money5k:  p = suitLen <= 1 ? 0.39 : suitLen == 2 ? 0.42
+                              : suitLen == 3 ? 0.41 : 0.43
+            default: return 0
+            }
+            let trumpAdj: Double = trumpLen <= 3 ? -0.05 : 0.0
+            return max(0.02, min(0.98, p + trumpAdj))
+        }
         // Bases raised (June 2026 calibration): as the declarer you control
         // trump and tempo, so side-suit money is cashed more often than the
         // old, very pessimistic figures assumed — especially the mid ranks.

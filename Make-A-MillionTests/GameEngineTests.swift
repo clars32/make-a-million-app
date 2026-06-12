@@ -251,6 +251,7 @@ final class GameEngineTests: XCTestCase {
             opener: PlayerID(0),
             bidHistory: [BidRecord(player: PlayerID(0), action: .bid(175_000))],
             widow: nil,
+            discardAnnouncement: nil,
             currentTrick: nil,
             completedTrickCount: 3,
             completedTricks: [
@@ -291,6 +292,76 @@ final class GameEngineTests: XCTestCase {
             from: hand, trump: .black))
     }
 
+    func testMustDiscardTrumpBeforeMoney() {
+        // Two plain cards can't fill the discard, so EXACTLY one trump is
+        // forced — before any money may go, and never more trump than forced.
+        let hand: [Card] = [.colored(.green, .two), .colored(.green, .three),   // plain
+                            .colored(.red, .one), .colored(.red, .four),        // trump
+                            .colored(.yellow, .money10k)]                       // money
+        // 2 plain + 1 trump: the forced shape.
+        XCTAssertTrue(GameState.isLegalWidowDiscard(
+            [.colored(.green, .two), .colored(.green, .three), .colored(.red, .one)],
+            from: hand, trump: .red))
+        // 2 plain + 1 money while trump remains: illegal — trump goes first.
+        XCTAssertFalse(GameState.isLegalWidowDiscard(
+            [.colored(.green, .two), .colored(.green, .three), .colored(.yellow, .money10k)],
+            from: hand, trump: .red))
+        // 1 plain + 2 trump: illegal — more trump than forced.
+        XCTAssertFalse(GameState.isLegalWidowDiscard(
+            [.colored(.green, .two), .colored(.red, .one), .colored(.red, .four)],
+            from: hand, trump: .red))
+    }
+
+    func testMoneyOnlyWhenPlainAndTrumpExhausted() {
+        // One plain + one trump leaves exactly one money slot forced.
+        let hand: [Card] = [.colored(.green, .two),                              // plain
+                            .colored(.red, .four),                               // trump
+                            .colored(.yellow, .money10k), .colored(.black, .money5k),
+                            .tiger]
+        XCTAssertTrue(GameState.isLegalWidowDiscard(
+            [.colored(.green, .two), .colored(.red, .four), .colored(.yellow, .money10k)],
+            from: hand, trump: .red))
+        // Two money when only one is forced: illegal.
+        XCTAssertFalse(GameState.isLegalWidowDiscard(
+            [.colored(.green, .two), .colored(.yellow, .money10k), .colored(.black, .money5k)],
+            from: hand, trump: .red))
+        // Skipping the trump for a money card: illegal.
+        XCTAssertFalse(GameState.isLegalWidowDiscard(
+            [.colored(.green, .two), .colored(.yellow, .money10k), .tiger],
+            from: hand, trump: .red))
+    }
+
+    func testDiscardAnnouncementIsPublicAndMatchesDiscard() throws {
+        var g = GameState.newHand(dealer: PlayerID(0), seed: 99,
+                                  misdealRule: .disabled)
+        g = try g.applying(.bid(.bid(175_000)), by: PlayerID(1))
+        g = try g.applying(.bid(.pass), by: PlayerID(2))
+        g = try g.applying(.bid(.pass), by: PlayerID(3))
+        g = try g.applying(.bid(.pass), by: PlayerID(0))
+        g = try g.applying(.nameTrump(.red), by: PlayerID(1))
+        // No announcement before the discard.
+        XCTAssertNil(g.view(for: PlayerID(0)).discardAnnouncement)
+
+        let move = g.legalMoves(for: PlayerID(1)).first {
+            if case .discardWidow = $0 { return true }; return false
+        }
+        guard case .discardWidow(let cards)? = move else {
+            return XCTFail("engine must offer a legal discard")
+        }
+        g = try g.applying(move!, by: PlayerID(1))
+
+        let expectedTrump = cards.filter {
+            !$0.isMoney && $0.effectiveColor(trump: .red) == .red
+        }.count
+        let expectedMoney = Set(cards.filter(\.isMoney))
+        for seat in Seats.all {
+            let ann = g.view(for: seat).discardAnnouncement
+            XCTAssertNotNil(ann, "announcement must be public to seat \(seat.raw)")
+            XCTAssertEqual(ann?.trumpCount, expectedTrump)
+            XCTAssertEqual(ann.map { Set($0.moneyCards) }, expectedMoney)
+        }
+    }
+
     func testDecliningAutoMisdealIsIllegal() {
         let g = GameState.newHand(
             dealer: PlayerID(0),
@@ -327,6 +398,7 @@ final class GameEngineTests: XCTestCase {
             highBid: bidder == nil ? nil : 200_000,
             highBidder: bidder,
             passed: [], bidHistory: [], trump: .red,
+            discardAnnouncement: nil,
             misdealRule: .disabled, endgameRule: rule,
             currentTrick: nil, completedTricks: [], capturedByTeam: [:],
             matchScore: [0: scoreA, 1: scoreB],
