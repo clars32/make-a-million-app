@@ -26,13 +26,19 @@ struct GameView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             HStack(spacing: usesTabletChrome ? 12 : 8) {
-                Button { showingSettings = true } label: {
+                Button {
+                    SoundEffectPlayer.shared.play(.buttonSelect)
+                    showingSettings = true
+                } label: {
                     Image(systemName: "gearshape.fill")
                 }
                 .buttonStyle(.bordered)
                 .accessibilityLabel("Settings")
 
-                Button("Back", action: onExit)
+                Button("Back") {
+                    SoundEffectPlayer.shared.play(.buttonSelect)
+                    onExit()
+                }
                     .buttonStyle(.bordered)
             }
             .font(usesTabletChrome ? TableTypography.display(.title3, weight: .semibold) : TableTypography.display(.body))
@@ -45,7 +51,7 @@ struct GameView: View {
             // (`running == false`) rules are editable and apply to the next deal.
             SettingsView(settings: .shared,
                          rulesLocked: session.running,
-                         dealSeed: dealSeed) {
+                         dealSeed: session.currentHandSeed ?? dealSeed) {
                 showingSettings = false
             }
         }
@@ -241,8 +247,12 @@ struct GameBody: View {
             VStack(spacing: 8) {
                 boardHeader(table)
 
+                if showsBidHistoryStrip(table) {
+                    bidHistoryStrip(table)
+                }
+
                 if table.phase == .misdealDecision {
-                    misdealBanner(table)
+                    misdealBanner(table, decision: decision, interactive: interactive)
                 }
 
                 Spacer(minLength: 0)
@@ -296,7 +306,7 @@ struct GameBody: View {
                 .hidden()
 
             if table.phase == .misdealDecision {
-                misdealBanner(table)
+                misdealBanner(table, decision: decision, interactive: false)
                     .hidden()
             }
 
@@ -349,7 +359,10 @@ struct GameBody: View {
                 }
                 .buttonStyle(.plain)
             } else if interactive && decision.phase == .widowDiscard && discardSelectable {
-                Button { toggleDiscardSelection(card) } label: {
+                Button {
+                    SoundEffectPlayer.shared.play(.buttonSelect)
+                    toggleDiscardSelection(card)
+                } label: {
                     cardChip(card, faded: false, selected: selected, highlighted: true, totalCards: totalCards)
                 }
                 .buttonStyle(.plain)
@@ -406,17 +419,22 @@ struct GameBody: View {
         let isMine = Seats.team(of: table.me) == team
         let hand = table.liveHandScore[team, default: 0]
         let match = table.matchScore[team, default: 0]
+        // "Show live scores" off: hide the running hand total (captured
+        // tricks stay face-down at a real table); the settled match score
+        // still shows.
         return VStack(alignment: .leading, spacing: isTabletLayout ? 4 : 2) {
             Text(team == 0 ? teamAName : teamBName)
                 .font(TableTypography.display(isTabletLayout ? .callout : .caption2, weight: .bold))
                 .foregroundStyle(tint)
                 .lineLimit(1).minimumScaleFactor(0.7)
-            Text("$\(hand / 1000)k")
+            Text(settings.showLiveScores ? "$\(hand / 1000)k" : "$\(match / 1000)k")
                 .font(TableTypography.money(isTabletLayout ? .title3 : .callout))
                 .foregroundStyle(.white)
-            Text("$\(match / 1000)k")
-                .font(TableTypography.money(isTabletLayout ? .callout : .caption2, weight: .regular))
-                .foregroundStyle(.white.opacity(0.65))
+            if settings.showLiveScores {
+                Text("$\(match / 1000)k")
+                    .font(TableTypography.money(isTabletLayout ? .callout : .caption2, weight: .regular))
+                    .foregroundStyle(.white.opacity(0.65))
+            }
         }
         .padding(.horizontal, isTabletLayout ? 16 : 9)
         .padding(.vertical, isTabletLayout ? 12 : 7)
@@ -486,6 +504,7 @@ struct GameBody: View {
                     metrics: metrics,
                     seatName: seatName,
                     showsIdleText: showsIdleText,
+                    showsAnimalCues: settings.animalAnimations,
                     cardNS: showLiveCards ? cardNS : nil)
 
                 if let dealAnimationTrigger {
@@ -702,10 +721,33 @@ struct GameBody: View {
 
     @ViewBuilder
     private func footerStrip(_ table: PlayerView) -> some View {
-        let widow = table.widow ?? []
+        let widow = settings.showWidow ? (table.widow ?? []) : []
         let showLast = settings.showLastTrick && table.lastTrick != nil
-        if !widow.isEmpty || showLast {
+        // The discard announcement is public table talk even when the widow
+        // panel is hidden (privately-held widow, or the display toggle off) —
+        // it gets its own small panel in that case.
+        let loneAnnouncement: DiscardAnnouncement? = {
+            guard widow.isEmpty, let ann = table.discardAnnouncement,
+                  ann.hasPublicContent else { return nil }
+            return ann
+        }()
+        if !widow.isEmpty || showLast || loneAnnouncement != nil {
             HStack(alignment: .bottom, spacing: isTabletLayout ? 22 : 12) {
+                if let ann = loneAnnouncement {
+                    HStack(spacing: isTabletLayout ? 6 : 4) {
+                        Text(ann.summaryText)
+                            .font(TableTypography.display(isTabletLayout ? .callout : .caption2))
+                            .foregroundStyle(.white.opacity(0.7))
+                        ForEach(keyedHand(ann.moneyCards), id: \.key) { entry in
+                            MiniCardFace(card: entry.card,
+                                         width: miniCardWidth * 0.8,
+                                         height: miniCardHeight * 0.8)
+                        }
+                    }
+                    .padding(.horizontal, isTabletLayout ? 12 : 8)
+                    .padding(.vertical, isTabletLayout ? 10 : 7)
+                    .tablePanel(cornerRadius: isTabletLayout ? 14 : 10, shadowOpacity: 0.16)
+                }
                 if !widow.isEmpty {
                     VStack(alignment: .leading, spacing: isTabletLayout ? 7 : 4) {
                         Text("Widow")
@@ -721,7 +763,7 @@ struct GameBody: View {
                         // Public discard announcement: trump count spoken,
                         // money shown face-up. Stays visible all hand, like
                         // the widow itself.
-                        if let ann = table.discardAnnouncement {
+                        if let ann = table.discardAnnouncement, ann.hasPublicContent {
                             HStack(spacing: isTabletLayout ? 6 : 4) {
                                 Text(ann.summaryText)
                                     .font(TableTypography.display(isTabletLayout ? .callout : .caption2))
@@ -840,25 +882,86 @@ struct GameBody: View {
         TableFeltBackground()
     }
 
-    private func misdealBanner(_ view: PlayerView) -> some View {
+    /// Misdeal notice. Automatic rule: a brief "redealing" banner. Agreement
+    /// rule: when it is this player's turn to vote, the banner carries the
+    /// Redeal / Keep buttons; otherwise it shows who the table is waiting on.
+    private func misdealBanner(_ view: PlayerView, decision: PlayerView,
+                               interactive: Bool) -> some View {
         let myMoney = view.myHand.reduce(0) { $0 + $1.moneyValue }
-        return HStack(spacing: 12) {
-            Image(systemName: "arrow.triangle.2.circlepath")
-                .font(TableTypography.display(.title2))
-                .foregroundStyle(TableStyle.teamAmber)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Misdeal — redealing").font(TableTypography.display(.subheadline, weight: .bold))
-                Text("A player has too little money in hand. Your hand: $\(myMoney / 1000)k in money cards.")
-                    .font(TableTypography.display(.caption))
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+        let canVote = interactive
+            && decision.phase == .misdealDecision
+            && decision.legalMoves.contains(.declineMisdeal)
+        return VStack(spacing: 10) {
+            HStack(spacing: 12) {
+                Image(systemName: "arrow.triangle.2.circlepath")
+                    .font(TableTypography.display(.title2))
+                    .foregroundStyle(TableStyle.teamAmber)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(canVote ? "Misdeal called — redeal?" : "Misdeal called")
+                        .font(TableTypography.display(.subheadline, weight: .bold))
+                    Text("A player has too little money in hand. Your hand: $\(myMoney / 1000)k in money cards.")
+                        .font(TableTypography.display(.caption))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 8)
+                if !canVote { ProgressView().controlSize(.small) }
             }
-            Spacer(minLength: 8)
-            ProgressView().controlSize(.small)
+            if canVote {
+                HStack(spacing: 10) {
+                    Button("Redeal") {
+                        SoundEffectPlayer.shared.play(.buttonSelect)
+                        submit(.callMisdeal)
+                    }
+                        .buttonStyle(.borderedProminent)
+                        .tint(TableStyle.actionBlue)
+                    Button("Keep this hand") {
+                        SoundEffectPlayer.shared.play(.buttonSelect)
+                        submit(.declineMisdeal)
+                    }
+                        .buttonStyle(.bordered)
+                        .tint(TableStyle.teamAmber)
+                }
+                .font(TableTypography.display(.subheadline, weight: .semibold))
+            }
         }
         .padding(12)
         .background(TableStyle.teamAmber.opacity(0.16), in: RoundedRectangle(cornerRadius: 10))
         .overlay(RoundedRectangle(cornerRadius: 10).stroke(TableStyle.teamAmber.opacity(0.5), lineWidth: 1))
+    }
+
+    // MARK: Bid history strip (during bidding, and through the hand when
+    // the Card display setting keeps it visible)
+
+    private func showsBidHistoryStrip(_ table: PlayerView) -> Bool {
+        guard !table.bidHistory.isEmpty else { return false }
+        return table.phase == .bidding || settings.showBidHistoryDuringHand
+    }
+
+    private func bidHistoryStrip(_ table: PlayerView) -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: isTabletLayout ? 8 : 5) {
+                Text("Bids")
+                    .font(TableTypography.display(isTabletLayout ? .callout : .caption2))
+                    .foregroundStyle(.white.opacity(0.6))
+                ForEach(Array(table.bidHistory.enumerated()), id: \.offset) { _, record in
+                    HStack(spacing: 4) {
+                        Text(seatShort(record.player))
+                            .font(TableTypography.display(isTabletLayout ? .callout : .caption2))
+                            .foregroundStyle(.white.opacity(0.7))
+                        Text(bidHistoryLabel(record.action))
+                            .font(TableTypography.money(isTabletLayout ? .callout : .caption2))
+                            .foregroundStyle(.white)
+                    }
+                    .padding(.horizontal, isTabletLayout ? 9 : 6)
+                    .padding(.vertical, isTabletLayout ? 5 : 3)
+                    .background(Capsule().fill(bidHistoryTint(record).opacity(0.16)))
+                    .overlay(Capsule().stroke(bidHistoryTint(record).opacity(0.45), lineWidth: 1))
+                }
+            }
+            .padding(.horizontal, 2)
+        }
+        .defaultScrollAnchor(.trailing)
     }
 
     // MARK: Action panel (bid / name trump / discard)
@@ -923,6 +1026,7 @@ struct GameBody: View {
             HStack(spacing: isTabletLayout ? 10 : 8) {
                 Button {
                     guard !bidMoves.isEmpty else { return }
+                    SoundEffectPlayer.shared.play(.buttonSelect)
                     submit(bidMoves[safeBidIndex])
                 } label: {
                     Text("Bid")
@@ -939,6 +1043,7 @@ struct GameBody: View {
 
                 Button {
                     guard let passMove else { return }
+                    SoundEffectPlayer.shared.play(.buttonSelect)
                     submit(passMove)
                 } label: {
                     Text("Pass")
@@ -986,7 +1091,10 @@ struct GameBody: View {
                     // as white-on-white. The selector should always show the suit
                     // color faithfully, so override `.black` to a literal black.
                     let solidSwatch = TableStyle.suitSwatch(color)
-                    Button { submit(move) } label: {
+                    Button {
+                        SoundEffectPlayer.shared.play(.buttonSelect)
+                        submit(move)
+                    } label: {
                         HStack(spacing: 10) {
                             Circle().fill(solidSwatch)
                                 .frame(width: 22, height: 22)
@@ -1038,7 +1146,11 @@ struct GameBody: View {
                     .foregroundStyle(.white)
                 Spacer()
                 Button("Discard selected") {
-                    if let move = legalMove { submit(move); discardSelection = [] }
+                    if let move = legalMove {
+                        SoundEffectPlayer.shared.play(.buttonSelect)
+                        submit(move)
+                        discardSelection = []
+                    }
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(legalMove == nil)

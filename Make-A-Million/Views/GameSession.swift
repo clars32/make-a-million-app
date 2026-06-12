@@ -61,6 +61,10 @@ final class GameSession: ObservableObject {
     /// for the "Watching play…" label between your turns.
     @Published private(set) var caughtUp = true
 
+    /// Seed of the hand currently being played (or just finished) — surfaced
+    /// by the developer section of the settings panel.
+    @Published private(set) var currentHandSeed: UInt64? = nil
+
     /// The seat the human occupies (constructed first in `start`).
     private let spectator = PlayerID(0)
 
@@ -106,6 +110,7 @@ final class GameSession: ObservableObject {
     private var pauseBotFramesUntil: ContinuousClock.Instant?
     private var pendingFinal: GameState? = nil
     private var dealPresentationHoldToken: Int = -1
+    private var animalCuePauseTracker = AnimalCuePauseTracker()
 
     private var runTask: Task<Void, Never>? = nil
     private var drainTask: Task<Void, Never>? = nil
@@ -159,6 +164,7 @@ final class GameSession: ObservableObject {
         pauseBotFramesUntil = nil
         pendingFinal = nil
         dealPresentationHoldToken = -1
+        animalCuePauseTracker.reset()
 
         // Hand-unique seed derived from the match base. Agents seed off it
         // too so their RNGs vary hand to hand (otherwise West would always
@@ -169,6 +175,7 @@ final class GameSession: ObservableObject {
         AIDecisionTrace.shared.beginHand(enabled: GameSettings.shared.logHandsToFile)
 
         let handSeed = matchSeedBase &+ handIndex
+        currentHandSeed = handSeed
         // Read the chosen strength tier fresh each hand (locked during play, so
         // a change only lands on the next deal).
         let botDifficulty = GameSettings.shared.botDifficulty
@@ -189,6 +196,7 @@ final class GameSession: ObservableObject {
         // can't alter the hand in progress.
         let misdealRule = GameSettings.shared.misdealRule
         let endgameRule = GameSettings.shared.endgameRule
+        let houseRules = GameSettings.shared.houseRules
 
         runTask = Task {
             do {
@@ -198,6 +206,7 @@ final class GameSession: ObservableObject {
                     carryScore: carry,
                     misdealRule: misdealRule,
                     endgameRule: endgameRule,
+                    houseRules: houseRules,
                     spectator: spectator,
                     onView: { [weak self] view in
                         await self?.receivePublicFrameAndHoldForDealIfNeeded(view)
@@ -221,10 +230,12 @@ final class GameSession: ObservableObject {
         pauseBotFramesUntil = nil
         pendingFinal = nil
         dealPresentationHoldToken = -1
+        animalCuePauseTracker.reset()
         displayView = nil
         finished = nil
         running = false
         caughtUp = true
+        currentHandSeed = nil
         // Match-progression state — wipe so the next start is a fresh match.
         matchSeedBase = 0
         handIndex = 0
@@ -244,6 +255,7 @@ final class GameSession: ObservableObject {
         pauseBotFramesUntil = nil
         pendingFinal = nil
         dealPresentationHoldToken = -1
+        animalCuePauseTracker.reset()
         lastPublishAt = nil
         displayView = nil
         finished = nil
@@ -277,6 +289,7 @@ final class GameSession: ObservableObject {
         if shouldHold {
             try? await Task.sleep(for: dealAnimationHoldInterval)
         }
+        await pauseForAnimalCueIfNeeded(after: view)
     }
 
     private func shouldHoldForDealAnimation(_ view: PlayerView) -> Bool {
@@ -284,6 +297,15 @@ final class GameSession: ObservableObject {
         guard token >= 0, token != dealPresentationHoldToken else { return false }
         dealPresentationHoldToken = token
         return true
+    }
+
+    private func pauseForAnimalCueIfNeeded(after view: PlayerView) async {
+        guard let duration = animalCuePauseTracker.holdDuration(
+            after: view,
+            animationsEnabled: GameSettings.shared.animalAnimations)
+        else { return }
+
+        try? await Task.sleep(for: duration)
     }
 
     /// Latest table snapshot: last queued show, else what is on screen.
@@ -336,6 +358,7 @@ final class GameSession: ObservableObject {
             bidHistory: resolved.bidHistory,
             widow: resolved.widow,
             discardAnnouncement: resolved.discardAnnouncement,
+            houseRules: resolved.houseRules,
             currentTrick: Trick(leader: finished.leader, plays: finished.plays),
             completedTrickCount: live.completedTricks.count,
             completedTricks: live.completedTricks,
@@ -346,8 +369,11 @@ final class GameSession: ObservableObject {
 
     private func isRedundantWithDisplay(_ view: PlayerView) -> Bool {
         guard let live = displayView else { return false }
+        // Compare hand CONTENTS, not just count: a redeal into another short
+        // hand (agreement-mode misdeal vote, or a double auto-misdeal) keeps
+        // the phase and every count identical while replacing all the cards.
         return live.phase == view.phase
-            && live.myHand.count == view.myHand.count
+            && live.myHand == view.myHand
             && live.currentTrick?.plays.count == view.currentTrick?.plays.count
             && live.completedTricks.count == view.completedTricks.count
             && live.bidHistory.count == view.bidHistory.count

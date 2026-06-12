@@ -28,6 +28,7 @@ struct OnlineHostLobbyView: View {
 
     @State private var didStartHand: Bool = false
     @State private var dealSeed: UInt64 = .random(in: .min ... .max)
+    @State private var showingSettings = false
     @State private var bridgeToken: AnyObject? = nil
 
     /// seat raw value → gamePlayerID, for seats 1–3. Seat 0 is always
@@ -101,12 +102,24 @@ struct OnlineHostLobbyView: View {
                     .foregroundStyle(.white.opacity(0.66))
             }
             Spacer()
+            Button { showingSettings = true } label: {
+                Image(systemName: "gearshape.fill")
+            }
+            .buttonStyle(.bordered)
+            .tint(TableStyle.cardSelected)
+            .accessibilityLabel("Settings")
             Button("Stop") {
                 host.stop()
                 onExit()
             }
             .buttonStyle(.bordered)
             .tint(TableStyle.teamAmber)
+        }
+        .sheet(isPresented: $showingSettings) {
+            // Pre-match: rules are editable here and apply to the first deal.
+            SettingsView(settings: .shared, rulesLocked: false) {
+                showingSettings = false
+            }
         }
     }
 

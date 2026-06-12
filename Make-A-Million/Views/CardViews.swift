@@ -346,6 +346,7 @@ struct DealingAnimationOverlay: View {
 
     private func restartIfNeeded() {
         guard trigger >= 0 else { return }
+        SoundEffectPlayer.shared.play(.cardShuffle)
         visible = true
         shuffling = false
         dealt = false

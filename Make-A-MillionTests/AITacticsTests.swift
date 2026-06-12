@@ -401,4 +401,116 @@ final class AITacticsTests: XCTestCase {
         XCTAssertEqual(PlayoutPolicy.move(in: state, seat: P(0)),
                        .play(red(.two)))
     }
+
+    // MARK: - Mined fix: duck to establish (`establishDuck`, PolicyMiner June 2026)
+
+    func testEstablishDuckLeadsLowFromLongBossSuitInsteadOfCashing() {
+        // Leader (seat 0, not declarer) holds the virgin yellow $40k with
+        // length behind it (Y$40 Y9 Y3). The default cashes the boss into
+        // the thin first round; the duck leads Y3 and keeps the $40k for a
+        // later round, when opponents' yellow money must follow.
+        let hands: [PlayerID: [Card]] = [
+            P(0): [y(.money40k), y(.nine), y(.three), grn(.one)],
+            P(1): [y(.money15k), y(.one), grn(.two)],
+            P(2): [y(.two), blk(.one), blk(.two)],
+            P(3): [y(.four), grn(.three), blk(.three)],
+        ]
+        let state = trickState(hands: hands, trump: .red, leader: P(0),
+                               onTable: [], toAct: P(0))
+        XCTAssertEqual(PlayoutPolicy.move(in: state, seat: P(0), establishDuck: true),
+                       .play(y(.three)))
+        // Gate intact: default behaviour still cashes the virgin $40k.
+        XCTAssertEqual(PlayoutPolicy.move(in: state, seat: P(0)),
+                       .play(y(.money40k)))
+    }
+
+    func testEstablishDuckDefersASureWinnerWithLength() {
+        // The Y$30 is a sure winner (no higher yellow out, nobody void with
+        // trump) and seat 0 holds three yellows. Default cashes it; the duck
+        // leads Y3 instead.
+        let hands: [PlayerID: [Card]] = [
+            P(0): [y(.money30k), y(.eight), y(.three), grn(.one)],
+            P(1): [y(.one), grn(.two), blk(.one)],
+            P(2): [y(.two), blk(.two), blk(.three)],
+            P(3): [y(.four), grn(.three), grn(.four)],
+        ]
+        let state = trickState(hands: hands, trump: .red, leader: P(0),
+                               onTable: [], toAct: P(0))
+        XCTAssertEqual(PlayoutPolicy.move(in: state, seat: P(0), establishDuck: true),
+                       .play(y(.three)))
+        XCTAssertEqual(PlayoutPolicy.move(in: state, seat: P(0)),
+                       .play(y(.money30k)))
+    }
+
+    func testEstablishDuckStillCashesAShortBoss() {
+        // Doubleton $40k: no length to establish, so the duck does NOT
+        // apply — cash now, exactly the singleton/doubleton case the
+        // per-card calibration measured at ~100%.
+        let hands: [PlayerID: [Card]] = [
+            P(0): [y(.money40k), y(.three), grn(.one), grn(.two)],
+            P(1): [y(.one), blk(.one), blk(.two)],
+            P(2): [y(.two), blk(.three), grn(.three)],
+            P(3): [y(.four), grn(.four), blk(.money10k)],
+        ]
+        let state = trickState(hands: hands, trump: .red, leader: P(0),
+                               onTable: [], toAct: P(0))
+        XCTAssertEqual(PlayoutPolicy.move(in: state, seat: P(0), establishDuck: true),
+                       .play(y(.money40k)))
+    }
+
+    // MARK: - Mined fix: bank the unassailable win (`bankWin`, PolicyMiner June 2026)
+
+    func testBankWinBanksUnassailableMoneyMidTrick() {
+        // Seat 0 follows second to a yellow lead and can win with the Y9 or
+        // the Y$30. Both yet-to-play seats still hold yellow (so they must
+        // follow, and nothing they hold outranks the $30k) — the bank is
+        // unassailable. Default wins cheap with Y9, stranding the money.
+        let hands: [PlayerID: [Card]] = [
+            P(0): [y(.money30k), y(.nine), grn(.three)],
+            P(1): [y(.one), grn(.one), blk(.one)],
+            P(2): [y(.two), grn(.two), blk(.two)],
+            P(3): [grn(.four)],
+        ]
+        let state = trickState(
+            hands: hands, trump: .red, leader: P(3),
+            onTable: [(P(3), y(.four))], toAct: P(0))
+        XCTAssertEqual(PlayoutPolicy.move(in: state, seat: P(0), bankWin: true),
+                       .play(y(.money30k)))
+        // Gate intact: default behaviour still wins as cheaply as possible.
+        XCTAssertEqual(PlayoutPolicy.move(in: state, seat: P(0)),
+                       .play(y(.nine)))
+    }
+
+    func testBankWinStaysCheapWhenARuffLooms() {
+        // Same shape, but seat 2 is void in yellow and holds a red trump —
+        // the $30k bank could be ruffed away, so even with the lever on the
+        // cheap win is right.
+        let hands: [PlayerID: [Card]] = [
+            P(0): [y(.money30k), y(.nine), grn(.three)],
+            P(1): [y(.one), grn(.one), blk(.one)],
+            P(2): [red(.two), grn(.two), blk(.two)],     // void yellow + trump
+            P(3): [grn(.four)],
+        ]
+        let state = trickState(
+            hands: hands, trump: .red, leader: P(3),
+            onTable: [(P(3), y(.four))], toAct: P(0))
+        XCTAssertEqual(PlayoutPolicy.move(in: state, seat: P(0), bankWin: true),
+                       .play(y(.nine)))
+    }
+
+    func testBankWinStaysCheapUnderALooseBear() {
+        // Seat 2 is void in yellow holding the Bear: it can legally zero the
+        // trick, so banking the $30k would just feed it to the Bear.
+        let hands: [PlayerID: [Card]] = [
+            P(0): [y(.money30k), y(.nine), grn(.three)],
+            P(1): [y(.one), grn(.one), blk(.one)],
+            P(2): [.bear, grn(.two), blk(.two)],         // void yellow + Bear
+            P(3): [grn(.four)],
+        ]
+        let state = trickState(
+            hands: hands, trump: .red, leader: P(3),
+            onTable: [(P(3), y(.four))], toAct: P(0))
+        XCTAssertEqual(PlayoutPolicy.move(in: state, seat: P(0), bankWin: true),
+                       .play(y(.nine)))
+    }
 }

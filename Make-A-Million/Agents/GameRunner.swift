@@ -59,6 +59,7 @@ struct GameRunner {
                   carryScore: [Int: Int] = [0: 0, 1: 0],
                   misdealRule: MisdealRule = .standard,
                   endgameRule: EndgameTiebreak = .standard,
+                  houseRules: HouseRules = .standard,
                   spectator: PlayerID? = nil,
                   onView: (@Sendable @MainActor (PlayerView) async -> Void)? = nil) async throws -> GameState {
 
@@ -66,7 +67,8 @@ struct GameRunner {
                                       seed: dealSeed,
                                       carryScore: carryScore,
                                       misdealRule: misdealRule,
-                                      endgameRule: endgameRule)
+                                      endgameRule: endgameRule,
+                                      houseRules: houseRules)
 
         // Initial deal frame, so the consumer can show the dealt hand /
         // opening of bidding rather than starting one move in.
@@ -85,7 +87,9 @@ struct GameRunner {
             // The notice frame was already emitted (initial deal, or the
             // post-move frame of a prior redeal). Hold it visible briefly,
             // then apply the forced redeal and emit the next frame.
-            if state.phase == .misdealDecision {
+            // (Agreement-mode misdeals fall through to the normal loop below:
+            // each seat is consulted like any other decision.)
+            if state.phase == .misdealDecision && !state.misdealRule.requiresAgreement {
                 try? await Task.sleep(for: .milliseconds(2200))
                 state = try state.applying(.callMisdeal, by: state.toAct)
                 if let s = spectator, let sink = onView {
@@ -126,7 +130,8 @@ struct GameRunner {
     func playMatch(firstDealer: PlayerID = PlayerID(0),
                        baseSeed: UInt64,
                    misdealRule: MisdealRule = .standard,
-                   endgameRule: EndgameTiebreak = .standard) async throws -> (winner: Int, finalState: GameState) {
+                   endgameRule: EndgameTiebreak = .standard,
+                   houseRules: HouseRules = .standard) async throws -> (winner: Int, finalState: GameState) {
         var dealer = firstDealer
         var carry: [Int: Int] = [0: 0, 1: 0]
         var handIndex: UInt64 = 0
@@ -138,7 +143,8 @@ struct GameRunner {
                 dealSeed: baseSeed &+ handIndex,
                 carryScore: carry,
                 misdealRule: misdealRule,
-                endgameRule: endgameRule)
+                endgameRule: endgameRule,
+                houseRules: houseRules)
             if let winner = state.matchWinner {
                 return (winner, state)
             }

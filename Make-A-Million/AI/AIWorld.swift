@@ -30,8 +30,8 @@
 //    GameState memberwise init (declaration order):
 //      (dealSeed,dealer,hands,widow,phase,toAct,highBid,highBidder,
 //       passed,bidHistory,trump,discardAnnouncement,misdealRule,
-//       currentTrick,completedTricks,capturedByTeam,matchScore,
-//       dealtHands,dealtWidow)
+//       endgameRule,houseRules,misdealVotes,currentTrick,completedTricks,
+//       capturedByTeam,matchScore,dealtHands,dealtWidow)
 //
 //    PlayerView.bidHistory : [BidRecord]  (public; opener also on the view)
 //
@@ -463,6 +463,10 @@ struct Determinizer {
             // Rollouts never reach a match-deciding settle, so the endgame
             // tiebreak is irrelevant here; the standard rule is a safe default.
             endgameRule: .standard,
+            // House rules change move LEGALITY (e.g. trump may not be led
+            // until broken), so rollouts must play under the table's rules —
+            // otherwise the search would credit lines the engine forbids.
+            houseRules: view.houseRules,
             currentTrick: view.currentTrick,
             completedTricks: completed,
             capturedByTeam: captured,

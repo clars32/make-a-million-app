@@ -65,6 +65,16 @@ final class NetSession: ObservableObject, RemoteSeatDelegate {
         case running
         case paused(reason: PauseReason)
         case finished(matchWinner: Int?)
+
+        /// True while a hand is actually underway (running OR paused mid-
+        /// hand). The settings panel locks rule edits on this, so a pause
+        /// can't be used to change the rules out from under a live hand.
+        var isMidHand: Bool {
+            switch self {
+            case .running, .paused: return true
+            case .lobby, .finished: return false
+            }
+        }
     }
 
     struct SeatStatus: Equatable {
@@ -83,6 +93,10 @@ final class NetSession: ObservableObject, RemoteSeatDelegate {
     @Published private(set) var phase: Phase = .lobby
     @Published private(set) var seats: [SeatStatus] = []
 
+    /// Seed of the hand currently being played (or just finished) — surfaced
+    /// by the developer section of the settings panel on the host device.
+    @Published private(set) var currentHandSeed: UInt64? = nil
+
     // MARK: - Configuration
 
     enum HostRole {
@@ -91,7 +105,10 @@ final class NetSession: ObservableObject, RemoteSeatDelegate {
     }
 
     private var hostRole: HostRole
-    private let botDifficulty: MonteCarloAgent.Difficulty
+    /// Bot strength. Seeded from the init parameter, then re-read from the
+    /// shared settings at every deal (see `runHand`) so a difficulty change
+    /// between hands applies to the next deal — same behavior as solo play.
+    private var botDifficulty: MonteCarloAgent.Difficulty
 
     // Match progression, carried across hands.
     private var currentDealer: PlayerID = PlayerID(0)
@@ -114,6 +131,8 @@ final class NetSession: ObservableObject, RemoteSeatDelegate {
     /// can be re-primed with the current table immediately instead of
     /// staring at a blank board until the next move produces a frame.
     private var lastViews: [PlayerID: PlayerView] = [:]
+    private var observationPacingSeat: PlayerID?
+    private var animalCuePauseTracker = AnimalCuePauseTracker()
 
     // MARK: - Pause coordination
 
@@ -179,16 +198,19 @@ final class NetSession: ObservableObject, RemoteSeatDelegate {
         publishSeats()
     }
     
-    // Add this to NetSession.swift to allow the UI to update the role before starting
+    /// Allow the lobby UI to move the local host between seats before the
+    /// hand starts, or switch to tabletop spectator mode.
     func setHostRole(_ role: HostRole) {
         self.hostRole = role
-        // Re-publish seats based on the new role
+
+        for (seat, assignment) in assignments where assignment.kind == .host {
+            assignments[seat] = nil
+        }
+
         if case .player(let seat, _, let name) = role {
             assignments[seat] = SeatAssignment(seat: seat, kind: .host, name: name, remote: nil, botSeed: nil)
-        } else {
-            // Free up seat 0 if switching to tabletop
-            assignments[PlayerID(0)] = nil
         }
+
         publishSeats()
     }
 
@@ -223,6 +245,8 @@ final class NetSession: ObservableObject, RemoteSeatDelegate {
         guard runTask == nil else { return }
         fillEmptySeatsWithBots(seedBase: handSeedBase)
         lastViews.removeAll()
+        observationPacingSeat = nil
+        animalCuePauseTracker.reset()
         phase = .running
         // Clear the host board's end-of-hand state for the new deal.
         forwardHostHandStarting()
@@ -230,9 +254,14 @@ final class NetSession: ObservableObject, RemoteSeatDelegate {
         let dealer = currentDealer
         let carry = carryScore
         let handSeed = handSeedBase &+ handIndex
+        currentHandSeed = handSeed
         // Snapshot the house rules at deal time (see GameSession.runHand).
         let misdealRule = GameSettings.shared.misdealRule
         let endgameRule = GameSettings.shared.endgameRule
+        let houseRules = GameSettings.shared.houseRules
+        // Re-read the chosen bot strength so a settings change between hands
+        // lands on the next deal (parity with solo play).
+        botDifficulty = GameSettings.shared.botDifficulty
 
         runTask = Task { [weak self] in
             guard let self else { return }
@@ -276,6 +305,7 @@ final class NetSession: ObservableObject, RemoteSeatDelegate {
                     spectatorSeats.append(PlayerID(0))
                 }
             }
+            self.observationPacingSeat = spectatorSeats.last
 
             let runner = GameRunner(agents: agents)
             do {
@@ -285,6 +315,7 @@ final class NetSession: ObservableObject, RemoteSeatDelegate {
                     carryScore: carry,
                     misdealRule: misdealRule,
                     endgameRule: endgameRule,
+                    houseRules: houseRules,
                     spectators: spectatorSeats,
                     onSeatView: { [weak self] seat, view in
                         await self?.dispatchObservation(seat: seat, view: view)
@@ -301,6 +332,8 @@ final class NetSession: ObservableObject, RemoteSeatDelegate {
     func stop() {
         runTask?.cancel()
         runTask = nil
+        observationPacingSeat = nil
+        animalCuePauseTracker.reset()
         // Wake any pause waiter so the runner's Task can exit cleanly.
         resolveAllPauseWaiters(with: .sessionCancelled)
         for assn in assignments.values {
@@ -320,6 +353,7 @@ final class NetSession: ObservableObject, RemoteSeatDelegate {
         case .player(let hostSeat, _, _):
             if seat == hostSeat {
                 forwardHostFrame(view)
+                await pauseAfterFinalObservationIfNeeded(seat: seat, view: view)
                 return // Host seat doesn't have a remote channel
             }
         case .tabletopSpectator:
@@ -334,8 +368,22 @@ final class NetSession: ObservableObject, RemoteSeatDelegate {
         // Forward to remote peers
         guard let assn = assignments[seat],
               assn.kind == .remote,
-              let r = assn.remote else { return }
+              let r = assn.remote else {
+            await pauseAfterFinalObservationIfNeeded(seat: seat, view: view)
+            return
+        }
         await r.sendObservation(view)
+        await pauseAfterFinalObservationIfNeeded(seat: seat, view: view)
+    }
+
+    private func pauseAfterFinalObservationIfNeeded(seat: PlayerID, view: PlayerView) async {
+        guard seat == observationPacingSeat,
+              let duration = animalCuePauseTracker.holdDuration(
+                after: view,
+                animationsEnabled: GameSettings.shared.animalAnimations)
+        else { return }
+
+        try? await Task.sleep(for: duration)
     }
 
     // MARK: - Agent assembly
@@ -479,6 +527,8 @@ final class NetSession: ObservableObject, RemoteSeatDelegate {
 
     private func handFinished(_ final: GameState) async {
         runTask = nil
+        observationPacingSeat = nil
+        animalCuePauseTracker.reset()
         // Carry the settled score into the next hand.
         carryScore = final.matchScore
         phase = .finished(matchWinner: final.matchWinner)

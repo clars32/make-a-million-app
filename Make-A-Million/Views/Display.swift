@@ -64,12 +64,16 @@ extension Card {
 extension DiscardAnnouncement {
     /// The announcement as it would be spoken at the table. Money cards are
     /// rendered as card faces next to this text, so they only get a lead-in
-    /// here. "No trump or money" is information too — everyone heard nothing.
+    /// here.
+    var hasPublicContent: Bool {
+        trumpCount > 0 || !moneyCards.isEmpty
+    }
+
     var summaryText: String {
         var parts: [String] = []
         if trumpCount > 0 { parts.append("\(trumpCount) trump") }
         if !moneyCards.isEmpty { parts.append("money:") }
-        guard !parts.isEmpty else { return "Discarded: no trump or money" }
+        guard !parts.isEmpty else { return "" }
         return "Discarded: " + parts.joined(separator: " · ")
     }
 }

@@ -6,8 +6,80 @@
 import SwiftUI
 
 struct HostLobbyView: View {
+    let playerName: String
+    let onExit: () -> Void
+
+    var body: some View {
+        HostLobbyCore(
+            playerName: playerName,
+            mode: .local,
+            onExit: onExit)
+    }
+}
+
+struct TabletopHostLobbyView: View {
+    let playerName: String
+    let onExit: () -> Void
+
+    var body: some View {
+        HostLobbyCore(
+            playerName: playerName,
+            mode: .tabletop,
+            onExit: onExit)
+    }
+}
+
+private struct HostLobbyCore: View {
+
+    enum Mode {
+        case local
+        case tabletop
+
+        var isTabletop: Bool {
+            if case .tabletop = self { return true }
+            return false
+        }
+
+        var title: String {
+            switch self {
+            case .local: return "Local table"
+            case .tabletop: return "Tabletop board"
+            }
+        }
+
+        var subtitle: String {
+            switch self {
+            case .local: return "Hosted by"
+            case .tabletop: return "Shared board hosted by"
+            }
+        }
+
+        var advertisingHint: String {
+            switch self {
+            case .local:
+                return "Visible to nearby devices - tell others to tap Join Local"
+            case .tabletop:
+                return "Visible to nearby devices - players should tap Join Local"
+            }
+        }
+
+        var startTitle: String {
+            switch self {
+            case .local: return "Start hand"
+            case .tabletop: return "Start tabletop"
+            }
+        }
+
+        var maxConnectedPeers: Int {
+            switch self {
+            case .local: return Seats.count - 1
+            case .tabletop: return Seats.count
+            }
+        }
+    }
 
     let playerName: String
+    let mode: Mode
     let onExit: () -> Void
 
     @StateObject private var multipeer: MultipeerHost
@@ -16,30 +88,34 @@ struct HostLobbyView: View {
 
     @State private var didStartHand: Bool = false
     @State private var dealSeed: UInt64 = .random(in: .min ... .max)
+    @State private var showingSettings = false
     @State private var bridgeToken: AnyObject? = nil
-    
-    // NEW: Tabletop Toggle
-    @State private var isTabletopMode: Bool = false
+    @State private var hostSeat: PlayerID?
     @State private var seatAssignments: [Int: AnyHashable] = [:]
 
-    /// seat → peerID for seats wired into the running hand. Unlike
+    /// seat -> peerID for seats wired into the running hand. Unlike
     /// seatAssignments (a lobby concern that's cleared when a peer drops),
     /// this survives a disconnect, so a returning peer can be matched back
     /// to its seat and rebound for reconnect.
     @State private var liveSeatPeers: [Int: AnyHashable] = [:]
 
-    init(playerName: String, onExit: @escaping () -> Void) {
+    init(playerName: String, mode: Mode, onExit: @escaping () -> Void) {
         self.playerName = playerName
+        self.mode = mode
         self.onExit = onExit
+        _hostSeat = State(initialValue: mode.isTabletop ? nil : PlayerID(0))
+
         let mp = MultipeerHost(displayName: playerName)
         _multipeer = StateObject(wrappedValue: mp)
+
         let gs = GameSession()
         _gameSession = StateObject(wrappedValue: gs)
-        
-        // Initialize with default Player role, we can change it later.
-        // Bot strength follows the player's Settings → Opponents choice.
+
+        let hostRole: NetSession.HostRole = mode.isTabletop
+            ? .tabletopSpectator
+            : .player(seat: PlayerID(0), human: gs.human, name: playerName)
         _netSession = StateObject(wrappedValue: NetSession(
-            hostRole: .player(seat: PlayerID(0), human: gs.human, name: playerName),
+            hostRole: hostRole,
             botDifficulty: GameSettings.shared.botDifficulty))
     }
 
@@ -48,39 +124,31 @@ struct HostLobbyView: View {
             background
 
             if didStartHand {
-                if isTabletopMode {
+                if mode.isTabletop {
                     TabletopGameView(
                         netSession: netSession,
                         gameSession: gameSession,
-                        onExit: {
-                            netSession.stop()
-                            multipeer.stop()
-                            onExit()
-                        })
+                        onExit: stopAndExit)
                 } else {
                     HostGameView(
                         netSession: netSession,
                         gameSession: gameSession,
                         human: gameSession.human,
-                        onExit: {
-                            netSession.stop()
-                            multipeer.stop()
-                            onExit()
-                        })
+                        onExit: stopAndExit)
                 }
             } else {
                 lobbyContent
             }
         }
         .onAppear {
-            multipeer.maxConnectedPeers = isTabletopMode ? Seats.count : Seats.count - 1
+            multipeer.maxConnectedPeers = mode.maxConnectedPeers
+            configureHostRole()
             multipeer.start()
+            maintainSeatAssignments()
         }
         .onDisappear { multipeer.stop() }
         .onChange(of: multipeer.connectedPeers) { old, new in
             if didStartHand {
-                // A seat's original peer reappearing — mid-hand or between
-                // hands — is a reconnect. Rebind it to its seat.
                 let oldIDs = Set(old.map { AnyHashable($0.id) })
                 for peer in new where !oldIDs.contains(AnyHashable(peer.id)) {
                     if let seatRaw = liveSeatPeers.first(
@@ -94,17 +162,6 @@ struct HostLobbyView: View {
                 maintainSeatAssignments()
             }
         }
-        .onChange(of: isTabletopMode) { _, isTabletop in
-            multipeer.maxConnectedPeers = isTabletop ? Seats.count : Seats.count - 1
-            // Update NetSession and clear assignments when mode changes
-            let newRole: NetSession.HostRole = isTabletop
-                ? .tabletopSpectator
-                : .player(seat: PlayerID(0), human: gameSession.human, name: playerName)
-            
-            netSession.setHostRole(newRole)
-            seatAssignments.removeAll()
-            maintainSeatAssignments()
-        }
     }
 
     private var background: some View {
@@ -114,15 +171,7 @@ struct HostLobbyView: View {
     private var lobbyContent: some View {
         VStack(alignment: .leading, spacing: 18) {
             header
-            
-            // The Toggle!
-            Picker("Host Mode", selection: $isTabletopMode) {
-                Text("Play (Seat 0)").tag(false)
-                Text("Tabletop Board").tag(true)
-            }
-            .pickerStyle(.segmented)
-            .padding(.bottom, 8)
-            
+            modeSummary
             advertisingStatus
             seatList
             Spacer()
@@ -131,18 +180,23 @@ struct HostLobbyView: View {
         .padding()
     }
 
-    // MARK: Header
     private var header: some View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
-                Text("Your table")
+                Text(mode.title)
                     .font(TableTypography.display(.title2, weight: .bold))
                     .foregroundStyle(.white)
-                Text("Hosted by \(playerName)")
+                Text("\(mode.subtitle) \(playerName)")
                     .font(TableTypography.display(.caption))
                     .foregroundStyle(.white.opacity(0.66))
             }
             Spacer()
+            Button { showingSettings = true } label: {
+                Image(systemName: "gearshape.fill")
+            }
+            .buttonStyle(.bordered)
+            .tint(TableStyle.cardSelected)
+            .accessibilityLabel("Settings")
             Button("Stop") {
                 multipeer.stop()
                 onExit()
@@ -150,6 +204,37 @@ struct HostLobbyView: View {
             .buttonStyle(.bordered)
             .tint(TableStyle.teamAmber)
         }
+        .sheet(isPresented: $showingSettings) {
+            // Pre-match: rules are editable here and apply to the first deal.
+            SettingsView(settings: .shared, rulesLocked: false) {
+                showingSettings = false
+            }
+        }
+    }
+
+    private var modeSummary: some View {
+        HStack(spacing: 12) {
+            Image(systemName: mode.isTabletop ? "rectangle.on.rectangle.angled" : "person.crop.circle.badge.checkmark")
+                .font(TableTypography.display(.title3))
+                .foregroundStyle(mode.isTabletop ? TableStyle.tableGold : TableStyle.cardSelected)
+                .frame(width: 38, height: 38)
+                .background(Circle().fill(Color.white.opacity(0.08)))
+                .overlay(Circle().stroke(Color.white.opacity(0.16), lineWidth: 1))
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(mode.isTabletop ? "Board-only host" : "You can choose your seat")
+                    .font(TableTypography.display(.headline, weight: .bold))
+                    .foregroundStyle(.white)
+                Text(mode.isTabletop
+                    ? "All four seats can be nearby players or bots."
+                    : "Tap any seat row to move yourself or assign connected players.")
+                    .font(TableTypography.display(.caption))
+                    .foregroundStyle(.white.opacity(0.66))
+            }
+            Spacer()
+        }
+        .padding(12)
+        .tablePanel(cornerRadius: 12, shadowOpacity: 0.14)
     }
 
     private var advertisingStatus: some View {
@@ -157,9 +242,7 @@ struct HostLobbyView: View {
             Circle()
                 .fill(multipeer.isAdvertising ? TableStyle.cardPlayable : TableStyle.passGray)
                 .frame(width: 8, height: 8)
-            Text(multipeer.isAdvertising
-                ? "Visible to nearby devices — tell others to tap “Join a Table”"
-                : "Not advertising")
+            Text(multipeer.isAdvertising ? mode.advertisingHint : "Not advertising")
                 .font(TableTypography.display(.caption))
                 .foregroundStyle(.white.opacity(0.68))
         }
@@ -167,42 +250,56 @@ struct HostLobbyView: View {
         .tablePanel(cornerRadius: 12, shadowOpacity: 0.14)
     }
 
-    // MARK: Seat list & Assignments
+    // MARK: Seat list & assignments
+
+    private func configureHostRole() {
+        if let hostSeat {
+            netSession.setHostRole(.player(seat: hostSeat, human: gameSession.human, name: playerName))
+        } else {
+            netSession.setHostRole(.tabletopSpectator)
+        }
+    }
+
     private func maintainSeatAssignments() {
         let connectedIDs = Set(multipeer.connectedPeers.map { AnyHashable($0.id) })
         for (seatRaw, peerID) in seatAssignments {
             if !connectedIDs.contains(peerID) { seatAssignments[seatRaw] = nil }
         }
-        
-        let assignedIDs = Set(seatAssignments.values)
-        // If tabletop, Seat 0 is open. Otherwise, seats 1-3.
-        let availableSeats = isTabletopMode ? [0, 1, 2, 3] : [1, 2, 3]
-        
+
+        if let hostSeat {
+            seatAssignments[hostSeat.raw] = nil
+        }
+
+        var assignedIDs = Set(seatAssignments.values)
         for peer in multipeer.connectedPeers {
-            if !assignedIDs.contains(AnyHashable(peer.id)) {
-                if let emptySeat = availableSeats.first(where: { seatAssignments[$0] == nil }) {
-                    seatAssignments[emptySeat] = AnyHashable(peer.id)
-                }
+            let peerID = AnyHashable(peer.id)
+            if !assignedIDs.contains(peerID),
+               let emptySeat = assignableSeats.first(where: { seatAssignments[$0.raw] == nil }) {
+                seatAssignments[emptySeat.raw] = peerID
+                assignedIDs.insert(peerID)
             }
+        }
+    }
+
+    private var assignableSeats: [PlayerID] {
+        Seats.all.filter { seat in
+            guard let hostSeat else { return true }
+            return seat != hostSeat
         }
     }
 
     private var seatList: some View {
         VStack(spacing: 8) {
-            // Loop 0-3 for tabletop, or 0-3 with 0 locked for player
             ForEach(Seats.all, id: \.raw) { seat in
                 seatRow(seat)
             }
         }
     }
 
-    @ViewBuilder
     private func seatRow(_ seat: PlayerID) -> some View {
-        let label = seatLabel(seat)
         let kind = seatKind(for: seat)
-        
         let rowContent = HStack(spacing: 12) {
-            Text(label)
+            Text(seatLabel(seat))
                 .font(TableTypography.display(.caption, weight: .bold))
                 .foregroundStyle(.white.opacity(0.60))
                 .frame(width: 48, alignment: .leading)
@@ -216,60 +313,93 @@ struct HostLobbyView: View {
         .padding(12)
         .tablePanel(cornerRadius: 12, shadowOpacity: 0.12)
         .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(kind.borderColor.opacity(0.46), lineWidth: 1))
-        
-        if !isTabletopMode && seat.raw == 0 {
-            rowContent // Locked to local host
-        } else {
-            Menu {
-                Button("Bot (Empty)") { seatAssignments[seat.raw] = nil }
-                if !multipeer.connectedPeers.isEmpty {
-                    Divider()
-                    Text("Connected Players")
-                    ForEach(multipeer.connectedPeers, id: \.id) { peer in
-                        let isAssignedHere = seatAssignments[seat.raw] == AnyHashable(peer.id)
-                        let isElsewhere = seatAssignments.values.contains(AnyHashable(peer.id)) && !isAssignedHere
-                        if !isAssignedHere {
-                            Button(peer.displayName + (isElsewhere ? " (Move here)" : "")) {
-                                for (s, pID) in seatAssignments { if pID == AnyHashable(peer.id) { seatAssignments[s] = nil } }
-                                seatAssignments[seat.raw] = AnyHashable(peer.id)
-                            }
+
+        return Menu {
+            seatMenuContent(for: seat, kind: kind)
+        } label: {
+            rowContent
+        }
+        .buttonStyle(.plain)
+    }
+
+    @ViewBuilder
+    private func seatMenuContent(for seat: PlayerID, kind: SeatKind) -> some View {
+        if !mode.isTabletop {
+            if hostSeat == seat {
+                Text("You are sitting here")
+            } else {
+                Button("Sit here") {
+                    moveHost(to: seat)
+                }
+            }
+        }
+
+        if hostSeat != seat {
+            Button("Bot (Empty)") {
+                seatAssignments[seat.raw] = nil
+                maintainSeatAssignments()
+            }
+
+            if !multipeer.connectedPeers.isEmpty {
+                Divider()
+                Text("Connected Players")
+                ForEach(multipeer.connectedPeers, id: \.id) { peer in
+                    let peerID = AnyHashable(peer.id)
+                    let isAssignedHere = seatAssignments[seat.raw] == peerID
+                    let isElsewhere = seatAssignments.values.contains(peerID) && !isAssignedHere
+                    if !isAssignedHere {
+                        Button(peer.displayName + (isElsewhere ? " (Move here)" : "")) {
+                            assign(peer: peer, to: seat)
                         }
                     }
                 }
-            } label: { rowContent }
-            .buttonStyle(.plain)
+            }
         }
     }
 
-    private enum SeatKind { case host, peer, empty
+    private enum SeatKind {
+        case host
+        case peer
+        case empty
+
         var borderColor: Color {
             switch self {
-            case .host: return TableStyle.cardSelected; case .peer: return TableStyle.cardPlayable; case .empty: return TableStyle.passGray
+            case .host: return TableStyle.cardSelected
+            case .peer: return TableStyle.cardPlayable
+            case .empty: return TableStyle.passGray
             }
         }
     }
 
     private func seatKind(for seat: PlayerID) -> SeatKind {
-        if !isTabletopMode && seat.raw == 0 { return .host }
+        if hostSeat == seat { return .host }
         if seatAssignments[seat.raw] != nil { return .peer }
         return .empty
     }
 
     private func seatContent(seat: PlayerID, kind: SeatKind) -> String {
         switch kind {
-        case .host: return "You — \(playerName)"
+        case .host:
+            return "You - \(playerName)"
         case .peer:
             guard let peerID = seatAssignments[seat.raw],
-                  let peer = multipeer.connectedPeers.first(where: { AnyHashable($0.id) == peerID }) else { return "Unknown" }
+                  let peer = multipeer.connectedPeers.first(where: { AnyHashable($0.id) == peerID }) else {
+                return "Unknown"
+            }
             return peer.displayName
-        case .empty: return "Empty — bot will fill"
+        case .empty:
+            return "Empty - bot will fill"
         }
     }
 
     @ViewBuilder
     private func seatIcon(kind: SeatKind) -> some View {
         let name: String = {
-            switch kind { case .host: return "person.fill"; case .peer: return "person.fill.checkmark"; case .empty: return "person.fill.questionmark" }
+            switch kind {
+            case .host: return "person.fill"
+            case .peer: return "person.fill.checkmark"
+            case .empty: return "person.fill.questionmark"
+            }
         }()
         Image(systemName: name)
             .font(TableTypography.display(.title3))
@@ -282,17 +412,45 @@ struct HostLobbyView: View {
     @ViewBuilder
     private func seatBadge(kind: SeatKind) -> some View {
         switch kind {
-        case .host: Text("HOST").font(TableTypography.display(.caption2, weight: .bold)).foregroundStyle(TableStyle.cardSelected)
-        case .peer: Text("JOINED").font(TableTypography.display(.caption2, weight: .bold)).foregroundStyle(TableStyle.cardPlayable)
-        case .empty: Text("BOT").font(TableTypography.display(.caption2, weight: .bold)).foregroundStyle(TableStyle.passGray)
+        case .host:
+            Text("HOST")
+                .font(TableTypography.display(.caption2, weight: .bold))
+                .foregroundStyle(TableStyle.cardSelected)
+        case .peer:
+            Text("JOINED")
+                .font(TableTypography.display(.caption2, weight: .bold))
+                .foregroundStyle(TableStyle.cardPlayable)
+        case .empty:
+            Text("BOT")
+                .font(TableTypography.display(.caption2, weight: .bold))
+                .foregroundStyle(TableStyle.passGray)
         }
     }
 
-    private func seatLabel(_ p: PlayerID) -> String { ["South", "West", "North", "East"][p.raw] }
+    private func seatLabel(_ p: PlayerID) -> String {
+        ["South", "West", "North", "East"][p.raw]
+    }
+
+    private func moveHost(to seat: PlayerID) {
+        guard hostSeat != seat else { return }
+        seatAssignments[seat.raw] = nil
+        hostSeat = seat
+        configureHostRole()
+        maintainSeatAssignments()
+    }
+
+    private func assign(peer: MultipeerHost.ConnectedPeer, to seat: PlayerID) {
+        let peerID = AnyHashable(peer.id)
+        for (seatRaw, assignedPeerID) in seatAssignments where assignedPeerID == peerID {
+            seatAssignments[seatRaw] = nil
+        }
+        seatAssignments[seat.raw] = peerID
+        maintainSeatAssignments()
+    }
 
     private var startButton: some View {
         Button { startHand() } label: {
-            Text("Start hand")
+            Text(mode.startTitle)
                 .font(TableTypography.display(.headline, weight: .bold))
                 .foregroundStyle(.white)
                 .frame(maxWidth: .infinity)
@@ -304,20 +462,26 @@ struct HostLobbyView: View {
     }
 
     private func startHand() {
-        let availableSeats = isTabletopMode ? [0, 1, 2, 3] : [1, 2, 3]
-        
-        for seatRaw in availableSeats {
-            let seat = PlayerID(seatRaw)
-            if let peerID = seatAssignments[seatRaw],
+        configureHostRole()
+
+        for seat in assignableSeats {
+            if let peerID = seatAssignments[seat.raw],
                let peer = multipeer.connectedPeers.first(where: { AnyHashable($0.id) == peerID }),
                let transport = multipeer.transport(for: peer.id) {
                 let remote = RemoteSeat(seat: seat, name: peer.displayName, transport: transport)
                 netSession.seat(seat, asRemote: remote, name: peer.displayName)
-                liveSeatPeers[seatRaw] = peerID
+                liveSeatPeers[seat.raw] = peerID
             }
         }
+
         bridgeToken = netSession.bindHostSession(gameSession)
         netSession.start(dealSeed: dealSeed)
         didStartHand = true
+    }
+
+    private func stopAndExit() {
+        netSession.stop()
+        multipeer.stop()
+        onExit()
     }
 }

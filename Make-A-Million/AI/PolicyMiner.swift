@@ -159,7 +159,8 @@ enum PolicyMiner {
                                                 legal: legal, handIndex: h,
                                                 seed: decisionSeed,
                                                 gapThreshold: gapThreshold,
-                                                teacher: teacher) {
+                                                teacher: teacher,
+                                                difficulty: difficulty) {
                             disagreements += 1
                             totalRegret += d.gap
                             var p = patterns[d.patternKey, default: Pattern(key: d.patternKey)]
@@ -208,8 +209,17 @@ enum PolicyMiner {
                                      handIndex: Int,
                                      seed: UInt64,
                                      gapThreshold: Int,
-                                     teacher config: Teacher) -> Disagreement? {
-        let studentMove = PlayoutPolicy.move(in: s, seat: seat)
+                                     teacher config: Teacher,
+                                     difficulty: MonteCarloAgent.Difficulty) -> Disagreement? {
+        // The student is the rollout policy AS SHIPPED for this difficulty —
+        // mining the bare defaults would re-flag patterns already fixed by a
+        // promoted rollout lever (e.g. rolloutTopPull).
+        let studentMove = PlayoutPolicy.move(in: s, seat: seat,
+                                             commandingPull: difficulty.rolloutCommandingPull,
+                                             specialEscape: difficulty.rolloutSpecialEscape,
+                                             topPull: difficulty.rolloutTopPull,
+                                             establishDuck: difficulty.rolloutEstablishDuck,
+                                             bankWin: difficulty.rolloutBankWin)
         guard legal.contains(studentMove) else { return nil }
 
         // Ensemble values per candidate. Rollout i uses the SAME perturbation
@@ -223,7 +233,8 @@ enum PolicyMiner {
                 let rolloutSeed = seed &+ UInt64(i) &* 0x9E37_79B9_7F4A_7C15
                 guard let v = rolloutValue(after: m, from: s, by: seat,
                                            rolloutSeed: rolloutSeed,
-                                           epsilonPct: config.epsilonPct) else { continue }
+                                           epsilonPct: config.epsilonPct,
+                                           difficulty: difficulty) else { continue }
                 vs.append(v)
             }
             if vs.count == config.ensembleSize { values[m] = vs }
@@ -276,16 +287,26 @@ enum PolicyMiner {
     }
 
     /// One ε-greedy perturbed rollout of the TRUE world under PlayoutPolicy
-    /// (shipped flags), scored as team net from `seat`'s perspective — the
-    /// same value MCTS averages per sampled world, minus the sampling. The
-    /// ε steps branch the trajectory so an ensemble of these explores
-    /// different futures instead of replaying one chaotic line N times.
+    /// (the difficulty's shipped rollout flags), scored as team net from
+    /// `seat`'s perspective — the same value MCTS averages per sampled
+    /// world, minus the sampling. The ε steps branch the trajectory so an
+    /// ensemble of these explores different futures instead of replaying one
+    /// chaotic line N times.
     private static func rolloutValue(after move: Move,
                                      from s: GameState,
                                      by seat: PlayerID,
                                      rolloutSeed: UInt64,
-                                     epsilonPct: Int) -> Int? {
+                                     epsilonPct: Int,
+                                     difficulty: MonteCarloAgent.Difficulty) -> Int? {
         guard var ns = try? s.applying(move, by: seat) else { return nil }
+        func policyMove(_ state: GameState, _ mover: PlayerID) -> Move {
+            PlayoutPolicy.move(in: state, seat: mover,
+                               commandingPull: difficulty.rolloutCommandingPull,
+                               specialEscape: difficulty.rolloutSpecialEscape,
+                               topPull: difficulty.rolloutTopPull,
+                               establishDuck: difficulty.rolloutEstablishDuck,
+                               bankWin: difficulty.rolloutBankWin)
+        }
         let rng = RNGBox(seed: rolloutSeed)
         var steps = 0
         while ns.phase != .handComplete && steps < 600 {
@@ -293,10 +314,10 @@ enum PolicyMiner {
             let mv: Move
             if rng.nextInt(upperBound: 100) < epsilonPct {
                 let legal = ns.legalMoves(for: mover)
-                mv = legal.isEmpty ? PlayoutPolicy.move(in: ns, seat: mover)
+                mv = legal.isEmpty ? policyMove(ns, mover)
                                    : legal[rng.nextInt(upperBound: legal.count)]
             } else {
-                mv = PlayoutPolicy.move(in: ns, seat: mover)
+                mv = policyMove(ns, mover)
             }
             guard let nx = try? ns.applying(mv, by: mover) else { return nil }
             ns = nx; steps += 1

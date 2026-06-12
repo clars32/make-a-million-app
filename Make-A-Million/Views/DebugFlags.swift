@@ -44,37 +44,80 @@ final class GameSettings: ObservableObject {
 
     static let shared = GameSettings()
 
+    // ── Card display ────────────────────────────────────────────────────
     /// Show every seat's dealt hand once the hand is over. Hidden info — off
     /// for honest play. Gates `HandRevealPanel`.
     @Published var revealAllCardsAfterHand: Bool { didSet { persist() } }
     /// Keep the full bid record visible after bidding ends, through the rest
-    /// of the hand. During bidding itself the panel always shows.
+    /// of the hand. During bidding itself the record always shows.
     @Published var showBidHistoryDuringHand: Bool { didSet { persist() } }
     /// Show the most recently completed trick during play.
     @Published var showLastTrick: Bool { didSet { persist() } }
     /// Allow seat chips to open the public tricks taken by that player.
     @Published var showFullTrickHistory: Bool { didSet { persist() } }
-    /// Whether the automatic low-money redeal rule is active.
-    @Published var misdealEnabled: Bool { didSet { persist() } }
-    /// Money-card total at or below which a hand triggers the redeal.
-    @Published var misdealThreshold: Int { didSet { persist() } }
-    /// Who wins when both teams finish at or over the million in one hand.
-    @Published var endgameTiebreak: EndgameTiebreak { didSet { persist() } }
-    /// Append a full-information trace of every completed hand to a file you
-    /// can export for AI review. Reveals hidden hands — debug/tuning only.
-    @Published var logHandsToFile: Bool { didSet { persist() } }
+    /// Show the revealed widow panel on this device's table.
+    @Published var showWidow: Bool { didSet { persist() } }
+    /// Show each team's running total for the hand in progress.
+    @Published var showLiveScores: Bool { didSet { persist() } }
+
+    // ── Audiovisual ─────────────────────────────────────────────────────
+    /// Tiger / Bull / Bear plays burst onto the table with an animation.
+    @Published var animalAnimations: Bool { didSet { persist() } }
+    /// Subtle table and interface sound effects.
+    @Published var soundEffectsEnabled: Bool { didSet { persist() } }
+    /// Larger animal cue audio, including the bull stampede music.
+    @Published var animalSoundsEnabled: Bool { didSet { persist() } }
+    /// Shared gain for all short sound effects and animal cues.
+    @Published var soundEffectsVolume: Double { didSet { persist() } }
+
+    // ── Difficulty ──────────────────────────────────────────────────────
     /// How hard the AI opponents play. Read fresh at the start of each hand,
     /// so a change applies on the next deal.
     @Published var aiDifficulty: MonteCarloAgent.Difficulty.Level { didSet { persist() } }
+
+    // ── Optional rules ──────────────────────────────────────────────────
+    /// Whether the low-money redeal rule is active.
+    @Published var misdealEnabled: Bool { didSet { persist() } }
+    /// Money-card total at or below which a hand triggers the redeal.
+    @Published var misdealThreshold: Int { didSet { persist() } }
+    /// When on, a flagged misdeal is redealt only if all four seats agree.
+    @Published var misdealByAgreement: Bool { didSet { persist() } }
+    /// "Set opening bid": the auction's first bid is pinned to $175,000.
+    @Published var openingBidFixed: Bool { didSet { persist() } }
+    /// "Widow reveal": when off, only the high bidder sees the widow.
+    @Published var widowPublic: Bool { didSet { persist() } }
+    /// "Trump not led until played": no trump leads before trump is broken.
+    @Published var trumpMustBeBroken: Bool { didSet { persist() } }
+    /// Who wins when both teams finish at or over the million in one hand.
+    @Published var endgameTiebreak: EndgameTiebreak { didSet { persist() } }
+
+    // ── Developer ───────────────────────────────────────────────────────
+    /// Unlocked by tapping the credits panel five times (Android style).
+    /// Gates the developer section: deal seed, AI debug log and options.
+    @Published var developerMode: Bool { didSet { persist() } }
+    /// Append a full-information trace of every completed hand to a file you
+    /// can export for AI review. Reveals hidden hands — debug/tuning only.
+    @Published var logHandsToFile: Bool { didSet { persist() } }
 
     private enum Key {
         static let revealAll      = "settings.revealAllCardsAfterHand"
         static let bidHistory     = "settings.showBidHistoryDuringHand"
         static let lastTrick      = "settings.showLastTrick"
         static let trickHistory   = "settings.showFullTrickHistory"
+        static let showWidow      = "settings.showWidow"
+        static let liveScores     = "settings.showLiveScores"
+        static let animalFX       = "settings.animalAnimations"
+        static let soundFX        = "settings.soundEffectsEnabled"
+        static let animalSounds   = "settings.animalSoundsEnabled"
+        static let soundVolume    = "settings.soundEffectsVolume"
         static let misdealEnabled = "settings.misdealEnabled"
         static let misdealAmount  = "settings.misdealThreshold"
+        static let misdealAgree   = "settings.misdealByAgreement"
+        static let openingFixed   = "settings.openingBidFixed"
+        static let widowPublic    = "settings.widowPublic"
+        static let trumpBroken    = "settings.trumpMustBeBroken"
         static let endgame        = "settings.endgameTiebreak"
+        static let developerMode  = "settings.developerMode"
         static let logHands       = "settings.logHandsToFile"
         static let aiDifficulty   = "settings.aiDifficulty"
     }
@@ -87,10 +130,21 @@ final class GameSettings: ObservableObject {
         showBidHistoryDuringHand = d.object(forKey: Key.bidHistory) as? Bool ?? false
         showLastTrick            = d.object(forKey: Key.lastTrick) as? Bool ?? true
         showFullTrickHistory     = d.object(forKey: Key.trickHistory) as? Bool ?? false
+        showWidow                = d.object(forKey: Key.showWidow) as? Bool ?? true
+        showLiveScores           = d.object(forKey: Key.liveScores) as? Bool ?? true
+        animalAnimations         = d.object(forKey: Key.animalFX) as? Bool ?? true
+        soundEffectsEnabled      = d.object(forKey: Key.soundFX) as? Bool ?? true
+        animalSoundsEnabled      = d.object(forKey: Key.animalSounds) as? Bool ?? true
+        soundEffectsVolume       = d.object(forKey: Key.soundVolume) as? Double ?? 0.72
         misdealEnabled           = d.object(forKey: Key.misdealEnabled) as? Bool ?? true
         misdealThreshold         = d.object(forKey: Key.misdealAmount) as? Int ?? 15_000
+        misdealByAgreement       = d.object(forKey: Key.misdealAgree) as? Bool ?? false
+        openingBidFixed          = d.object(forKey: Key.openingFixed) as? Bool ?? false
+        widowPublic              = d.object(forKey: Key.widowPublic) as? Bool ?? true
+        trumpMustBeBroken        = d.object(forKey: Key.trumpBroken) as? Bool ?? false
         endgameTiebreak = (d.string(forKey: Key.endgame)
             .flatMap(EndgameTiebreak.init(rawValue:))) ?? .standard
+        developerMode            = d.object(forKey: Key.developerMode) as? Bool ?? false
         logHandsToFile           = d.object(forKey: Key.logHands) as? Bool ?? false
         aiDifficulty = (d.string(forKey: Key.aiDifficulty)
             .flatMap(MonteCarloAgent.Difficulty.Level.init(rawValue:))) ?? .normal
@@ -102,21 +156,41 @@ final class GameSettings: ObservableObject {
         d.set(showBidHistoryDuringHand, forKey: Key.bidHistory)
         d.set(showLastTrick,            forKey: Key.lastTrick)
         d.set(showFullTrickHistory,     forKey: Key.trickHistory)
+        d.set(showWidow,                forKey: Key.showWidow)
+        d.set(showLiveScores,           forKey: Key.liveScores)
+        d.set(animalAnimations,         forKey: Key.animalFX)
+        d.set(soundEffectsEnabled,      forKey: Key.soundFX)
+        d.set(animalSoundsEnabled,      forKey: Key.animalSounds)
+        d.set(soundEffectsVolume,       forKey: Key.soundVolume)
         d.set(misdealEnabled,           forKey: Key.misdealEnabled)
         d.set(misdealThreshold,         forKey: Key.misdealAmount)
+        d.set(misdealByAgreement,       forKey: Key.misdealAgree)
+        d.set(openingBidFixed,          forKey: Key.openingFixed)
+        d.set(widowPublic,              forKey: Key.widowPublic)
+        d.set(trumpMustBeBroken,        forKey: Key.trumpBroken)
         d.set(endgameTiebreak.rawValue, forKey: Key.endgame)
+        d.set(developerMode,            forKey: Key.developerMode)
         d.set(logHandsToFile,           forKey: Key.logHands)
         d.set(aiDifficulty.rawValue,    forKey: Key.aiDifficulty)
     }
 
     /// The engine's misdeal configuration built from the current toggles.
     var misdealRule: MisdealRule {
-        misdealEnabled ? MisdealRule(enabled: true, threshold: misdealThreshold)
+        misdealEnabled ? MisdealRule(enabled: true,
+                                     threshold: misdealThreshold,
+                                     requiresAgreement: misdealByAgreement)
                        : .disabled
     }
 
     /// The engine's endgame tiebreak rule (1:1 with the stored choice).
     var endgameRule: EndgameTiebreak { endgameTiebreak }
+
+    /// The remaining optional rules bundled for the engine.
+    var houseRules: HouseRules {
+        HouseRules(openingBidIsFixed: openingBidFixed,
+                   widowIsPublic: widowPublic,
+                   trumpMustBeBroken: trumpMustBeBroken)
+    }
 
     /// The tuning profile the bots play with, from the selected strength tier.
     var botDifficulty: MonteCarloAgent.Difficulty { aiDifficulty.profile }
@@ -220,17 +294,27 @@ struct HandRevealPanel: View {
 /// The player-facing rules/display panel. Presented as a sheet; binds
 /// directly to the shared `GameSettings`, so toggles take effect the moment
 /// they change. Display toggles always apply to the current hand live. The
-/// RULE sections (misdeal, endgame) are frozen onto the `GameState` at deal
-/// time, so changing them mid-hand would do nothing surprising — to make that
-/// legible, `rulesLocked` disables them while a hand is actually being played.
-/// They stay editable from the home screen and between hands, applying to the
-/// next deal.
+/// RULE sections (difficulty, optional rules) are frozen onto the `GameState`
+/// at deal time, so changing them mid-hand would do nothing surprising — to
+/// make that legible, `rulesLocked` disables them while a hand is actually
+/// being played. They stay editable from the home screen and between hands,
+/// applying to the next deal.
 struct SettingsView: View {
+
+    /// What this device controls. A CLIENT only owns its own display — the
+    /// host's device owns difficulty and the rules of the table — so the
+    /// client sheet hides those sections instead of showing dead controls.
+    enum Scope {
+        case full
+        case clientDisplay
+    }
+
     @ObservedObject var settings: GameSettings
     /// True while a hand is in progress: rule controls are disabled, display
     /// controls remain live. The home-screen entry passes `false`.
     var rulesLocked: Bool = false
-    /// Optional solo match seed, shown only by the solo in-game settings sheet.
+    var scope: Scope = .full
+    /// Seed of the current hand, shown in the developer section when known.
     var dealSeed: UInt64? = nil
     let onClose: () -> Void
 
@@ -238,114 +322,23 @@ struct SettingsView: View {
     private let misdealRange = 0...50_000
     private let misdealStep = 1_000
 
+    /// Android-style developer unlock: tap the credits panel this many times.
+    private static let developerUnlockTaps = 5
+    @State private var creditsTapCount = 0
+    @State private var creditsFeedback: String? = nil
+
     var body: some View {
         NavigationStack {
             Form {
-                Section {
-                    Toggle("Reveal all hands after the hand",
-                           isOn: $settings.revealAllCardsAfterHand)
-                    Toggle("Show full bid history during the hand",
-                           isOn: $settings.showBidHistoryDuringHand)
-                    Toggle("Show the last trick during the hand",
-                           isOn: $settings.showLastTrick)
-                        .accessibilityIdentifier("settings.showLastTrickToggle")
-                    Toggle("Tap seats to show trick history",
-                           isOn: $settings.showFullTrickHistory)
-                } header: {
-                    Text("Display")
-                } footer: {
-                    Text("These change only what your table shows — they reveal no hidden information to the bots, and apply to the current hand immediately.")
+                cardDisplaySection
+                audiovisualSection
+                if scope == .full {
+                    difficultySection
+                    optionalRulesSection
                 }
-
-                Section {
-                    Picker("Difficulty", selection: $settings.aiDifficulty) {
-                        ForEach(MonteCarloAgent.Difficulty.Level.allCases) { level in
-                            Text(level.displayName).tag(level)
-                        }
-                    }
-                    .accessibilityIdentifier("settings.aiDifficultyPicker")
-                } header: {
-                    Text("Opponents")
-                } footer: {
-                    if rulesLocked {
-                        lockedHint
-                    } else {
-                        Text(settings.aiDifficulty.blurb)
-                    }
-                }
-                .disabled(rulesLocked)
-
-                if let dealSeed {
-                    Section {
-                        HStack {
-                            Text("Match seed")
-                            Spacer()
-                            Text(String(dealSeed))
-                                .font(.system(.footnote, design: .monospaced))
-                                .foregroundStyle(.secondary)
-                                .textSelection(.enabled)
-                        }
-                    } header: {
-                        Text("Solo")
-                    } footer: {
-                        Text("This seed identifies the current solo match and can be used to reproduce the deal sequence.")
-                    }
-                }
-
-                Section {
-                    Toggle("Misdeal rule", isOn: $settings.misdealEnabled)
-                        .accessibilityIdentifier("settings.misdealToggle")
-                    if settings.misdealEnabled {
-                        Stepper(value: $settings.misdealThreshold,
-                                in: misdealRange, step: misdealStep) {
-                            HStack {
-                                Text("Redeal at or below")
-                                Spacer()
-                                Text("$\(settings.misdealThreshold / 1000)k")
-                                    .foregroundStyle(.secondary)
-                                    .monospacedDigit()
-                            }
-                        }
-                    }
-                } header: {
-                    Text("Misdeal")
-                } footer: {
-                    if rulesLocked {
-                        lockedHint
-                    } else {
-                        Text("When on, a hand whose money-card total falls at or below the threshold is automatically redealt.")
-                    }
-                }
-                .disabled(rulesLocked)
-
-                Section {
-                    Picker("Both reach $1M", selection: $settings.endgameTiebreak) {
-                        Text("Bid winner wins").tag(EndgameTiebreak.bidder)
-                        Text("Highest score wins").tag(EndgameTiebreak.highestScore)
-                    }
-                } header: {
-                    Text("Endgame")
-                } footer: {
-                    if rulesLocked {
-                        lockedHint
-                    } else {
-                        Text("If both teams cross a million in the same hand, this decides the match.")
-                    }
-                }
-                .disabled(rulesLocked)
-
-                Section {
-                    Toggle("Log full hands to a file", isOn: $settings.logHandsToFile)
-                    if settings.logHandsToFile && HandLog.fileExists {
-                        ShareLink("Export hand log", item: HandLog.fileURL)
-                        Button("Clear hand log", role: .destructive) {
-                            HandLog.clear()
-                        }
-                    }
-                } header: {
-                    Text("AI debug log")
-                } footer: {
-                    Text("Writes a full-information trace of every completed hand — all four hands, the widow, every play, and the money flow — to a file you can share for AI review. Reveals hidden information; for tuning only.")
+                creditsSection
+                if settings.developerMode {
+                    developerSection
                 }
             }
             .navigationTitle("Settings")
@@ -358,6 +351,232 @@ struct SettingsView: View {
                 }
             }
             .tint(TableStyle.actionBlue)
+        }
+    }
+
+    // MARK: Card display
+
+    private var cardDisplaySection: some View {
+        Section {
+            Toggle("Reveal hands after the hand",
+                   isOn: $settings.revealAllCardsAfterHand)
+            Toggle("Show bid history",
+                   isOn: $settings.showBidHistoryDuringHand)
+            Toggle("Show the last trick",
+                   isOn: $settings.showLastTrick)
+                .accessibilityIdentifier("settings.showLastTrickToggle")
+            Toggle("Tap seats to show trick history",
+                   isOn: $settings.showFullTrickHistory)
+            Toggle("Show the widow",
+                   isOn: $settings.showWidow)
+            Toggle("Show live scores",
+                   isOn: $settings.showLiveScores)
+        } header: {
+            Text("Card display")
+        } footer: {
+            Text("These change only what your table shows — they reveal no hidden information to the bots, and apply to the current hand immediately. Revealing hands after the hand shows cards that stay hidden in honest play.")
+        }
+    }
+
+    // MARK: Audiovisual
+
+    private var audiovisualSection: some View {
+        Section {
+            Toggle("Animal animations", isOn: $settings.animalAnimations)
+            Toggle("Sound effects", isOn: $settings.soundEffectsEnabled)
+            Toggle("Animal sounds", isOn: $settings.animalSoundsEnabled)
+                .disabled(!settings.soundEffectsEnabled)
+            HStack {
+                Text("Volume")
+                Slider(value: $settings.soundEffectsVolume, in: 0...1)
+                Text("\(Int((settings.soundEffectsVolume * 100).rounded()))%")
+                    .font(TableTypography.display(.caption))
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+                    .frame(width: 44, alignment: .trailing)
+            }
+            .disabled(!settings.soundEffectsEnabled)
+        } header: {
+            Text("Audiovisual")
+        } footer: {
+            Text("Animal animations control the table visuals. Sound effects cover card-table feedback, button selections, and animal cue audio.")
+        }
+    }
+
+    // MARK: Difficulty (slider over the strength tiers)
+
+    private var difficultyBinding: Binding<Double> {
+        Binding(
+            get: {
+                let levels = MonteCarloAgent.Difficulty.Level.allCases
+                return Double(levels.firstIndex(of: settings.aiDifficulty) ?? 1)
+            },
+            set: {
+                let levels = MonteCarloAgent.Difficulty.Level.allCases
+                let idx = min(max(Int($0.rounded()), 0), levels.count - 1)
+                settings.aiDifficulty = levels[idx]
+            })
+    }
+
+    private var difficultySection: some View {
+        let levels = MonteCarloAgent.Difficulty.Level.allCases
+        return Section {
+            VStack(spacing: 6) {
+                Slider(value: difficultyBinding,
+                       in: 0...Double(levels.count - 1),
+                       step: 1)
+                    .accessibilityIdentifier("settings.aiDifficultySlider")
+                    .accessibilityLabel("Opponent difficulty")
+                    .accessibilityValue(settings.aiDifficulty.displayName)
+                HStack {
+                    ForEach(levels) { level in
+                        Text(level.displayName)
+                            .font(.caption2)
+                            .fontWeight(level == settings.aiDifficulty ? .bold : .regular)
+                            .foregroundStyle(level == settings.aiDifficulty
+                                             ? AnyShapeStyle(TableStyle.actionBlue)
+                                             : AnyShapeStyle(.secondary))
+                            .frame(maxWidth: .infinity,
+                                   alignment: alignment(for: level, in: levels))
+                    }
+                }
+            }
+        } header: {
+            Text("Difficulty")
+        } footer: {
+            if rulesLocked {
+                lockedHint
+            } else {
+                Text(settings.aiDifficulty.blurb)
+            }
+        }
+        .disabled(rulesLocked)
+    }
+
+    private func alignment(for level: MonteCarloAgent.Difficulty.Level,
+                           in levels: [MonteCarloAgent.Difficulty.Level]) -> Alignment {
+        if level == levels.first { return .leading }
+        if level == levels.last { return .trailing }
+        return .center
+    }
+
+    // MARK: Optional rules (mirrors the rules document's optional section)
+
+    private var optionalRulesSection: some View {
+        Section {
+            Toggle("Misdeal rule", isOn: $settings.misdealEnabled)
+                .accessibilityIdentifier("settings.misdealToggle")
+            if settings.misdealEnabled {
+                Picker("Redeal", selection: $settings.misdealByAgreement) {
+                    Text("Automatic").tag(false)
+                    Text("By table agreement").tag(true)
+                }
+                Stepper(value: $settings.misdealThreshold,
+                        in: misdealRange, step: misdealStep) {
+                    HStack {
+                        Text("Redeal at or below")
+                        Spacer()
+                        Text("$\(settings.misdealThreshold / 1000)k")
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                    }
+                }
+            }
+            Toggle("Widow visible to everyone", isOn: $settings.widowPublic)
+            Toggle("Trump can't lead until broken", isOn: $settings.trumpMustBeBroken)
+            Toggle("Opening bid fixed at $175k", isOn: $settings.openingBidFixed)
+            Picker("Both reach $1M", selection: $settings.endgameTiebreak) {
+                Text("Bid winner wins").tag(EndgameTiebreak.bidder)
+                Text("Highest score wins").tag(EndgameTiebreak.highestScore)
+            }
+        } header: {
+            Text("Optional rules")
+        } footer: {
+            if rulesLocked {
+                lockedHint
+            } else {
+                Text("House variations from the rule book. A misdeal redeals a hand short on money — automatically, or only when all four players agree. Turning off the widow reveal keeps it private to the high bidder. Changes apply from the next deal.")
+            }
+        }
+        .disabled(rulesLocked)
+    }
+
+    // MARK: Credits + Android-style developer unlock
+
+    private var creditsSection: some View {
+        Section {
+            Button(action: handleCreditsTap) {
+                VStack(spacing: 4) {
+                    Text("Built with ❤️ by Chance and Carter Larsen")
+                        .font(TableTypography.display(.subheadline, weight: .semibold))
+                        .frame(maxWidth: .infinity)
+                        .multilineTextAlignment(.center)
+                    if let creditsFeedback {
+                        Text(creditsFeedback)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity)
+                            .multilineTextAlignment(.center)
+                    }
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("settings.creditsPanel")
+        }
+    }
+
+    private func handleCreditsTap() {
+        guard !settings.developerMode else {
+            creditsFeedback = "Developer options are already on."
+            return
+        }
+        creditsTapCount += 1
+        let remaining = Self.developerUnlockTaps - creditsTapCount
+        if remaining <= 0 {
+            settings.developerMode = true
+            creditsFeedback = "You are now a developer!"
+        } else if creditsTapCount >= 3 {
+            creditsFeedback = remaining == 1
+                ? "1 tap away from developer options…"
+                : "\(remaining) taps away from developer options…"
+        }
+    }
+
+    // MARK: Developer options (hidden until unlocked)
+
+    private var developerSection: some View {
+        Section {
+            HStack {
+                Text("Current deal seed")
+                Spacer()
+                Text(dealSeed.map(String.init) ?? "—")
+                    .font(.system(.footnote, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+            }
+            if scope == .full {
+                Toggle("Log full hands to a file", isOn: $settings.logHandsToFile)
+                if settings.logHandsToFile && HandLog.fileExists {
+                    ShareLink("Export hand log", item: HandLog.fileURL)
+                    Button("Clear hand log", role: .destructive) {
+                        HandLog.clear()
+                    }
+                }
+            }
+            Button("Hide developer options") {
+                settings.developerMode = false
+                creditsTapCount = 0
+                creditsFeedback = nil
+            }
+        } header: {
+            Text("Developer")
+        } footer: {
+            if scope == .full {
+                Text("The seed reproduces the current deal. The AI debug log writes a full-information trace of every completed hand — all four hands, the widow, every play, and the money flow — to a file you can share for AI review. Reveals hidden information; for tuning only.")
+            } else {
+                Text("The seed and AI debug log live on the device hosting the game.")
+            }
         }
     }
 

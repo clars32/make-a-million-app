@@ -89,9 +89,11 @@ struct HostGameView: View {
             }
         }
         .sheet(isPresented: $showingSettings) {
-            // Rules lock while a hand is being played; display toggles stay live.
+            // Rules lock while a hand is being played (paused included);
+            // display toggles stay live.
             SettingsView(settings: .shared,
-                         rulesLocked: netSession.phase == .running) {
+                         rulesLocked: netSession.phase.isMidHand,
+                         dealSeed: netSession.currentHandSeed) {
                 showingSettings = false
             }
         }

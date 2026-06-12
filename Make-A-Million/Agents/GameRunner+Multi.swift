@@ -48,6 +48,7 @@ extension GameRunner {
                   carryScore: [Int: Int] = [0: 0, 1: 0],
                   misdealRule: MisdealRule = .standard,
                   endgameRule: EndgameTiebreak = .standard,
+                  houseRules: HouseRules = .standard,
                   spectators: [PlayerID],
                   onSeatView: (@Sendable (PlayerID, PlayerView) async -> Void)?)
     async throws -> GameState {
@@ -56,7 +57,8 @@ extension GameRunner {
                                       seed: dealSeed,
                                       carryScore: carryScore,
                                       misdealRule: misdealRule,
-                                      endgameRule: endgameRule)
+                                      endgameRule: endgameRule,
+                                      houseRules: houseRules)
         
         // Initial deal frame — one per spectator.
         if let sink = onSeatView {
@@ -73,7 +75,8 @@ extension GameRunner {
             // Auto-misdeal: hold the notice visible, then apply the forced
             // redeal. All spectators see the misdeal frame and the post-
             // redeal frame, exactly as if it were any other transition.
-            if state.phase == .misdealDecision {
+            // (Agreement-mode misdeals are normal decisions — fall through.)
+            if state.phase == .misdealDecision && !state.misdealRule.requiresAgreement {
                 try? await Task.sleep(for: .milliseconds(2200))
                 state = try state.applying(.callMisdeal, by: state.toAct)
                 if let sink = onSeatView {

@@ -32,6 +32,10 @@ nonisolated struct MisdealRule: Codable, Hashable {
     var enabled: Bool
     /// A hand is "short" when its money-card total is <= this value.
     var threshold: Int
+    /// Optional-rule variant ("redeal upon agreement"): instead of redealing
+    /// automatically, every seat is asked in turn order and the hand is
+    /// redealt only if all four agree. The first decline keeps the hand.
+    var requiresAgreement: Bool = false
 
     /// House default: redeal at $15,000 or below.
     static let standard = MisdealRule(enabled: true, threshold: 15_000)
@@ -52,6 +56,29 @@ nonisolated enum EndgameTiebreak: String, Codable, Hashable, CaseIterable {
 
     /// House default: the bidding team wins a double-over-the-million finish.
     static let standard = EndgameTiebreak.bidder
+}
+
+// MARK: - Optional house rules
+
+/// The remaining optional rules from the rules document, bundled so they
+/// thread through deal/runner/session call sites as one value. Carried on
+/// `GameState` (like `misdealRule`) so a redeal preserves them, and projected
+/// onto `PlayerView` so AI rollouts reconstruct worlds under the SAME rules
+/// the table is playing — `Determinizer.rebuild` copies this verbatim.
+nonisolated struct HouseRules: Codable, Hashable {
+    /// "Set opening bid": the auction's FIRST bid must be exactly the
+    /// $175,000 opening minimum. Raises are unaffected.
+    var openingBidIsFixed: Bool = false
+    /// "Widow reveal": when false the revealed widow is private information,
+    /// seen only by the high bidder (the discard announcement stays public).
+    var widowIsPublic: Bool = true
+    /// "Trump not led until played": trump (Tiger included) may not be LED
+    /// until trump has been played to an earlier trick — unless the hand
+    /// holds nothing else leadable.
+    var trumpMustBeBroken: Bool = false
+
+    /// Book rules: free opening bid, public widow, trump leads anytime.
+    static let standard = HouseRules()
 }
 
 // MARK: - A trick in progress / completed
@@ -134,6 +161,13 @@ nonisolated struct GameState: Codable {
     /// Stored alongside `misdealRule` so it carries through redeals and is
     /// available to `matchWinner` without threading it separately.
     let endgameRule: EndgameTiebreak
+    /// The remaining optional rules (opening bid, widow privacy, trump
+    /// leads). Defaulted so the memberwise initializer's existing call sites
+    /// (AIWorld.rebuild, arena instruments, test fixtures) stay valid.
+    private(set) var houseRules: HouseRules = .standard
+    /// Agreement-mode misdeal only: seats that have agreed to the redeal so
+    /// far. Empty in automatic mode and outside `.misdealDecision`.
+    private(set) var misdealVotes: Set<PlayerID> = []
 
     // Trick play
     private(set) var currentTrick: Trick?
@@ -157,7 +191,8 @@ nonisolated struct GameState: Codable {
                         seed: UInt64,
                         carryScore: [Int: Int] = [0: 0, 1: 0],
                         misdealRule: MisdealRule = .standard,
-                        endgameRule: EndgameTiebreak = .standard) -> GameState {
+                        endgameRule: EndgameTiebreak = .standard,
+                        houseRules: HouseRules = .standard) -> GameState {
         var rng = SeededRNG(seed: seed)
         var deck = Deck.full
         // Fisher–Yates with the seeded RNG.
@@ -176,15 +211,16 @@ nonisolated struct GameState: Codable {
 
         // Auto-misdeal: if the rule is on and any seat is at/below the
         // threshold in money cards, start the hand in `.misdealDecision`
-        // instead of `.bidding`. The runner shows a brief notice and
-        // immediately redeals — no vote, no human tap. `toAct` is the
-        // dealer as a neutral placeholder; the forced move doesn't read it
-        // beyond identity.
+        // instead of `.bidding`. In automatic mode the runner shows a brief
+        // notice and immediately redeals — no vote, no human tap; `toAct` is
+        // the dealer as a neutral placeholder. In agreement mode every seat
+        // votes in turn starting with the opener, so `toAct` is the opener
+        // and the runner consults agents like any other decision.
         let anyShort = misdealRule.enabled && hands.values.contains { hand in
             hand.reduce(0) { $0 + $1.moneyValue } <= misdealRule.threshold
         }
         let initialPhase: Phase = anyShort ? .misdealDecision : .bidding
-        let initialToAct: PlayerID = anyShort ? dealer : opener
+        let initialToAct: PlayerID = (anyShort && !misdealRule.requiresAgreement) ? dealer : opener
 
         return GameState(
             dealSeed: seed,
@@ -201,6 +237,8 @@ nonisolated struct GameState: Codable {
             discardAnnouncement: nil,
             misdealRule: misdealRule,
             endgameRule: endgameRule,
+            houseRules: houseRules,
+            misdealVotes: [],
             currentTrick: nil,
             completedTricks: [],
             capturedByTeam: [0: [], 1: []],
@@ -245,21 +283,31 @@ extension GameState {
             var moves: [Move] = openerMustOpen ? [] : [.bid(.pass)]
             // Opening bid is exactly the minimum; raises step by the
             // increment above the standing high bid. A finite ladder up to
-            // the max a hand can be worth keeps AI branching finite.
+            // the max a hand can be worth keeps AI branching finite. Under
+            // the "set opening bid" house rule the FIRST bid is pinned to
+            // the minimum, so the opening ladder collapses to one rung.
             var amount = (highBid == nil)
                 ? Bidding.openingMinimum
                 : highBid! + Bidding.raiseIncrement
-            while amount <= 400_000 {
+            let ceiling = (highBid == nil && houseRules.openingBidIsFixed)
+                ? Bidding.openingMinimum
+                : 400_000
+            while amount <= ceiling {
                 moves.append(.bid(.bid(amount)))
                 amount += Bidding.bidIncrement
             }
             return moves
 
         case .misdealDecision:
-               // Auto-trigger rule: the only legal move is the forced redeal.
-               // The runner applies this without consulting an agent; this entry
+               // Automatic rule: the only legal move is the forced redeal —
+               // the runner applies it without consulting an agent; this entry
                // exists so the move is "legal" through the normal apply path.
-               return [.callMisdeal]
+               // Agreement rule: each seat in turn agrees (redeal) or
+               // declines (keep the hand). Agreement first so bots that take
+               // `legalMoves[0]` claim the redeal, matching table convention.
+               return misdealRule.requiresAgreement
+                   ? [.callMisdeal, .declineMisdeal]
+                   : [.callMisdeal]
 
         case .widowDiscard:
             // Any 3-card discard that obeys the Money / special restrictions.
@@ -305,12 +353,36 @@ extension GameState {
                 case .tiger, .colored: return true
                 }
             }
+            // Optional rule: trump (Tiger included) may not be led until
+            // trump has been played to an earlier trick. Same escape hatch
+            // shape as Bull/Bear — a hand with nothing BUT trump may lead it.
+            if houseRules.trumpMustBeBroken, !trumpHasBeenBroken {
+                let nonTrump = leadable.filter {
+                    $0.effectiveColor(trump: trump) != trump
+                }
+                if !nonTrump.isEmpty { return nonTrump }
+            }
             return leadable.isEmpty ? hand : leadable
         }
 
         // Following. Determine the led color.
         guard let trick = currentTrick,
               let led = trick.ledColor(trump: trump) else { return hand }
+        return followableCards(from: hand, led: led, trump: trump)
+    }
+
+    /// True once any trump-effective card (Tiger included) has been played
+    /// to a completed trick. Only consulted when LEADING, so the in-progress
+    /// trick (always empty at that point) needn't be scanned.
+    private var trumpHasBeenBroken: Bool {
+        guard let trump else { return false }
+        return completedTricks.contains { trick in
+            trick.plays.contains { $0.card.effectiveColor(trump: trump) == trump }
+        }
+    }
+
+    private func followableCards(from hand: [Card], led: CardColor,
+                                 trump: CardColor) -> [Card] {
 
         let canFollow = hand.contains { $0.effectiveColor(trump: trump) == led }
 
@@ -397,9 +469,20 @@ extension GameState {
             try s.applyBid(action, by: player)
             return s
 
-            // MARK: Misdeal — automatic redeal
+            // MARK: Misdeal — automatic redeal, or one seat's "agree" vote
             case (.misdealDecision, .callMisdeal):
-                // Same dealer, fresh seed, same rule (so a future settings
+                // Agreement mode: record this seat's vote. The redeal only
+                // happens once all four have agreed; until then the decision
+                // passes clockwise to the next seat that hasn't voted.
+                if s.misdealRule.requiresAgreement,
+                   s.misdealVotes.union([player]).count < Seats.count {
+                    s.misdealVotes.insert(player)
+                    var n = Seats.next(player)
+                    while s.misdealVotes.contains(n) { n = Seats.next(n) }
+                    s.toAct = n
+                    return s
+                }
+                // Same dealer, fresh seed, same rules (so a future settings
                 // change persists for the whole match, not just one deal).
                 // SEED STRIDE: must NOT be a small step. The session and the
                 // match runner schedule hand seeds as `base &+ handIndex`, so
@@ -414,7 +497,20 @@ extension GameState {
                                          seed: s.dealSeed &+ 0x9E37_79B9_7F4A_7C15,
                                          carryScore: s.matchScore,
                                          misdealRule: s.misdealRule,
-                                         endgameRule: s.endgameRule)
+                                         endgameRule: s.endgameRule,
+                                         houseRules: s.houseRules)
+
+            // MARK: Misdeal — one seat declines the redeal (agreement mode).
+            // A single decline keeps the hand: votes clear and bidding opens
+            // exactly as if the deal had never been short.
+            case (.misdealDecision, .declineMisdeal):
+                guard s.misdealRule.requiresAgreement else {
+                    throw MoveError.wrongPhase
+                }
+                s.misdealVotes = []
+                s.phase = .bidding
+                s.toAct = Seats.next(s.dealer)
+                return s
 
         // MARK: Widow discard
         case (.widowDiscard, .discardWidow(let cards)):
@@ -472,9 +568,11 @@ extension GameState {
             if highBid == nil {
                 // Opening bid: at least the opening minimum, on the raise grid
                 // *relative to that minimum*. $175,000 itself is legal even
-                // though it is not a multiple of $10,000.
+                // though it is not a multiple of $10,000. The "set opening
+                // bid" house rule pins the first bid to exactly the minimum.
                 guard amount >= Bidding.openingMinimum,
-                      (amount - Bidding.openingMinimum) % Bidding.bidIncrement == 0
+                      (amount - Bidding.openingMinimum) % Bidding.bidIncrement == 0,
+                      !houseRules.openingBidIsFixed || amount == Bidding.openingMinimum
                 else { throw MoveError.illegalBid }
             } else {
                 // A raise: at least one increment above the standing high bid.
@@ -682,6 +780,11 @@ nonisolated struct PlayerView: Codable {
     /// Public announcement of the high bidder's discard: trump count spoken
     /// aloud, money cards shown face-up. nil until the discard happens.
     let discardAnnouncement: DiscardAnnouncement?
+    /// The optional rules this hand is being played under. House rules are
+    /// public at a real table; the AI also needs them so rollouts reconstruct
+    /// worlds with the same legality (e.g. trump-must-be-broken leads).
+    /// Defaulted so hand-built views in tests/previews stay valid.
+    var houseRules: HouseRules = .standard
     let currentTrick: Trick?
     let completedTrickCount: Int
     /// Full public trick history, oldest first. Empty until the first trick
@@ -724,6 +827,7 @@ nonisolated struct PlayerView: Codable {
                 bidHistory: bidHistory,
                 widow: widow,
                 discardAnnouncement: discardAnnouncement,
+                houseRules: houseRules,
                 currentTrick: Trick(leader: leader, plays: plays),
                 completedTrickCount: completedTrickCount,
                 completedTricks: completedTricks,
@@ -759,6 +863,7 @@ nonisolated struct PlayerView: Codable {
             bidHistory: bidHistory,
             widow: widow,
             discardAnnouncement: discardAnnouncement,
+            houseRules: houseRules,
             currentTrick: Trick(leader: trick.leader, plays: plays),
             completedTrickCount: completedTrickCount,
             completedTricks: completedTricks,
@@ -784,9 +889,12 @@ extension GameState {
                 winner: w,
                 value: GameState.trickValue(tr))
         }
+        // Optional "widow reveal" rule: when the widow is private, only the
+        // high bidder (who physically holds it) ever sees it in their view.
+        let widowVisibleToPlayer = houseRules.widowIsPublic || player == highBidder
         let publicWidow: [Card]? = switch phase {
         case .widowDiscard, .namingTrump, .trickPlay, .handComplete:
-            dealtWidow.isEmpty ? nil : dealtWidow
+            (dealtWidow.isEmpty || !widowVisibleToPlayer) ? nil : dealtWidow
         default:
             nil
         }
@@ -804,6 +912,7 @@ extension GameState {
             bidHistory: bidHistory,
             widow: publicWidow,
             discardAnnouncement: discardAnnouncement,
+            houseRules: houseRules,
             currentTrick: currentTrick,
             completedTrickCount: completedTricks.count,
             completedTricks: history,

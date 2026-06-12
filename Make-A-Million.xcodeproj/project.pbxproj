@@ -39,7 +39,6 @@
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				Info.plist,
-				"Make-A-Million.entitlements",
 			);
 			target = 4367CAF12FBBBFE10005A97E /* Make-A-Million */;
 		};

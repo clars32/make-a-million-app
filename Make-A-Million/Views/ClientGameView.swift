@@ -24,6 +24,7 @@ struct ClientGameView: View {
     @State private var lastView: PlayerView? = nil
     @State private var discardSelection: Set<Card> = []
     @State private var selectedBidIndex: Int = 0
+    @State private var showingSettings = false
     @Namespace private var cardNS
 
     // Card sizing for a phone held in landscape.
@@ -87,6 +88,14 @@ struct ClientGameView: View {
             DispatchQueue.main.async {
                 discardSelection = []
                 if session.pending?.phase == .bidding { selectedBidIndex = 0 }
+            }
+        }
+        .sheet(isPresented: $showingSettings) {
+            // A client only owns its own display — difficulty and the table
+            // rules live on the host device, so those sections are hidden.
+            SettingsView(settings: .shared,
+                         scope: .clientDisplay) {
+                showingSettings = false
             }
         }
     }
@@ -175,7 +184,10 @@ struct ClientGameView: View {
                 }
                 .buttonStyle(.plain)
             } else if selectable {
-                Button { toggleDiscard(card) } label: {
+                Button {
+                    SoundEffectPlayer.shared.play(.buttonSelect)
+                    toggleDiscard(card)
+                } label: {
                     CardFace(card: card, selected: selected, highlighted: true,
                              width: cardW, height: cardH, dense: total > 12)
                 }
@@ -193,10 +205,32 @@ struct ClientGameView: View {
     @ViewBuilder
     private func actionBar(_ view: PlayerView) -> some View {
         switch view.phase {
-        case .bidding:      biddingBar(view)
-        case .namingTrump:  trumpBar(view)
-        case .widowDiscard: discardBar(view)
-        default:            EmptyView()
+        case .bidding:         biddingBar(view)
+        case .namingTrump:     trumpBar(view)
+        case .widowDiscard:    discardBar(view)
+        case .misdealDecision: misdealBar(view)
+        default:               EmptyView()
+        }
+    }
+
+    /// Agreement-mode misdeal vote (automatic misdeals never reach a client
+    /// as a decision — the host applies those without asking anyone).
+    @ViewBuilder
+    private func misdealBar(_ view: PlayerView) -> some View {
+        if view.legalMoves.contains(.declineMisdeal) {
+            HStack(spacing: 12) {
+                Text("Misdeal called — redeal?")
+                    .font(TableTypography.display(.subheadline, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.9))
+                actionButton("Redeal", tint: TableStyle.actionBlue) {
+                    session.submit(.callMisdeal)
+                }
+                actionButton("Keep hand", tint: TableStyle.passGray.opacity(0.82)) {
+                    session.submit(.declineMisdeal)
+                }
+            }
+            .barChrome()
+            .transition(.move(edge: .bottom).combined(with: .opacity))
         }
     }
 
@@ -247,7 +281,10 @@ struct ClientGameView: View {
             Text("Trump:").font(TableTypography.display(.subheadline, weight: .semibold)).foregroundStyle(.white.opacity(0.9))
             ForEach(trumpMoves, id: \.0) { color, move in
                 let swatch = TableStyle.suitSwatch(color)
-                Button { session.submit(move) } label: {
+                Button {
+                    SoundEffectPlayer.shared.play(.buttonSelect)
+                    session.submit(move)
+                } label: {
                     HStack(spacing: 6) {
                         Circle().fill(swatch).frame(width: 16, height: 16)
                             .overlay(Circle().stroke(.white.opacity(0.8), lineWidth: 1))
@@ -275,7 +312,10 @@ struct ClientGameView: View {
                 .font(TableTypography.money(.subheadline))
                 .foregroundStyle(.white)
             actionButton("Discard", tint: move == nil ? TableStyle.passGray.opacity(0.82) : TableStyle.actionBlue) {
-                if let move { session.submit(move); discardSelection = [] }
+                if let move {
+                    session.submit(move)
+                    discardSelection = []
+                }
             }
             .disabled(move == nil)
             .opacity(move == nil ? 0.5 : 1)
@@ -285,7 +325,10 @@ struct ClientGameView: View {
     }
 
     private func actionButton(_ title: String, tint: Color, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
+        Button {
+            SoundEffectPlayer.shared.play(.buttonSelect)
+            action()
+        } label: {
             Text(title)
                 .font(TableTypography.display(.subheadline, weight: .bold))
                 .foregroundStyle(.white)
@@ -307,6 +350,19 @@ struct ClientGameView: View {
             HStack {
                 Spacer()
                 Button {
+                    SoundEffectPlayer.shared.play(.buttonSelect)
+                    showingSettings = true
+                } label: {
+                    Image(systemName: "gearshape.fill")
+                        .font(TableTypography.display(.subheadline, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.85))
+                        .padding(8)
+                        .background(.ultraThinMaterial, in: Circle())
+                        .overlay(Circle().stroke(TableStyle.panelStroke, lineWidth: 1))
+                }
+                .accessibilityLabel("Settings")
+                Button {
+                    SoundEffectPlayer.shared.play(.buttonSelect)
                     session.stop()
                     onExit()
                 } label: {
@@ -348,7 +404,11 @@ struct ClientGameView: View {
             Image(systemName: "wifi.slash").font(.system(size: 44)).foregroundStyle(TableStyle.teamAmber)
             Text("Disconnected").font(TableTypography.display(.title3, weight: .bold)).foregroundStyle(.white)
             Text("Lost connection to the host.").foregroundStyle(.white.opacity(0.68))
-            Button("Back to menu") { session.stop(); onExit() }
+            Button("Back to menu") {
+                SoundEffectPlayer.shared.play(.buttonSelect)
+                session.stop()
+                onExit()
+            }
                 .buttonStyle(.borderedProminent)
                 .tint(TableStyle.actionBlue)
                 .padding(.top, 6)

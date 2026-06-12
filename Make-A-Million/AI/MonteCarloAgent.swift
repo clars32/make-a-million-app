@@ -148,15 +148,58 @@ struct MonteCarloAgent: PlayerAgent {
         /// more trick lands the Bull on partner's money. Lever + golden tests
         /// kept for a refined version.
         var rolloutSpecialEscape: Bool = false
+        /// ROLLOUT-policy improvement (PolicyMiner, June 2026 — the #1 mined
+        /// disagreement pattern, stable across both teacher configs): the
+        /// rollout declarer pulls trump from the TOP (Tiger included)
+        /// instead of leading its LOWEST trump, and with no commanding trump
+        /// skips the pull rather than donating the round. The low-pull loop
+        /// was the largest source of student-vs-teacher regret (mined
+        /// exemplars: monster declarer hands rolling out to −$500k).
+        ///
+        /// MEASURED (June 2026, paired vs same-seed control, baseSeed 1):
+        /// 60 matches control 52% → treatment 58%; CONFIRMED at 100 matches
+        /// control 49% → treatment 59% (+10pp, set-rate 28%/28%) — the
+        /// largest validated gain since the widow-lock, and the first from
+        /// mined evidence rather than intuition (contrast `commandingPull`,
+        /// which flattened at N=100). PROMOTED to all tiers: sharper
+        /// rollouts lift every consumer of PlayoutPolicy. Kept as a field
+        /// so it stays A/B-able (turn it off on one side).
+        var rolloutTopPull: Bool = true
         /// A/B-gated ROLLOUT-policy improvement (PolicyMiner, June 2026 —
-        /// the #1 mined disagreement pattern, stable across both teacher
-        /// configs): the rollout declarer pulls trump from the TOP (Tiger
-        /// included) instead of leading its LOWEST trump, and with no
-        /// commanding trump skips the pull rather than donating the round.
-        /// The low-pull loop was the largest source of student-vs-teacher
-        /// regret (mined exemplars: monster declarer hands rolling out to
-        /// −$500k). Off by default until a paired A/B confirms it.
-        var rolloutTopPull: Bool = false
+        /// the #2 mined pattern): with length (≥3 cards) behind a side-suit
+        /// boss, the rollout leader DUCKS the first round (lowest card of
+        /// the suit, ≤ $5k risk) and cashes the boss later, when opponents'
+        /// money is forced to follow. Singleton/doubleton bosses still cash
+        /// immediately (calibration: a singleton $40k cashes 100%).
+        ///
+        /// PARKED AT FALSE (June 2026): the blanket version (duck every time
+        /// rules 2/3 would cash with length) measured control 62% →
+        /// treatment 52% at paired 60/baseSeed 1 — repeated ducking donates
+        /// tempo while voids develop. Refined to VIRGIN suits only (one duck
+        /// per suit, the exemplars' actual shape) it recovered to 60% vs 62%
+        /// — neutral, and a soft rollout prior isn't promoted on a neutral
+        /// read. Mined per-position signal evidently doesn't survive as a
+        /// blanket rollout rule here (contrast rolloutTopPull, which did).
+        /// Lever + golden locks kept for a future, more conditional variant.
+        var rolloutEstablishDuck: Bool = false
+        /// A/B-gated ROLLOUT-policy improvement (PolicyMiner, June 2026 —
+        /// the top follow-side family in the post-topPull re-mine, and the
+        /// resurfaced "second-seat ruff/bank" candidate): when winning a
+        /// trick mid-round, bank the lowest-rank UNASSAILABLE money winner —
+        /// full information says no yet-to-play seat can legally beat it or
+        /// Bear the trick — instead of always winning cheap. Last-to-play
+        /// keeps the existing max-money bank (B2).
+        ///
+        /// PARKED AT FALSE (June 2026): paired 60/baseSeed 1 measured
+        /// control 62% → treatment 57% — below the paired control. The
+        /// deduction is sound but the TRADE is not: banking spends a future
+        /// round-winner for present certainty, while the cheap win keeps the
+        /// money card as a SECOND winner that competent rollout futures
+        /// realize anyway. The mined signal was inflated by the ε-teacher's
+        /// greedy bias (sloppy futures squander held winners) — this pattern
+        /// ALIGNED with the bias, unlike topPull (bias-neutral, promoted).
+        /// Weigh bias alignment before spending a cycle on a mined pattern.
+        var rolloutBankWin: Bool = false
         /// Bypass the heuristic shortlist gate entirely and let MCTS grade
         /// EVERY legal move. The shortlist exists for compute (no longer
         /// binding — worst case ~13 candidates vs 4) and to shield the search
@@ -1140,7 +1183,9 @@ struct MonteCarloAgent: PlayerAgent {
             let mv = PlayoutPolicy.move(in: s, seat: s.toAct,
                                         commandingPull: difficulty.rolloutCommandingPull,
                                         specialEscape: difficulty.rolloutSpecialEscape,
-                                        topPull: difficulty.rolloutTopPull)
+                                        topPull: difficulty.rolloutTopPull,
+                                        establishDuck: difficulty.rolloutEstablishDuck,
+                                        bankWin: difficulty.rolloutBankWin)
             guard let ns = try? s.applying(mv, by: s.toAct) else { break }
             s = ns
             steps += 1

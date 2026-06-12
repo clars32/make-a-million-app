@@ -56,13 +56,13 @@ nonisolated enum Move: Codable, Hashable {
     /// During the bidding phase: place a bid or pass.
     case bid(BidAction)
 
-    /// High bidder requesting a misdeal redeal (only legal when the engine
-    /// has flagged this player misdeal-eligible). Modeled as a real move so
-    /// the optional rule lives in the state machine, not in UI glue.
+    /// In `.misdealDecision`: the forced redeal (automatic rule), or one
+    /// seat's "agree to redeal" vote (agreement rule). Modeled as a real move
+    /// so the optional rule lives in the state machine, not in UI glue.
     case callMisdeal
 
-    /// Legacy wire case from the earlier vote-style misdeal rule. Auto-misdeal
-    /// hands now redeal through `callMisdeal`; this is intentionally never legal.
+    /// Agreement-mode misdeal only: this seat declines the redeal, which
+    /// keeps the hand and opens bidding. Illegal under the automatic rule.
     case declineMisdeal
 
     /// High bidder discarding three cards after taking the widow.

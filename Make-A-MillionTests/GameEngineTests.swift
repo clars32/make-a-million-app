@@ -465,6 +465,163 @@ final class GameEngineTests: XCTestCase {
         XCTAssertEqual(after.endgameRule, .highestScore)
     }
 
+    // MARK: Optional house rules
+
+    func testAgreementMisdealRedealsOnlyWhenAllFourAgree() throws {
+        let rule = MisdealRule(enabled: true, threshold: Deck.totalMoneyInDeck,
+                               requiresAgreement: true)
+        var g = GameState.newHand(dealer: PlayerID(0), seed: 1, misdealRule: rule)
+        XCTAssertEqual(g.phase, .misdealDecision)
+        // Voting starts with the opener (left of dealer); both options legal.
+        XCTAssertEqual(g.toAct, PlayerID(1))
+        XCTAssertEqual(Set(g.legalMoves(for: PlayerID(1))),
+                       Set([Move.callMisdeal, Move.declineMisdeal]))
+
+        let originalSeed = g.dealSeed
+        for _ in 0..<3 {
+            g = try g.applying(.callMisdeal, by: g.toAct)
+            XCTAssertEqual(g.phase, .misdealDecision)
+            XCTAssertEqual(g.dealSeed, originalSeed,
+                           "no redeal until all four agree")
+        }
+        // Fourth agreement triggers the redeal: fresh seed, votes cleared.
+        g = try g.applying(.callMisdeal, by: g.toAct)
+        XCTAssertNotEqual(g.dealSeed, originalSeed)
+        XCTAssertTrue(g.misdealVotes.isEmpty)
+        // Threshold is the whole deck, so the redealt hand is short again and
+        // returns to the vote — opener first, same as the original deal.
+        XCTAssertEqual(g.phase, .misdealDecision)
+        XCTAssertEqual(g.toAct, PlayerID(1))
+    }
+
+    func testAgreementMisdealDeclineKeepsTheHand() throws {
+        let rule = MisdealRule(enabled: true, threshold: Deck.totalMoneyInDeck,
+                               requiresAgreement: true)
+        var g = GameState.newHand(dealer: PlayerID(0), seed: 1, misdealRule: rule)
+        let dealtSeed = g.dealSeed
+        g = try g.applying(.callMisdeal, by: g.toAct)      // opener agrees
+        g = try g.applying(.declineMisdeal, by: g.toAct)   // next seat declines
+        XCTAssertEqual(g.phase, .bidding)
+        XCTAssertEqual(g.toAct, PlayerID(1), "bidding opens left of the dealer")
+        XCTAssertEqual(g.dealSeed, dealtSeed, "the hand was kept, not redealt")
+        XCTAssertTrue(g.misdealVotes.isEmpty)
+        // The opener-must-open rule is intact after the vote detour.
+        XCTAssertFalse(g.legalMoves(for: PlayerID(1)).contains(.bid(.pass)))
+    }
+
+    func testFixedOpeningBidCollapsesTheOpeningLadder() throws {
+        var g = GameState.newHand(dealer: PlayerID(0), seed: 7,
+                                  misdealRule: .disabled,
+                                  houseRules: HouseRules(openingBidIsFixed: true))
+        // Opener: the only legal action is the $175k opening (no pass on the
+        // opener's first turn, and no higher opening).
+        XCTAssertEqual(g.legalMoves(for: PlayerID(1)),
+                       [.bid(.bid(Bidding.openingMinimum))])
+        // A jump opening is rejected by the reducer as well.
+        XCTAssertThrowsError(try g.applying(.bid(.bid(200_000)), by: PlayerID(1)))
+        g = try g.applying(.bid(.bid(Bidding.openingMinimum)), by: PlayerID(1))
+        // Raises are unaffected: the next seat may pass or raise normally.
+        let next = g.legalMoves(for: PlayerID(2))
+        XCTAssertTrue(next.contains(.bid(.pass)))
+        XCTAssertTrue(next.contains(
+            .bid(.bid(Bidding.openingMinimum + Bidding.raiseIncrement))))
+        XCTAssertTrue(next.contains(.bid(.bid(400_000))))
+    }
+
+    func testPrivateWidowVisibleOnlyToHighBidder() throws {
+        var g = GameState.newHand(dealer: PlayerID(0), seed: 99,
+                                  misdealRule: .disabled,
+                                  houseRules: HouseRules(widowIsPublic: false))
+        g = try g.applying(.bid(.bid(175_000)), by: PlayerID(1))
+        g = try g.applying(.bid(.pass), by: PlayerID(2))
+        g = try g.applying(.bid(.pass), by: PlayerID(3))
+        g = try g.applying(.bid(.pass), by: PlayerID(0))
+        XCTAssertEqual(g.phase, .namingTrump)
+        XCTAssertNotNil(g.view(for: PlayerID(1)).widow,
+                        "the high bidder sees the widow they hold")
+        for seat in [PlayerID(0), PlayerID(2), PlayerID(3)] {
+            XCTAssertNil(g.view(for: seat).widow,
+                         "seat \(seat.raw) must not see a private widow")
+        }
+        // And it must not leak onto the shared tabletop board either.
+        XCTAssertNil(g.view(for: PlayerID(1)).asSpectator().widow)
+    }
+
+    func testTrumpMayNotBeLedUntilBroken() throws {
+        // Seat 0 leads holding trump (red + Tiger) and one side card; seat 2
+        // is void in green so it can break trump on the first trick.
+        let hands: [PlayerID: [Card]] = [
+            PlayerID(0): [.colored(.red, .four), .tiger, .colored(.green, .two)],
+            PlayerID(1): [.colored(.green, .three), .colored(.yellow, .seven), .colored(.black, .eight)],
+            PlayerID(2): [.colored(.red, .nine), .colored(.red, .eleven), .colored(.black, .two)],
+            PlayerID(3): [.colored(.green, .eight), .colored(.yellow, .three), .colored(.black, .three)],
+        ]
+        let g = GameState(
+            dealSeed: 0, dealer: PlayerID(0),
+            hands: hands, widow: [],
+            phase: .trickPlay, toAct: PlayerID(0),
+            highBid: 175_000, highBidder: PlayerID(0),
+            passed: [PlayerID(1), PlayerID(2), PlayerID(3)],
+            bidHistory: [], trump: .red,
+            discardAnnouncement: nil,
+            misdealRule: .disabled, endgameRule: .standard,
+            houseRules: HouseRules(trumpMustBeBroken: true),
+            misdealVotes: [],
+            currentTrick: Trick(leader: PlayerID(0)),
+            completedTricks: [], capturedByTeam: [0: [], 1: []],
+            matchScore: [0: 0, 1: 0],
+            dealtHands: hands, dealtWidow: [])
+
+        func leads(_ s: GameState, _ p: PlayerID) -> Set<Card> {
+            Set(s.legalMoves(for: p).compactMap { move -> Card? in
+                if case .play(let c) = move { return c }
+                return nil
+            })
+        }
+
+        // Unbroken: neither the red 4 nor the Tiger may be led.
+        XCTAssertEqual(leads(g, PlayerID(0)), [Card.colored(.green, .two)])
+
+        // Play the trick out; seat 2 trumps in (legal — it cannot follow).
+        var s = try g.applying(.play(.colored(.green, .two)), by: PlayerID(0))
+        s = try s.applying(.play(.colored(.green, .three)), by: PlayerID(1))
+        s = try s.applying(.play(.colored(.red, .nine)), by: PlayerID(2))
+        s = try s.applying(.play(.colored(.green, .eight)), by: PlayerID(3))
+        XCTAssertEqual(s.toAct, PlayerID(2), "the trump took the trick")
+
+        // Trump is broken now: the new leader may lead its remaining trump.
+        XCTAssertTrue(leads(s, PlayerID(2)).contains(.colored(.red, .eleven)))
+    }
+
+    func testTrumpBreakRuleHasAllTrumpEscapeHatch() {
+        // A leader holding ONLY trump must still have a legal lead.
+        let hands: [PlayerID: [Card]] = [
+            PlayerID(0): [.colored(.red, .four), .tiger],
+            PlayerID(1): [.colored(.green, .three), .colored(.yellow, .seven)],
+            PlayerID(2): [.colored(.red, .nine), .colored(.black, .two)],
+            PlayerID(3): [.colored(.green, .eight), .colored(.yellow, .three)],
+        ]
+        let g = GameState(
+            dealSeed: 0, dealer: PlayerID(0),
+            hands: hands, widow: [],
+            phase: .trickPlay, toAct: PlayerID(0),
+            highBid: 175_000, highBidder: PlayerID(0),
+            passed: [PlayerID(1), PlayerID(2), PlayerID(3)],
+            bidHistory: [], trump: .red,
+            discardAnnouncement: nil,
+            misdealRule: .disabled, endgameRule: .standard,
+            houseRules: HouseRules(trumpMustBeBroken: true),
+            misdealVotes: [],
+            currentTrick: Trick(leader: PlayerID(0)),
+            completedTricks: [], capturedByTeam: [0: [], 1: []],
+            matchScore: [0: 0, 1: 0],
+            dealtHands: hands, dealtWidow: [])
+
+        let moves = g.legalMoves(for: PlayerID(0))
+        XCTAssertEqual(Set(moves), Set([Move.play(.colored(.red, .four)), Move.play(.tiger)]),
+                       "an all-trump hand may lead trump even unbroken")
+    }
+
     func testNewHandDefaultsToBidderEndgameRule() {
         // The house default is the bidding team winning a double-over finish.
         let g = GameState.newHand(dealer: PlayerID(0), seed: 1)

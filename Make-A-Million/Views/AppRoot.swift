@@ -5,18 +5,15 @@
 //  Top-level screen. Replaces the direct GameView entry point so we can
 //  choose between solo and networked play before any game state exists.
 //
-//  THE THREE MODES, AND HOW THEY DIFFER:
+//  TOP-LEVEL FLOW:
 //
-//   • Solo     — the existing single-device flow. GameView observes a
-//                GameSession that owns the runner; nothing changes vs
-//                before this slice.
-//   • Host     — this device runs the engine and accepts joiners over
-//                MultipeerConnectivity. HostLobbyView owns the
-//                MultipeerHost while the table is being set up; the
-//                next slice will lift it out as the actual hand starts.
-//   • Join     — this device is a client. ClientLobbyView owns the
-//                MultipeerClient and, after a connection, hands off to
-//                the client game view (also next slice).
+//   • Home: Solo / Join / Host.
+//   • Join: Join Online / Join Local.
+//   • Host: Host Local / Host Tabletop / Host Online.
+//
+//  Local Host/Join use MultipeerConnectivity. Online Host/Join use Game
+//  Center. Tabletop hosting uses the same host lobby but starts in spectator
+//  board mode so all four seats are filled by nearby clients.
 //
 //  Name handling: a single text field on the picker. The name is used
 //  as the MCPeerID display name for both Host and Join (and for the
@@ -34,9 +31,12 @@ struct AppRoot: View {
 
     enum Mode: Equatable {
         case picking
+        case pickingJoin
+        case pickingHost
         case solo
-        case hosting
-        case joining
+        case hostingLocal
+        case hostingTabletop
+        case joiningLocal
         case hostingOnline
         case joiningOnline
     }
@@ -54,10 +54,25 @@ struct AppRoot: View {
                 ModePickerView(
                     playerName: $playerName,
                     onPickSolo: { mode = .solo },
-                    onPickHost: { mode = .hosting },
-                    onPickJoin: { mode = .joining },
-                    onPickHostOnline: { mode = .hostingOnline },
-                    onPickJoinOnline: { mode = .joiningOnline },
+                    onPickJoin: { mode = .pickingJoin },
+                    onPickHost: { mode = .pickingHost },
+                    onOpenSettings: { showingSettings = true })
+
+            case .pickingJoin:
+                JoinPickerView(
+                    playerName: $playerName,
+                    onPickOnline: { mode = .joiningOnline },
+                    onPickLocal: { mode = .joiningLocal },
+                    onBack: { mode = .picking },
+                    onOpenSettings: { showingSettings = true })
+
+            case .pickingHost:
+                HostPickerView(
+                    playerName: $playerName,
+                    onPickLocal: { mode = .hostingLocal },
+                    onPickTabletop: { mode = .hostingTabletop },
+                    onPickOnline: { mode = .hostingOnline },
+                    onBack: { mode = .picking },
                     onOpenSettings: { showingSettings = true })
 
             case .solo:
@@ -65,12 +80,17 @@ struct AppRoot: View {
                 // settings entry can lock rules while a hand is running.
                 GameView(onExit: { mode = .picking })
 
-            case .hosting:
+            case .hostingLocal:
                 HostLobbyView(
                     playerName: effectiveName,
                     onExit: { mode = .picking })
 
-            case .joining:
+            case .hostingTabletop:
+                TabletopHostLobbyView(
+                    playerName: effectiveName,
+                    onExit: { mode = .picking })
+
+            case .joiningLocal:
                 ClientLobbyView(
                     playerName: effectiveName,
                     onExit: { mode = .picking })
@@ -100,13 +120,13 @@ struct AppRoot: View {
             // never yank the player out of a running mode; if they're
             // mid-hand the invite stays pending and connects if they
             // enter "Join Online" themselves.
-            if invite != nil && mode == .picking {
+            if invite != nil && (mode == .picking || mode == .pickingJoin) {
                 mode = .joiningOnline
             }
         }
         .onChange(of: mode) { _, mode in
             #if canImport(UIKit)
-            if mode != .hosting {
+            if mode != .hostingTabletop {
                 OrientationLock.shared.lock(.portrait)
             }
             #endif
@@ -131,105 +151,265 @@ private struct ModePickerView: View {
 
     @Binding var playerName: String
     let onPickSolo: () -> Void
-    let onPickHost: () -> Void
     let onPickJoin: () -> Void
-    let onPickHostOnline: () -> Void
-    let onPickJoinOnline: () -> Void
+    let onPickHost: () -> Void
     let onOpenSettings: () -> Void
+
+    var body: some View {
+        HomeMenuShell(
+            playerName: $playerName,
+            title: "Make-a-Million",
+            subtitle: "A classic Packard trick-taking card game",
+            showsHero: true,
+            showsPlayerName: false,
+            systemImage: "suit.club.fill",
+            onBack: nil,
+            onOpenSettings: onOpenSettings) {
+                ModeButton(
+                    title: "Solo",
+                    subtitle: "Play a full table against three bots",
+                    systemImage: "person.fill",
+                    color: TableStyle.actionBlue,
+                    action: onPickSolo)
+                ModeButton(
+                    title: "Join",
+                    subtitle: "Find a local table or accept an online invite",
+                    systemImage: "person.2.fill",
+                    color: TableStyle.teamAmber,
+                    action: onPickJoin)
+                ModeButton(
+                    title: "Host",
+                    subtitle: "Start a local, tabletop, or online table",
+                    systemImage: "rectangle.connected.to.line.below",
+                    color: TableStyle.teamBlue,
+                    action: onPickHost)
+        }
+    }
+}
+
+private struct JoinPickerView: View {
+    @Binding var playerName: String
+    let onPickOnline: () -> Void
+    let onPickLocal: () -> Void
+    let onBack: () -> Void
+    let onOpenSettings: () -> Void
+
+    var body: some View {
+        HomeMenuShell(
+            playerName: $playerName,
+            title: "Join",
+            subtitle: "Connect to someone else's table",
+            showsHero: false,
+            systemImage: "person.2.fill",
+            onBack: onBack,
+            onOpenSettings: onOpenSettings) {
+                ModeButton(
+                    title: "Join Local",
+                    subtitle: "Find a nearby host on this Wi-Fi",
+                    systemImage: "antenna.radiowaves.left.and.right",
+                    color: TableStyle.teamAmber,
+                    action: onPickLocal)
+                ModeButton(
+                    title: "Join Online",
+                    subtitle: "Use Game Center to connect anywhere",
+                    systemImage: "globe.americas.fill",
+                    color: TableStyle.teamBlue,
+                    action: onPickOnline)
+        }
+    }
+}
+
+private struct HostPickerView: View {
+    @Binding var playerName: String
+    let onPickLocal: () -> Void
+    let onPickTabletop: () -> Void
+    let onPickOnline: () -> Void
+    let onBack: () -> Void
+    let onOpenSettings: () -> Void
+
+    var body: some View {
+        HomeMenuShell(
+            playerName: $playerName,
+            title: "Host",
+            subtitle: "Choose what kind of table to run",
+            showsHero: false,
+            systemImage: "rectangle.connected.to.line.below",
+            onBack: onBack,
+            onOpenSettings: onOpenSettings) {
+                ModeButton(
+                    title: "Host Local",
+                    subtitle: "Nearby devices fill seats",
+                    systemImage: "wifi",
+                    color: TableStyle.teamBlue,
+                    action: onPickLocal)
+                ModeButton(
+                    title: "Host Tabletop",
+                    subtitle: "Use this device as the shared board",
+                    systemImage: "rectangle.on.rectangle.angled",
+                    color: TableStyle.tableGold,
+                    action: onPickTabletop)
+                ModeButton(
+                    title: "Host Online",
+                    subtitle: "Invite friends with Game Center",
+                    systemImage: "globe",
+                    color: TableStyle.teamAmber,
+                    action: onPickOnline)
+        }
+    }
+}
+
+private struct HomeMenuShell<Content: View>: View {
+    @Binding var playerName: String
+    let title: String
+    let subtitle: String
+    let showsHero: Bool
+    let showsPlayerName: Bool
+    let systemImage: String
+    let onBack: (() -> Void)?
+    let onOpenSettings: () -> Void
+    let content: Content
+
+    init(
+        playerName: Binding<String>,
+        title: String,
+        subtitle: String,
+        showsHero: Bool,
+        showsPlayerName: Bool = true,
+        systemImage: String,
+        onBack: (() -> Void)?,
+        onOpenSettings: @escaping () -> Void,
+        @ViewBuilder content: () -> Content
+    ) {
+        _playerName = playerName
+        self.title = title
+        self.subtitle = subtitle
+        self.showsHero = showsHero
+        self.showsPlayerName = showsPlayerName
+        self.systemImage = systemImage
+        self.onBack = onBack
+        self.onOpenSettings = onOpenSettings
+        self.content = content()
+    }
 
     var body: some View {
         GeometryReader { proxy in
             let isTablet = proxy.size.width >= 700
-            let contentWidth = isTablet ? min(proxy.size.width * 0.56, 520) : proxy.size.width
-            let heroHeight = isTablet ? min(proxy.size.height * 0.28, 310) : 198
+            let isHome = showsHero && !showsPlayerName && onBack == nil
+            let contentWidth: CGFloat = isTablet ? min(proxy.size.width * 0.58, 560) : min(proxy.size.width - 32, 430)
+            let heroHeight: CGFloat = isHome
+                ? (isTablet ? min(proxy.size.height * 0.34, 350) : min(max(proxy.size.height * 0.28, 212), 260))
+                : (isTablet ? min(proxy.size.height * 0.28, 310) : 198)
+            let heroScale: CGFloat = isHome
+                ? (isTablet ? 1.92 : 1.34)
+                : (isTablet ? 1.72 : 1.18)
+            let topInset: CGFloat = isHome ? (isTablet ? 34 : 26) : (isTablet ? 28 : 8)
+            let headerSpacing: CGFloat = isHome ? (isTablet ? 18 : 14) : 12
+            let sectionSpacing: CGFloat = isHome ? (isTablet ? 34 : 28) : (isTablet ? 28 : 22)
+            let buttonSpacing: CGFloat = isHome ? (isTablet ? 14 : 12) : 10
+            let bottomInset: CGFloat = isHome ? (isTablet ? 40 : 32) : 16
 
-            ZStack(alignment: .topTrailing) {
+            ZStack(alignment: .top) {
                 TableFeltBackground()
 
-                VStack(spacing: isTablet ? 28 : 24) {
-                    Spacer(minLength: isTablet ? 28 : 8)
+                ScrollView {
+                    VStack(spacing: sectionSpacing) {
+                        Spacer(minLength: topInset)
 
-                    VStack(spacing: 12) {
-                        HomeHeroCards(scale: isTablet ? 1.72 : 1.18)
-                            .frame(height: heroHeight)
-                            .padding(.bottom, 4)
+                        VStack(spacing: headerSpacing) {
+                            if showsHero {
+                                HomeHeroCards(scale: heroScale)
+                                    .frame(height: heroHeight)
+                                    .padding(.bottom, isHome ? 8 : 4)
+                            } else {
+                                Image(systemName: systemImage)
+                                    .font(.system(size: isTablet ? 64 : 46, weight: .semibold))
+                                    .foregroundStyle(TableStyle.tableGold)
+                                    .frame(height: isTablet ? 94 : 66)
+                            }
 
-                        Text("Make-a-Million")
-                            .font(TableTypography.display(.largeTitle, weight: .heavy))
-                            .foregroundStyle(.white)
-                        Text("A trick-taking card game")
-                            .font(TableTypography.display(.subheadline))
-                            .foregroundStyle(.white.opacity(0.66))
+                            Text(title)
+                                .font(TableTypography.display(.largeTitle, weight: .heavy))
+                                .foregroundStyle(.white)
+                                .multilineTextAlignment(.center)
+                            Text(subtitle)
+                                .font(TableTypography.display(.subheadline))
+                                .foregroundStyle(.white.opacity(0.66))
+                                .multilineTextAlignment(.center)
+                        }
+                        .frame(maxWidth: contentWidth)
+                        .padding(.horizontal)
+
+                        if showsPlayerName {
+                            PlayerNamePanel(playerName: $playerName)
+                                .frame(maxWidth: contentWidth)
+                                .padding(.horizontal)
+                        }
+
+                        VStack(spacing: buttonSpacing) {
+                            content
+                        }
+                        .frame(maxWidth: contentWidth)
+                        .padding(.horizontal)
+
+                        Spacer(minLength: bottomInset)
                     }
-
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Your name")
-                            .font(TableTypography.display(.caption))
-                            .foregroundStyle(.white.opacity(0.68))
-                        TextField("Player", text: $playerName)
-                            .textFieldStyle(.roundedBorder)
-                            .autocorrectionDisabled()
-                            .textInputAutocapitalization(.words)
-                    }
-                    .padding(14)
-                    .frame(maxWidth: contentWidth)
-                    .tablePanel(cornerRadius: 14, shadowOpacity: 0.18)
-                    .padding(.horizontal)
-
-                    Spacer()
-
-                    VStack(spacing: 10) {
-                        ModeButton(
-                            title: "Play Solo",
-                            subtitle: "Just you against three bots",
-                            systemImage: "person.fill",
-                            color: TableStyle.actionBlue,
-                            action: onPickSolo)
-                        ModeButton(
-                            title: "Host a Table",
-                            subtitle: "Other devices nearby can join you",
-                            systemImage: "wifi",
-                            color: TableStyle.teamBlue,
-                            action: onPickHost)
-                        ModeButton(
-                            title: "Join a Table",
-                            subtitle: "Find a nearby host",
-                            systemImage: "person.2.fill",
-                            color: TableStyle.teamAmber,
-                            action: onPickJoin)
-                        ModeButton(
-                            title: "Host Online",
-                            subtitle: "Invite friends anywhere via Game Center",
-                            systemImage: "globe",
-                            color: TableStyle.teamBlue,
-                            action: onPickHostOnline)
-                        ModeButton(
-                            title: "Join Online",
-                            subtitle: "Accept a Game Center invitation",
-                            systemImage: "envelope.open.fill",
-                            color: TableStyle.teamAmber,
-                            action: onPickJoinOnline)
-                    }
-                    .frame(maxWidth: contentWidth)
-                    .padding(.horizontal)
-
-                    Spacer()
+                    .frame(maxWidth: .infinity)
+                    .frame(minHeight: proxy.size.height)
+                    .padding(.vertical)
                 }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical)
 
-                Button(action: onOpenSettings) {
-                    Image(systemName: "gearshape.fill")
-                        .font(TableTypography.display(.title3))
-                        .foregroundStyle(TableStyle.cardSelected)
-                        .padding(10)
-                        .background(.ultraThinMaterial, in: Circle())
-                        .overlay(Circle().stroke(TableStyle.panelStroke, lineWidth: 1))
+                HStack {
+                    if let onBack {
+                        Button {
+                            SoundEffectPlayer.shared.play(.buttonSelect)
+                            onBack()
+                        } label: {
+                            Image(systemName: "chevron.left")
+                                .font(TableTypography.display(.title3, weight: .bold))
+                                .foregroundStyle(TableStyle.cardSelected)
+                                .padding(10)
+                                .background(.ultraThinMaterial, in: Circle())
+                                .overlay(Circle().stroke(TableStyle.panelStroke, lineWidth: 1))
+                        }
+                        .accessibilityLabel("Back")
+                    }
+
+                    Spacer()
+
+                    Button {
+                        SoundEffectPlayer.shared.play(.buttonSelect)
+                        onOpenSettings()
+                    } label: {
+                        Image(systemName: "gearshape.fill")
+                            .font(TableTypography.display(.title3))
+                            .foregroundStyle(TableStyle.cardSelected)
+                            .padding(10)
+                            .background(.ultraThinMaterial, in: Circle())
+                            .overlay(Circle().stroke(TableStyle.panelStroke, lineWidth: 1))
+                    }
+                    .accessibilityLabel("Settings")
                 }
                 .padding()
-                .accessibilityLabel("Settings")
             }
         }
+    }
+}
+
+private struct PlayerNamePanel: View {
+    @Binding var playerName: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Your name")
+                .font(TableTypography.display(.caption))
+                .foregroundStyle(.white.opacity(0.68))
+            TextField("Player", text: $playerName)
+                .textFieldStyle(.roundedBorder)
+                .autocorrectionDisabled()
+                .textInputAutocapitalization(.words)
+        }
+        .padding(14)
+        .tablePanel(cornerRadius: 14, shadowOpacity: 0.18)
     }
 }
 
@@ -276,7 +456,10 @@ private struct ModeButton: View {
     let action: () -> Void
 
     var body: some View {
-        Button(action: action) {
+        Button {
+            SoundEffectPlayer.shared.play(.buttonSelect)
+            action()
+        } label: {
             HStack(spacing: 14) {
                 Image(systemName: systemImage)
                     .font(TableTypography.display(.title2))

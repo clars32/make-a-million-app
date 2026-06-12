@@ -19,8 +19,11 @@ extension PlayerView {
             passed: self.passed,
             opener: self.opener,
             bidHistory: self.bidHistory,
-            widow: self.widow,
+            // A private widow must not leak onto the shared board even when
+            // the projected seat happens to be the high bidder.
+            widow: self.houseRules.widowIsPublic ? self.widow : nil,
             discardAnnouncement: self.discardAnnouncement,
+            houseRules: self.houseRules,
             currentTrick: self.currentTrick,
             completedTrickCount: self.completedTrickCount,
             completedTricks: self.completedTricks,

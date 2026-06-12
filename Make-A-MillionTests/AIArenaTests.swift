@@ -293,34 +293,78 @@ final class AIArenaTests: XCTestCase {
     ///
     /// METHOD NOTE: the ε that controls rollout chaos also biases the
     /// teacher toward cashing money early (sloppy futures squander held
-    /// money), so only believe patterns that appear under BOTH the standard
-    /// and the gentle teacher. This entry runs the gentle config; the
-    /// standard-config table for the same hands is in the session notes /
-    /// re-run with `teacher: .standard`.
+    /// money), so only believe patterns that appear under BOTH teacher
+    /// configs — this entry runs standard then gentle so the intersection
+    /// is always available from one run. The student mines the difficulty's
+    /// SHIPPED rollout flags, so a re-run after a lever promotion yields a
+    /// fresh table (it won't re-flag fixed patterns).
     func testPolicyDisagreementMining() async {
-        let r = await PolicyMiner.mine(hands: 200, difficulty: .normal,
-                                       baseSeed: 1, teacher: .gentle)
-        print(r.summary)
+        let std = await PolicyMiner.mine(hands: 200, difficulty: .normal,
+                                         baseSeed: 1, teacher: .standard)
+        print("STANDARD TEACHER:\n" + std.summary)
+        let gentle = await PolicyMiner.mine(hands: 200, difficulty: .normal,
+                                            baseSeed: 1, teacher: .gentle)
+        print("GENTLE TEACHER:\n" + gentle.summary)
     }
 
     /// A/B for the PolicyMiner-derived rollout fix `rolloutTopPull` (the #1
-    /// mined pattern: the rollout declarer's low-trump pull loop). Challenger
-    /// rolls out with pull-from-the-top (Tiger included, skip-if-no-
-    /// commander); champion is today's default. Fresh control included —
-    /// the calibrated-valuation promotion moved the baseline.
+    /// mined pattern: the rollout declarer's low-trump pull loop).
+    ///
+    /// MEASURED (June 12 2026, the runs that PROMOTED the lever): 60 matches
+    /// control 52% → treatment 58%; confirmed at 100 matches control 49% →
+    /// treatment 59% (+10pp, set-rate 28%/28%). Since the default is now ON,
+    /// this test reproduces the measurement with the roles flipped: the
+    /// explicit `oldPull` challenger is yesterday's low-pull rollout and the
+    /// default champion carries the promoted fix (expect the challenger to
+    /// LOSE by ~10pp against the same-seed control).
     func testSelfPlayRolloutTopPull() async {
-        // 60-match read (June 12 2026): control 52% → treatment 58%, set-rate
-        // 28/28 vs control 32/32 — promising, so per protocol it must be
-        // confirmed at ≥100 matches (commandingPull looked +5pp at 60 and
-        // flattened at 100).
-        var topPull = MonteCarloAgent.Difficulty.normal
-        topPull.rolloutTopPull = true
+        var oldPull = MonteCarloAgent.Difficulty.normal
+        oldPull.rolloutTopPull = false
         let control = await AIArena.runSelfPlay(matches: 100, challenger: .normal,
                                                 champion: .normal, baseSeed: 1)
         print("CONTROL (normal vs normal):\n" + control.summary)
-        let r = await AIArena.runSelfPlay(matches: 100, challenger: topPull,
+        let r = await AIArena.runSelfPlay(matches: 100, challenger: oldPull,
                                           champion: .normal, baseSeed: 1)
-        print("TREATMENT (rolloutTopPull vs normal):\n" + r.summary)
+        print("TREATMENT (old low-pull vs topPull default):\n" + r.summary)
+    }
+
+    /// A/B for the PolicyMiner-derived rollout fix `rolloutEstablishDuck`
+    /// (the #2 mined pattern: cashing a length-protected side-suit boss into
+    /// the thin first round). Challenger ducks to establish; champion is the
+    /// current default (topPull on both sides).
+    ///
+    /// MEASURED (June 12 2026, paired 60 / baseSeed 1, control 62%): blanket
+    /// duck 52% (NEGATIVE — repeated ducks donate tempo); virgin-only duck
+    /// 60% (neutral). PARKED at false — see the lever comment.
+    func testSelfPlayEstablishDuck() async {
+        var duck = MonteCarloAgent.Difficulty.normal
+        duck.rolloutEstablishDuck = true
+        let control = await AIArena.runSelfPlay(matches: 60, challenger: .normal,
+                                                champion: .normal, baseSeed: 1)
+        print("CONTROL (normal vs normal):\n" + control.summary)
+        let r = await AIArena.runSelfPlay(matches: 60, challenger: duck,
+                                          champion: .normal, baseSeed: 1)
+        print("TREATMENT (rolloutEstablishDuck vs normal):\n" + r.summary)
+    }
+
+    /// A/B for the PolicyMiner-derived rollout fix `rolloutBankWin` (top
+    /// follow-side family of the post-topPull re-mine, both teacher configs:
+    /// "win plain → win money" + "win trump → shed money" ≈ $13-18M total
+    /// regret). Challenger banks unassailable money winners mid-trick;
+    /// champion is the current default.
+    ///
+    /// MEASURED (June 12 2026, paired 60 / baseSeed 1): control 62% →
+    /// treatment 57% — below the paired control. PARKED at false; the mined
+    /// signal aligned with the ε-teacher's greedy bias (see lever comment).
+    func testSelfPlayBankWin() async {
+        var bank = MonteCarloAgent.Difficulty.normal
+        bank.rolloutBankWin = true
+        let control = await AIArena.runSelfPlay(matches: 60, challenger: .normal,
+                                                champion: .normal, baseSeed: 1)
+        print("CONTROL (normal vs normal):\n" + control.summary)
+        let r = await AIArena.runSelfPlay(matches: 60, challenger: bank,
+                                          champion: .normal, baseSeed: 1)
+        print("TREATMENT (rolloutBankWin vs normal):\n" + r.summary)
     }
 
     /// A/B for the calibrated evaluator tables: challenger bids / discards /

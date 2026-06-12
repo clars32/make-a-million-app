@@ -102,9 +102,11 @@ struct TabletopGameView: View {
             if !enabled { selectedTrickHistorySeat = nil }
         }
         .sheet(isPresented: $showingSettings) {
-            // Rules lock while a hand is being played; display toggles stay live.
+            // Rules lock while a hand is being played (paused included);
+            // display toggles stay live.
             SettingsView(settings: .shared,
-                         rulesLocked: netSession.phase == .running) {
+                         rulesLocked: netSession.phase.isMidHand,
+                         dealSeed: netSession.currentHandSeed) {
                 showingSettings = false
             }
         }
@@ -115,6 +117,10 @@ struct TabletopGameView: View {
     private func boardView(_ table: PlayerView) -> some View {
         VStack(spacing: 10) {
             headerStrip(table)
+
+            if showsBidHistoryStrip(table) {
+                bidHistoryStrip(table)
+            }
 
             ZStack {
                 trickCenter(table)
@@ -176,13 +182,19 @@ struct TabletopGameView: View {
         let hand = table.liveHandScore[team, default: 0]
         let match = table.matchScore[team, default: 0]
         let progress = min(1.0, Double(match) / 1_000_000.0)
+        // "Show live scores" off: the running hand total stays hidden, like
+        // face-down tricks at a real table. Match score is settled and shows.
         return VStack(alignment: .leading, spacing: 3) {
             Text(teamName(team)).font(TableTypography.display(.subheadline, weight: .bold)).foregroundStyle(tint)
-            Text("Hand $\(hand / 1000)k")
-                .font(TableTypography.money(.title2))
-                .foregroundStyle(.white)
+            if settings.showLiveScores {
+                Text("Hand $\(hand / 1000)k")
+                    .font(TableTypography.money(.title2))
+                    .foregroundStyle(.white)
+            }
             Text("Match $\(match / 1000)k / $1M")
-                .font(TableTypography.money(.caption, weight: .regular)).foregroundStyle(.white.opacity(0.7))
+                .font(TableTypography.money(settings.showLiveScores ? .caption : .title3,
+                                            weight: .regular))
+                .foregroundStyle(.white.opacity(settings.showLiveScores ? 0.7 : 1.0))
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
                     Capsule().fill(.white.opacity(0.15))
@@ -337,6 +349,48 @@ struct TabletopGameView: View {
         }
     }
 
+    // MARK: Bid history strip (during bidding, and through the hand when
+    // the Card display setting keeps it visible)
+
+    private func showsBidHistoryStrip(_ table: PlayerView) -> Bool {
+        guard !table.bidHistory.isEmpty else { return false }
+        return table.phase == .bidding || settings.showBidHistoryDuringHand
+    }
+
+    private func bidHistoryStrip(_ table: PlayerView) -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                Text("Bids")
+                    .font(TableTypography.display(.subheadline))
+                    .foregroundStyle(.white.opacity(0.6))
+                ForEach(Array(table.bidHistory.enumerated()), id: \.offset) { _, record in
+                    HStack(spacing: 5) {
+                        Text(seatShort(record.player))
+                            .font(TableTypography.display(.subheadline))
+                            .foregroundStyle(.white.opacity(0.7))
+                        Text(bidLabel(record.action))
+                            .font(TableTypography.money(.subheadline))
+                            .foregroundStyle(.white)
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(Capsule().fill(bidStripTint(record).opacity(0.16)))
+                    .overlay(Capsule().stroke(bidStripTint(record).opacity(0.45), lineWidth: 1))
+                }
+            }
+            .padding(.horizontal, 4)
+        }
+        .defaultScrollAnchor(.trailing)
+        .frame(maxWidth: 720)
+    }
+
+    private func bidStripTint(_ record: BidRecord) -> Color {
+        switch record.action {
+        case .pass: return TableStyle.passGray
+        case .bid: return TableStyle.tableGold
+        }
+    }
+
     // MARK: Center trick
 
     /// Tabletop is an absolute board: seat 0 sits at the bottom, so we pass
@@ -349,7 +403,8 @@ struct TabletopGameView: View {
             trump: table.trump,
             viewer: PlayerID(0),
             metrics: .tabletop,
-            seatName: seatName)
+            seatName: seatName,
+            showsAnimalCues: settings.animalAnimations)
     }
 
     // MARK: Footer (last trick / widow)
@@ -357,7 +412,7 @@ struct TabletopGameView: View {
     @ViewBuilder
     private func footerStrip(_ table: PlayerView) -> some View {
         HStack(spacing: 20) {
-            if let widow = table.widow, !widow.isEmpty {
+            if settings.showWidow, let widow = table.widow, !widow.isEmpty {
                 HStack(spacing: 8) {
                     Text("Widow").font(TableTypography.display(.headline, weight: .bold)).foregroundStyle(.white.opacity(0.7))
                     ForEach(keyedHand(widow), id: \.key) { entry in
@@ -365,13 +420,27 @@ struct TabletopGameView: View {
                     }
                     // Public discard announcement: trump count spoken, money
                     // shown face-up.
-                    if let ann = table.discardAnnouncement {
+                    if let ann = table.discardAnnouncement, ann.hasPublicContent {
                         Text(ann.summaryText)
                             .font(TableTypography.display(.subheadline))
                             .foregroundStyle(.white.opacity(0.7))
                         ForEach(keyedHand(ann.moneyCards), id: \.key) { entry in
                             CardFace(card: entry.card, width: 50, height: 70)
                         }
+                    }
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .tablePanel(cornerRadius: 14, shadowOpacity: 0.14)
+            } else if let ann = table.discardAnnouncement, ann.hasPublicContent {
+                // The announcement is public table talk even when the widow
+                // panel is hidden (privately-held widow, or the toggle off).
+                HStack(spacing: 8) {
+                    Text(ann.summaryText)
+                        .font(TableTypography.display(.subheadline))
+                        .foregroundStyle(.white.opacity(0.7))
+                    ForEach(keyedHand(ann.moneyCards), id: \.key) { entry in
+                        CardFace(card: entry.card, width: 50, height: 70)
                     }
                 }
                 .padding(.horizontal, 14)

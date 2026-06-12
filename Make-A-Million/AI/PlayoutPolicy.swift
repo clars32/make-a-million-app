@@ -69,12 +69,23 @@ enum PlayoutPolicy {
     /// included), and with no commanding trump skips the pull instead of
     /// donating the round by leading its lowest. Subsumes `commandingPull`
     /// when on.
+    /// `establishDuck`: A/B-gated rollout improvement (PolicyMiner, June
+    /// 2026 — the #2 mined pattern): with length (≥3) behind a side-suit
+    /// boss, don't cash it into the thin first round — lead the suit's low
+    /// card and cash the boss later, when opponents' money must follow.
+    /// `bankWin`: A/B-gated rollout improvement (PolicyMiner, June 2026 —
+    /// re-mine after topPull, the top follow-side family): when winning a
+    /// trick mid-round, bank the lowest-rank UNASSAILABLE money winner (no
+    /// yet-to-play seat can legally beat it or Bear it) instead of always
+    /// winning cheap; last-to-play keeps the existing max-money bank.
     /// Defaults off preserve the previous rollout behaviour exactly (and keep
     /// the `move(in:seat:)` API stable for the golden tactics tests).
     static func move(in state: GameState, seat: PlayerID,
                      commandingPull: Bool = false,
                      specialEscape: Bool = false,
-                     topPull: Bool = false) -> Move {
+                     topPull: Bool = false,
+                     establishDuck: Bool = false,
+                     bankWin: Bool = false) -> Move {
         let moves = state.legalMoves(for: seat)
         precondition(!moves.isEmpty,
                      "PlayoutPolicy asked to move with no legal moves "
@@ -105,7 +116,9 @@ enum PlayoutPolicy {
             return trickMove(in: state, seat: seat, legal: moves,
                              commandingPull: commandingPull,
                              specialEscape: specialEscape,
-                             topPull: topPull)
+                             topPull: topPull,
+                             establishDuck: establishDuck,
+                             bankWin: bankWin)
 
         case .handComplete:
             return moves[0]
@@ -119,7 +132,9 @@ enum PlayoutPolicy {
                                   legal: [Move],
                                   commandingPull: Bool,
                                   specialEscape: Bool,
-                                  topPull: Bool) -> Move {
+                                  topPull: Bool,
+                                  establishDuck: Bool,
+                                  bankWin: Bool) -> Move {
         guard let trump = state.trump else { return legal[0] }
         let plays = legal.compactMap { $0.playedCard }
         guard !plays.isEmpty else { return legal[0] }
@@ -136,7 +151,8 @@ enum PlayoutPolicy {
                                     trump: trump,
                                     amDeclarer: amDeclarer,
                                     commandingPull: commandingPull,
-                                    topPull: topPull))
+                                    topPull: topPull,
+                                    establishDuck: establishDuck))
         } else {
             return .play(chooseFollow(plays: plays,
                                       onTable: onTable,
@@ -144,7 +160,8 @@ enum PlayoutPolicy {
                                       state: state,
                                       seat: seat,
                                       trump: trump,
-                                      specialEscape: specialEscape))
+                                      specialEscape: specialEscape,
+                                      bankWin: bankWin))
         }
     }
 
@@ -156,7 +173,8 @@ enum PlayoutPolicy {
                                    trump: CardColor,
                                    amDeclarer: Bool,
                                    commandingPull: Bool = false,
-                                   topPull: Bool = false) -> Card {
+                                   topPull: Bool = false,
+                                   establishDuck: Bool = false) -> Card {
 
         // Helper: has this color been led in any completed trick?
         func colorLed(_ color: CardColor) -> Bool {
@@ -247,10 +265,24 @@ enum PlayoutPolicy {
         //
         // First time a color is led, the $40k is unlikely to be trumped
         // (opponents probably aren't void yet) and locks in $40k+.
+        //
+        // `establishDuck` (A/B, PolicyMiner June 2026 — the #2 mined
+        // pattern): with LENGTH behind the boss, round one is the THIN
+        // round — lead the suit's low card now and cash the boss on a
+        // later round, when opponents' money cards are forced to follow.
+        // Short holdings still cash immediately (the per-card calibration
+        // measured a singleton $40k at 100%).
         for color in CardColor.allCases where color != trump {
             if colorLed(color) { continue }
             for c in myNonTrump where c.effectiveColor(trump: trump) == color {
-                if case .colored(_, let r) = c, r == .money40k { return c }
+                if case .colored(_, let r) = c, r == .money40k {
+                    if establishDuck,
+                       let duck = establishmentDuck(color: color, plays: plays,
+                                                    trump: trump) {
+                        return duck
+                    }
+                    return c
+                }
             }
         }
 
@@ -259,7 +291,19 @@ enum PlayoutPolicy {
         // If I hold a card that no other seat can beat IN ITS COLOR and
         // no one is yet void in that color, lead it. This applies to
         // mid-rank money like $30k once the $40k of that color is gone.
+        // (Same `establishDuck` deferral as rule 2, but VIRGIN suits only:
+        // the duck buys exactly one developed round — repeating it just
+        // donates tempo while voids develop, and the first blanket A/B of
+        // this lever measured that variant negative.)
         if let safe = sureWinnerNonTrump(plays: plays, state: state, seat: seat, trump: trump) {
+            if establishDuck,
+               let color = safe.effectiveColor(trump: trump),
+               !colorLed(color),
+               let duck = establishmentDuck(color: color, plays: plays,
+                                            trump: trump),
+               duck != safe {
+                return duck
+            }
             return safe
         }
 
@@ -300,6 +344,25 @@ enum PlayoutPolicy {
             if sa != sb { return sa < sb }                  // shorter suit first
             return rankOf(a) < rankOf(b)                    // then lowest rank
         }
+    }
+
+    /// The establishment duck (`establishDuck`, PolicyMiner June 2026): with
+    /// length behind a side-suit boss (≥3 cards of the color in hand), the
+    /// first round of the suit is the thin one — defer the cash by leading
+    /// the suit's LOWEST card, keeping the boss for a later round where
+    /// opponents' money must follow. Capped at $5k of duck risk; returns nil
+    /// for short holdings (singleton/doubleton bosses cash now) or when the
+    /// suit's low card is itself worth real money.
+    private static func establishmentDuck(color: CardColor,
+                                          plays: [Card],
+                                          trump: CardColor) -> Card? {
+        let suit = plays.filter {
+            !$0.isSpecial && $0.effectiveColor(trump: trump) == color
+        }
+        guard suit.count >= 3,
+              let duck = suit.min(by: { rankOf($0) < rankOf($1) }),
+              duck.moneyValue <= 5_000 else { return nil }
+        return duck
     }
 
     /// A non-trump card I hold that no other seat can beat in its color
@@ -347,7 +410,8 @@ enum PlayoutPolicy {
                                      state: GameState,
                                      seat: PlayerID,
                                      trump: CardColor,
-                                     specialEscape: Bool = false) -> Card {
+                                     specialEscape: Bool = false,
+                                     bankWin: Bool = false) -> Card {
         let provisional = Trick(leader: trickLeader, plays: onTable)
         let currentWinner = GameState.trickWinner(provisional, trump: trump)
         let partnerWinning = Seats.team(of: currentWinner) == Seats.team(of: seat)
@@ -483,6 +547,22 @@ enum PlayoutPolicy {
                     return bank
                 }
             }
+            // BANK-WIN (A/B, PolicyMiner June 2026): mid-trick, the cheap-win
+            // instinct strands money the full information says is SAFE to
+            // bank — if no yet-to-play seat can legally beat my money winner
+            // (or Bear the trick), capturing WITH it banks the money now.
+            // Lowest-rank unassailable money winner, so the bigger card of
+            // the color stays back as the next round's controller.
+            if bankWin, !amLastToPlay {
+                let safeBanks = winners.filter {
+                    $0.isMoney && winIsUnassailable($0, state: state, seat: seat,
+                                                    onTable: onTable, led: led,
+                                                    trump: trump)
+                }
+                if let bank = safeBanks.min(by: { rankOf($0) < rankOf($1) }) {
+                    return bank
+                }
+            }
             // Otherwise take it as cheaply as possible — don't waste the Tiger
             // on a low trick.
             let cheapest = winners.min { strength($0, led: led, trump: trump)
@@ -510,6 +590,43 @@ enum PlayoutPolicy {
         let bullIsCostly = !partnerWinning && moneyOnTable > 0
         return cheapestShed(followingPool, led: led, trump: trump,
                             bullIsCostly: bullIsCostly)
+    }
+
+    /// Would `card`, played by `seat` now, win this trick against EVERY card
+    /// the yet-to-play seats can legally answer with? Full-information and
+    /// legality-aware: a seat holding the led color must follow (its trump
+    /// cannot over-ruff), while a void seat threatens with any trump — or
+    /// with the Bear, which zeroes a banked trick and so also defeats the
+    /// purpose. Used by the `bankWin` rollout rule.
+    private static func winIsUnassailable(_ card: Card,
+                                          state: GameState,
+                                          seat: PlayerID,
+                                          onTable: [PlayedCard],
+                                          led: CardColor?,
+                                          trump: CardColor) -> Bool {
+        let played = Set(onTable.map(\.player))
+        let yetToPlay = Seats.all.filter { !played.contains($0) && $0 != seat }
+        guard !yetToPlay.isEmpty else { return true }
+
+        let myStrength = strength(card, led: led, trump: trump)
+        for s in yetToPlay {
+            let hand = state.hands[s] ?? []
+            let canFollow = led != nil
+                && hand.contains { $0.effectiveColor(trump: trump) == led }
+            for c in hand {
+                if canFollow {
+                    // Must follow: only led-color answers are legal.
+                    guard c.effectiveColor(trump: trump) == led else { continue }
+                    if strength(c, led: led, trump: trump) > myStrength { return false }
+                } else {
+                    // Void (or no led color yet): any card is legal,
+                    // including a ruff or the trick-zeroing Bear.
+                    if c.isBear { return false }
+                    if strength(c, led: led, trump: trump) > myStrength { return false }
+                }
+            }
+        }
+        return true
     }
 
     /// Is partner's currently-winning card safe from over-trump / over-rank
