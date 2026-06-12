@@ -141,6 +141,10 @@ private struct HostLobbyCore: View {
             }
         }
         .onAppear {
+            if !didStartHand {
+                BackgroundMusicPlayer.shared.setGameActive(false)
+                BackgroundMusicPlayer.shared.playLobbyMusic()
+            }
             multipeer.maxConnectedPeers = mode.maxConnectedPeers
             configureHostRole()
             multipeer.start()
@@ -462,6 +466,7 @@ private struct HostLobbyCore: View {
     }
 
     private func startHand() {
+        BackgroundMusicPlayer.shared.stop()
         configureHostRole()
 
         for seat in assignableSeats {

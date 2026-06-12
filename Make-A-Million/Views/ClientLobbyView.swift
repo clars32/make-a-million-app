@@ -58,11 +58,18 @@ struct ClientLobbyView: View {
                 }
             }
         }
-        .onAppear { multipeer.startBrowsing() }
+        .onAppear {
+            if clientSession == nil {
+                BackgroundMusicPlayer.shared.setGameActive(false)
+                BackgroundMusicPlayer.shared.playLobbyMusic()
+            }
+            multipeer.startBrowsing()
+        }
         .onDisappear { multipeer.stop() }
         .onChange(of: multipeer.state) { _, newState in
             switch newState {
             case .connected:
+                BackgroundMusicPlayer.shared.stop()
                 // Bind a fresh ClientSession to the (possibly brand-new,
                 // post-reconnect) transport. The old session, if any, is
                 // tied to a dead transport, so replace it outright.
@@ -75,7 +82,11 @@ struct ClientLobbyView: View {
             case .failed, .idle:
                 clientSession?.stop()
                 clientSession = nil
+                BackgroundMusicPlayer.shared.setGameActive(false)
+                BackgroundMusicPlayer.shared.playLobbyMusic()
             case .browsing, .connecting:
+                BackgroundMusicPlayer.shared.setGameActive(false)
+                BackgroundMusicPlayer.shared.playLobbyMusic()
                 break
             }
         }

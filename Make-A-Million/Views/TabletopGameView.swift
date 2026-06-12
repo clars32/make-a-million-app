@@ -89,6 +89,7 @@ struct TabletopGameView: View {
             DispatchQueue.main.async { lastView = d }
         }
         .onAppear {
+            BackgroundMusicPlayer.shared.setGameActive(true)
             #if canImport(UIKit)
             OrientationLock.shared.lock(.landscape)
             #endif

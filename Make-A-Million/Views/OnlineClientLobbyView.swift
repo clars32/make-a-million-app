@@ -47,6 +47,8 @@ struct OnlineClientLobbyView: View {
             }
         }
         .onAppear {
+            BackgroundMusicPlayer.shared.setGameActive(false)
+            BackgroundMusicPlayer.shared.playLobbyMusic()
             gameCenter.configureAuthentication()
             connectIfInvited()
         }
@@ -224,6 +226,7 @@ private struct ConnectedContent: View {
                 hostName: client.hostName,
                 session: session,
                 onExit: onExit)
+            .onAppear { BackgroundMusicPlayer.shared.setGameActive(true) }
 
         case .connecting:
             ZStack {
@@ -239,6 +242,10 @@ private struct ConnectedContent: View {
                 }
                 .padding(24)
                 .tablePanel(cornerRadius: 16, shadowOpacity: 0.16)
+            }
+            .onAppear {
+                BackgroundMusicPlayer.shared.setGameActive(false)
+                BackgroundMusicPlayer.shared.playLobbyMusic()
             }
 
         case .failed(let message):
@@ -258,6 +265,10 @@ private struct ConnectedContent: View {
                 }
                 .padding(24)
                 .tablePanel(cornerRadius: 16, shadowOpacity: 0.16)
+            }
+            .onAppear {
+                BackgroundMusicPlayer.shared.setGameActive(false)
+                BackgroundMusicPlayer.shared.playLobbyMusic()
             }
         }
     }

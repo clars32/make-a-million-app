@@ -110,12 +110,17 @@ final class SoundEffectPlayer {
 
     private func configureSessionIfNeeded() {
         guard !didConfigureSession else { return }
-        didConfigureSession = true
 
         do {
-            try AVAudioSession.sharedInstance().setCategory(.ambient, options: [.mixWithOthers])
+            let session = AVAudioSession.sharedInstance()
+            try session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
+            try session.setActive(true)
+            didConfigureSession = true
         } catch {
             // Sound effects are nice-to-have; gameplay should never depend on audio.
+            #if DEBUG
+            print("SoundEffectPlayer failed to configure audio session: \(error)")
+            #endif
         }
     }
 
@@ -128,6 +133,9 @@ final class SoundEffectPlayer {
             player.prepareToPlay()
             return player
         } catch {
+            #if DEBUG
+            print("SoundEffectPlayer failed to load \(cueName): \(error)")
+            #endif
             return nil
         }
     }
@@ -139,6 +147,88 @@ final class SoundEffectPlayer {
             }
             if let url = Bundle.main.url(forResource: cueName, withExtension: ext) {
                 return url
+            }
+        }
+        return nil
+    }
+}
+
+@MainActor
+final class BackgroundMusicPlayer {
+    static let shared = BackgroundMusicPlayer()
+
+    private var player: AVAudioPlayer?
+    private var didConfigureSession = false
+    private var gameActive = false
+
+    private init() {}
+
+    func setGameActive(_ active: Bool) {
+        gameActive = active
+        if active {
+            stop()
+        }
+    }
+
+    func playLobbyMusic() {
+        guard !gameActive, GameSettings.shared.musicEnabled else {
+            stop()
+            return
+        }
+
+        configureSessionIfNeeded()
+
+        let musicPlayer: AVAudioPlayer
+        if let cached = player {
+            musicPlayer = cached
+        } else {
+            guard let loaded = loadPlayer(named: "lobby_music") else { return }
+            loaded.numberOfLoops = -1
+            loaded.volume = 0.24
+            player = loaded
+            musicPlayer = loaded
+        }
+
+        guard !musicPlayer.isPlaying else { return }
+        musicPlayer.play()
+    }
+
+    func stop() {
+        guard let player, player.isPlaying else { return }
+        player.stop()
+        player.currentTime = 0
+    }
+
+    private func configureSessionIfNeeded() {
+        guard !didConfigureSession else { return }
+
+        do {
+            let session = AVAudioSession.sharedInstance()
+            try session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
+            try session.setActive(true)
+            didConfigureSession = true
+        } catch {
+            #if DEBUG
+            print("BackgroundMusicPlayer failed to configure audio session: \(error)")
+            #endif
+        }
+    }
+
+    private func loadPlayer(named cueName: String) -> AVAudioPlayer? {
+        for ext in ["mp3", "m4a", "wav", "aif", "aiff"] {
+            let url = Bundle.main.url(forResource: cueName, withExtension: ext, subdirectory: "Sounds")
+                ?? Bundle.main.url(forResource: cueName, withExtension: ext)
+            guard let url else { continue }
+
+            do {
+                let player = try AVAudioPlayer(contentsOf: url)
+                player.prepareToPlay()
+                return player
+            } catch {
+                #if DEBUG
+                print("BackgroundMusicPlayer failed to load \(cueName): \(error)")
+                #endif
+                return nil
             }
         }
         return nil

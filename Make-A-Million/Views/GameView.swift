@@ -55,6 +55,7 @@ struct GameView: View {
                 showingSettings = false
             }
         }
+        .onAppear { BackgroundMusicPlayer.shared.setGameActive(true) }
     }
 }
 

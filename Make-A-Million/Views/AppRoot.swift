@@ -39,6 +39,17 @@ struct AppRoot: View {
         case joiningLocal
         case hostingOnline
         case joiningOnline
+
+        var playsLobbyMusic: Bool {
+            switch self {
+            case .picking, .pickingJoin, .pickingHost,
+                 .hostingLocal, .hostingTabletop, .joiningLocal,
+                 .hostingOnline, .joiningOnline:
+                return true
+            case .solo:
+                return false
+            }
+        }
     }
 
     @State private var mode: Mode = .picking
@@ -109,6 +120,7 @@ struct AppRoot: View {
             #if canImport(UIKit)
             OrientationLock.shared.lock(.portrait)
             #endif
+            updateLobbyMusic(for: mode)
             // Install the Game Center authenticate handler early so an
             // invite that launches the app is caught no matter what
             // screen is showing. Sign-in UI stays deferred until the
@@ -130,12 +142,26 @@ struct AppRoot: View {
                 OrientationLock.shared.lock(.portrait)
             }
             #endif
+            updateLobbyMusic(for: mode)
+        }
+        .onChange(of: settings.musicEnabled) { _, _ in
+            updateLobbyMusic(for: mode)
         }
         .sheet(isPresented: $showingSettings) {
             // Home-screen entry: no hand in progress, so rules are editable.
             SettingsView(settings: settings, rulesLocked: false) {
                 showingSettings = false
             }
+        }
+    }
+
+    private func updateLobbyMusic(for mode: Mode) {
+        if mode.playsLobbyMusic {
+            BackgroundMusicPlayer.shared.setGameActive(false)
+            BackgroundMusicPlayer.shared.playLobbyMusic()
+        } else {
+            BackgroundMusicPlayer.shared.setGameActive(true)
+            BackgroundMusicPlayer.shared.stop()
         }
     }
 

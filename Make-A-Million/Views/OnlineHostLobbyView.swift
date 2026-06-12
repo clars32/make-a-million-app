@@ -64,7 +64,13 @@ struct OnlineHostLobbyView: View {
                 lobbyContent
             }
         }
-        .onAppear { gameCenter.configureAuthentication() }
+        .onAppear {
+            if !didStartHand {
+                BackgroundMusicPlayer.shared.setGameActive(false)
+                BackgroundMusicPlayer.shared.playLobbyMusic()
+            }
+            gameCenter.configureAuthentication()
+        }
         .onDisappear {
             if !didStartHand { host.stop() }
         }
@@ -357,6 +363,7 @@ struct OnlineHostLobbyView: View {
     }
 
     private func startHand() {
+        BackgroundMusicPlayer.shared.stop()
         for seatRaw in [1, 2, 3] {
             let seat = PlayerID(seatRaw)
             if let playerID = seatAssignments[seatRaw],

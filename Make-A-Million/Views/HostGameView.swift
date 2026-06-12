@@ -97,6 +97,7 @@ struct HostGameView: View {
                 showingSettings = false
             }
         }
+        .onAppear { BackgroundMusicPlayer.shared.setGameActive(true) }
     }
 
     private func pausedOverlay(reason: PauseReason) -> some View {

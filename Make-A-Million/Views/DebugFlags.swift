@@ -67,6 +67,8 @@ final class GameSettings: ObservableObject {
     @Published var soundEffectsEnabled: Bool { didSet { persist() } }
     /// Larger animal cue audio, including the bull stampede music.
     @Published var animalSoundsEnabled: Bool { didSet { persist() } }
+    /// Loop background music on menus and pre-game lobbies.
+    @Published var musicEnabled: Bool { didSet { persist() } }
     /// Shared gain for all short sound effects and animal cues.
     @Published var soundEffectsVolume: Double { didSet { persist() } }
 
@@ -109,6 +111,7 @@ final class GameSettings: ObservableObject {
         static let animalFX       = "settings.animalAnimations"
         static let soundFX        = "settings.soundEffectsEnabled"
         static let animalSounds   = "settings.animalSoundsEnabled"
+        static let music          = "settings.musicEnabled"
         static let soundVolume    = "settings.soundEffectsVolume"
         static let misdealEnabled = "settings.misdealEnabled"
         static let misdealAmount  = "settings.misdealThreshold"
@@ -135,6 +138,7 @@ final class GameSettings: ObservableObject {
         animalAnimations         = d.object(forKey: Key.animalFX) as? Bool ?? true
         soundEffectsEnabled      = d.object(forKey: Key.soundFX) as? Bool ?? true
         animalSoundsEnabled      = d.object(forKey: Key.animalSounds) as? Bool ?? true
+        musicEnabled             = d.object(forKey: Key.music) as? Bool ?? true
         soundEffectsVolume       = d.object(forKey: Key.soundVolume) as? Double ?? 0.72
         misdealEnabled           = d.object(forKey: Key.misdealEnabled) as? Bool ?? true
         misdealThreshold         = d.object(forKey: Key.misdealAmount) as? Int ?? 15_000
@@ -161,6 +165,7 @@ final class GameSettings: ObservableObject {
         d.set(animalAnimations,         forKey: Key.animalFX)
         d.set(soundEffectsEnabled,      forKey: Key.soundFX)
         d.set(animalSoundsEnabled,      forKey: Key.animalSounds)
+        d.set(musicEnabled,             forKey: Key.music)
         d.set(soundEffectsVolume,       forKey: Key.soundVolume)
         d.set(misdealEnabled,           forKey: Key.misdealEnabled)
         d.set(misdealThreshold,         forKey: Key.misdealAmount)
@@ -383,6 +388,7 @@ struct SettingsView: View {
     private var audiovisualSection: some View {
         Section {
             Toggle("Animal animations", isOn: $settings.animalAnimations)
+            Toggle("Music", isOn: $settings.musicEnabled)
             Toggle("Sound effects", isOn: $settings.soundEffectsEnabled)
             Toggle("Animal sounds", isOn: $settings.animalSoundsEnabled)
                 .disabled(!settings.soundEffectsEnabled)
@@ -396,6 +402,17 @@ struct SettingsView: View {
                     .frame(width: 44, alignment: .trailing)
             }
             .disabled(!settings.soundEffectsEnabled)
+            HStack {
+                Button("Test table sound") {
+                    SoundEffectPlayer.shared.play(.cardPlay)
+                }
+                .disabled(!settings.soundEffectsEnabled)
+                Spacer()
+                Button("Test animal sound") {
+                    SoundEffectPlayer.shared.play(.animalTiger)
+                }
+                .disabled(!settings.soundEffectsEnabled || !settings.animalSoundsEnabled)
+            }
         } header: {
             Text("Audiovisual")
         } footer: {

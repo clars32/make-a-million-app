@@ -72,6 +72,7 @@ struct ClientGameView: View {
             }
         }
         .onAppear {
+            BackgroundMusicPlayer.shared.setGameActive(true)
             setOrientationForMode()
             lastView = tableView
         }
