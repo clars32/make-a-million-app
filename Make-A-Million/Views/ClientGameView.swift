@@ -220,9 +220,14 @@ struct ClientGameView: View {
     private func misdealBar(_ view: PlayerView) -> some View {
         if view.legalMoves.contains(.declineMisdeal) {
             HStack(spacing: 12) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(TableTypography.display(.subheadline, weight: .bold))
+                    .foregroundStyle(TableStyle.teamAmber)
                 Text("Misdeal called — redeal?")
-                    .font(TableTypography.display(.subheadline, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.9))
+                    .font(TableTypography.display(.subheadline, weight: .bold))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.82)
                 actionButton("Redeal", tint: TableStyle.actionBlue) {
                     session.submit(.callMisdeal)
                 }
@@ -230,7 +235,7 @@ struct ClientGameView: View {
                     session.submit(.declineMisdeal)
                 }
             }
-            .barChrome()
+            .warningBarChrome()
             .transition(.move(edge: .bottom).combined(with: .opacity))
         }
     }
@@ -410,9 +415,9 @@ struct ClientGameView: View {
                 session.stop()
                 onExit()
             }
-                .buttonStyle(.borderedProminent)
-                .tint(TableStyle.actionBlue)
-                .padding(.top, 6)
+            .buttonStyle(TablePillButtonStyle(tint: TableStyle.actionBlue,
+                                              compact: true))
+            .padding(.top, 6)
         }
     }
 
@@ -501,5 +506,20 @@ private extension View {
             }
             .overlay(Capsule().stroke(TableStyle.panelStroke, lineWidth: 1))
             .shadow(color: .black.opacity(0.28), radius: 10, y: 4)
+    }
+
+    /// Higher-contrast chrome for urgent table decisions such as misdeal votes.
+    func warningBarChrome() -> some View {
+        self
+            .padding(.horizontal, 18).padding(.vertical, 11)
+            .background {
+                Capsule()
+                    .fill(.ultraThinMaterial)
+                    .overlay { Capsule().fill(.black.opacity(0.24)) }
+                    .overlay { Capsule().fill(TableStyle.teamAmber.opacity(0.14)) }
+            }
+            .overlay(Capsule().stroke(TableStyle.teamAmber.opacity(0.82), lineWidth: 1.5))
+            .shadow(color: TableStyle.teamAmber.opacity(0.20), radius: 14, y: 4)
+            .shadow(color: .black.opacity(0.34), radius: 12, y: 5)
     }
 }

@@ -7,6 +7,14 @@
 
 import XCTest
 
+private extension XCUIApplication {
+    static func makeSilent() -> XCUIApplication {
+        let app = XCUIApplication()
+        app.launchEnvironment["MAM_DISABLE_AUDIO"] = "1"
+        return app
+    }
+}
+
 final class Make_A_MillionUITests: XCTestCase {
 
     override func setUpWithError() throws {
@@ -26,7 +34,7 @@ final class Make_A_MillionUITests: XCTestCase {
     func testExample() throws {
         // UI tests must launch the application that they test.
         XCUIDevice.shared.orientation = .portrait
-        let app = XCUIApplication()
+        let app = XCUIApplication.makeSilent()
         app.launch()
 
         // Use XCTAssert and related functions to verify your tests produce the correct results.
@@ -39,7 +47,7 @@ final class Make_A_MillionUITests: XCTestCase {
     /// Solo now deals immediately, so in-game settings should lock rules.
     @MainActor
     func testRuleSettingsLockDuringHandButDisplayStaysEditable() throws {
-        let app = XCUIApplication()
+        let app = XCUIApplication.makeSilent()
         app.launch()
 
         let homeGear = app.buttons["Settings"]
@@ -76,7 +84,7 @@ final class Make_A_MillionUITests: XCTestCase {
         // This measures how long it takes to launch your application.
         measure(metrics: [XCTApplicationLaunchMetric()]) {
             XCUIDevice.shared.orientation = .portrait
-            XCUIApplication().launch()
+            XCUIApplication.makeSilent().launch()
         }
     }
 }

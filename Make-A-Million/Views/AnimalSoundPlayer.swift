@@ -5,6 +5,20 @@
 
 import AVFoundation
 
+enum AppAudioPolicy {
+    static let disableAudioEnvironmentKey = "MAM_DISABLE_AUDIO"
+
+    static var isSuppressedForAutomation: Bool {
+        let environment = ProcessInfo.processInfo.environment
+        if environment[disableAudioEnvironmentKey] == "1" { return true }
+
+        // Hosted unit tests run inside the app process. Keep those launches
+        // silent so automated test runs do not start lobby music on the host.
+        return environment["XCTestConfigurationFilePath"] != nil
+            || environment["XCTestBundlePath"] != nil
+    }
+}
+
 @MainActor
 enum SoundCue: Hashable {
     case buttonSelect
@@ -100,6 +114,7 @@ final class SoundEffectPlayer {
     }
 
     private func shouldPlay(_ cue: SoundCue) -> Bool {
+        guard !AppAudioPolicy.isSuppressedForAutomation else { return false }
         guard GameSettings.shared.soundEffectsEnabled else { return false }
         if cue.usesAnimalSetting && !GameSettings.shared.animalSoundsEnabled { return false }
 
@@ -171,7 +186,9 @@ final class BackgroundMusicPlayer {
     }
 
     func playLobbyMusic() {
-        guard !gameActive, GameSettings.shared.musicEnabled else {
+        guard !AppAudioPolicy.isSuppressedForAutomation,
+              !gameActive,
+              GameSettings.shared.musicEnabled else {
             stop()
             return
         }

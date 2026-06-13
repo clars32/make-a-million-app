@@ -92,6 +92,7 @@ private struct HostLobbyCore: View {
     @State private var bridgeToken: AnyObject? = nil
     @State private var hostSeat: PlayerID?
     @State private var seatAssignments: [Int: AnyHashable] = [:]
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// seat -> peerID for seats wired into the running hand. Unlike
     /// seatAssignments (a lobby concern that's cleared when a peer drops),
@@ -124,22 +125,30 @@ private struct HostLobbyCore: View {
             background
 
             if didStartHand {
-                if mode.isTabletop {
-                    TabletopGameView(
-                        netSession: netSession,
-                        gameSession: gameSession,
-                        onExit: stopAndExit)
-                } else {
-                    HostGameView(
-                        netSession: netSession,
-                        gameSession: gameSession,
-                        human: gameSession.human,
-                        onExit: stopAndExit)
+                Group {
+                    if mode.isTabletop {
+                        TabletopGameView(
+                            netSession: netSession,
+                            gameSession: gameSession,
+                            onExit: stopAndExit)
+                    } else {
+                        HostGameView(
+                            netSession: netSession,
+                            gameSession: gameSession,
+                            human: gameSession.human,
+                            onExit: stopAndExit)
+                    }
                 }
+                .transition(TableMotion.screenTransition(reduceMotion: reduceMotion))
+                .zIndex(1)
             } else {
                 lobbyContent
+                    .transition(TableMotion.screenTransition(reduceMotion: reduceMotion))
+                    .zIndex(0)
             }
         }
+        .animation(TableMotion.screenAnimation(reduceMotion: reduceMotion),
+                   value: didStartHand)
         .onAppear {
             if !didStartHand {
                 BackgroundMusicPlayer.shared.setGameActive(false)
@@ -177,6 +186,7 @@ private struct HostLobbyCore: View {
             header
             modeSummary
             advertisingStatus
+            seatPreview
             seatList
             Spacer()
             startButton
@@ -198,15 +208,18 @@ private struct HostLobbyCore: View {
             Button { showingSettings = true } label: {
                 Image(systemName: "gearshape.fill")
             }
-            .buttonStyle(.bordered)
-            .tint(TableStyle.cardSelected)
+            .buttonStyle(TableIconButtonStyle(tint: TableStyle.cardSelected,
+                                              size: 38))
             .accessibilityLabel("Settings")
-            Button("Stop") {
+            Button {
                 multipeer.stop()
                 onExit()
+            } label: {
+                Label("Stop", systemImage: "xmark")
             }
-            .buttonStyle(.bordered)
-            .tint(TableStyle.teamAmber)
+            .buttonStyle(TablePillButtonStyle(tint: TableStyle.teamAmber,
+                                              emphasis: .tinted,
+                                              compact: true))
         }
         .sheet(isPresented: $showingSettings) {
             // Pre-match: rules are editable here and apply to the first deal.
@@ -252,6 +265,82 @@ private struct HostLobbyCore: View {
         }
         .padding(12)
         .tablePanel(cornerRadius: 12, shadowOpacity: 0.14)
+    }
+
+    private var seatPreview: some View {
+        GeometryReader { proxy in
+            let sideOffset = min(128, max(86, proxy.size.width * 0.30))
+            ZStack {
+                RoundedRectangle(cornerRadius: 72, style: .continuous)
+                    .fill(Color.white.opacity(0.045))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 72, style: .continuous)
+                            .stroke(Color.white.opacity(0.10), lineWidth: 1)
+                    }
+                    .frame(height: 118)
+                    .padding(.horizontal, min(46, proxy.size.width * 0.12))
+
+                seatPreviewChip(PlayerID(2))
+                    .offset(y: -58)
+                seatPreviewChip(PlayerID(0))
+                    .offset(y: 58)
+                seatPreviewChip(PlayerID(1))
+                    .offset(x: -sideOffset)
+                seatPreviewChip(PlayerID(3))
+                    .offset(x: sideOffset)
+
+                VStack(spacing: 3) {
+                    Image(systemName: mode.isTabletop ? "rectangle.on.rectangle.angled" : "suit.club.fill")
+                        .font(TableTypography.display(.title3, weight: .bold))
+                        .foregroundStyle(TableStyle.tableGold)
+                    Text(mode.isTabletop ? "Shared Board" : "Hosted Table")
+                        .font(TableTypography.display(.caption, weight: .bold))
+                        .foregroundStyle(.white.opacity(0.72))
+                }
+            }
+            .frame(width: proxy.size.width, height: proxy.size.height)
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: 178)
+        .padding(.horizontal, 4)
+        .tablePanel(cornerRadius: 18, shadowOpacity: 0.16)
+    }
+
+    private func seatPreviewChip(_ seat: PlayerID) -> some View {
+        let kind = seatKind(for: seat)
+        return VStack(spacing: 2) {
+            Text(seatLabel(seat))
+                .font(TableTypography.display(.caption2, weight: .bold))
+                .foregroundStyle(kind.borderColor)
+            Text(seatPreviewName(seat: seat, kind: kind))
+                .font(TableTypography.display(.caption2, weight: .semibold))
+                .foregroundStyle(.white)
+                .lineLimit(1)
+                .minimumScaleFactor(0.72)
+        }
+        .frame(width: 94, height: 46)
+        .background {
+            Capsule()
+                .fill(.ultraThinMaterial)
+                .overlay { Capsule().fill(kind.borderColor.opacity(0.12)) }
+        }
+        .overlay(Capsule().stroke(kind.borderColor.opacity(0.56), lineWidth: 1))
+        .shadow(color: .black.opacity(0.20), radius: 5, y: 2)
+    }
+
+    private func seatPreviewName(seat: PlayerID, kind: SeatKind) -> String {
+        switch kind {
+        case .host:
+            return "You"
+        case .peer:
+            guard let peerID = seatAssignments[seat.raw],
+                  let peer = multipeer.connectedPeers.first(where: { AnyHashable($0.id) == peerID }) else {
+                return "Player"
+            }
+            return peer.displayName
+        case .empty:
+            return "Bot"
+        }
     }
 
     // MARK: Seat list & assignments
@@ -454,15 +543,10 @@ private struct HostLobbyCore: View {
 
     private var startButton: some View {
         Button { startHand() } label: {
-            Text(mode.startTitle)
-                .font(TableTypography.display(.headline, weight: .bold))
-                .foregroundStyle(.white)
+            Label(mode.startTitle, systemImage: "play.fill")
                 .frame(maxWidth: .infinity)
-                .padding(.vertical, 14)
-                .background(Capsule(style: .continuous).fill(TableStyle.actionBlue))
-                .overlay(Capsule(style: .continuous).stroke(.white.opacity(0.20), lineWidth: 1))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(TablePillButtonStyle(tint: TableStyle.actionBlue))
     }
 
     private func startHand() {
@@ -481,7 +565,9 @@ private struct HostLobbyCore: View {
 
         bridgeToken = netSession.bindHostSession(gameSession)
         netSession.start(dealSeed: dealSeed)
-        didStartHand = true
+        withAnimation(TableMotion.screenAnimation(reduceMotion: reduceMotion)) {
+            didStartHand = true
+        }
     }
 
     private func stopAndExit() {

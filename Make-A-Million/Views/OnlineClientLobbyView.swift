@@ -31,21 +31,34 @@ struct OnlineClientLobbyView: View {
     @ObservedObject private var gameCenter = GameCenterManager.shared
     @State private var client: GameCenterClient? = nil
     @State private var clientSession: ClientSession? = nil
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     // UI animation state for the waiting room.
     @State private var isSearching = false
 
+    private var showingConnectedContent: Bool {
+        client != nil && clientSession != nil
+    }
+
     var body: some View {
-        Group {
+        ZStack {
+            TableFeltBackground()
+
             if let client, let session = clientSession {
                 ConnectedContent(
                     client: client,
                     session: session,
                     onExit: { teardown(); onExit() })
+                .transition(TableMotion.screenTransition(reduceMotion: reduceMotion))
+                .zIndex(1)
             } else {
                 waitingRoom
+                    .transition(TableMotion.screenTransition(reduceMotion: reduceMotion))
+                    .zIndex(0)
             }
         }
+        .animation(TableMotion.screenAnimation(reduceMotion: reduceMotion),
+                   value: showingConnectedContent)
         .onAppear {
             BackgroundMusicPlayer.shared.setGameActive(false)
             BackgroundMusicPlayer.shared.playLobbyMusic()
@@ -113,12 +126,15 @@ struct OnlineClientLobbyView: View {
                     .foregroundStyle(.white.opacity(0.66))
             }
             Spacer()
-            Button("Back") {
+            Button {
                 teardown()
                 onExit()
+            } label: {
+                Label("Back", systemImage: "chevron.left")
             }
-            .buttonStyle(.bordered)
-            .tint(TableStyle.teamAmber)
+            .buttonStyle(TablePillButtonStyle(tint: TableStyle.teamAmber,
+                                              emphasis: .tinted,
+                                              compact: true))
         }
     }
 
@@ -176,8 +192,8 @@ struct OnlineClientLobbyView: View {
                 Button("Sign in to Game Center") {
                     gameCenter.presentSignIn()
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(TableStyle.actionBlue)
+                .buttonStyle(TablePillButtonStyle(tint: TableStyle.actionBlue,
+                                                  compact: true))
             }
             .frame(maxWidth: .infinity)
             .padding(20)
@@ -211,6 +227,7 @@ private struct ConnectedContent: View {
     @ObservedObject var gameCenter = GameCenterManager.shared
     let session: ClientSession
     let onExit: () -> Void
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     init(client: GameCenterClient, session: ClientSession, onExit: @escaping () -> Void) {
         self.client = client
@@ -219,57 +236,67 @@ private struct ConnectedContent: View {
     }
 
     var body: some View {
-        switch client.state {
-        case .connected:
-            ClientGameView(
-                playerName: gameCenter.localDisplayName,
-                hostName: client.hostName,
-                session: session,
-                onExit: onExit)
-            .onAppear { BackgroundMusicPlayer.shared.setGameActive(true) }
+        ZStack {
+            TableFeltBackground()
 
-        case .connecting:
-            ZStack {
-                TableFeltBackground()
-                VStack(spacing: 14) {
-                    ProgressView().scaleEffect(1.4).tint(TableStyle.tableGold)
-                    Text("Connecting to \(client.hostName)…")
-                        .font(TableTypography.display(.headline, weight: .bold))
-                        .foregroundStyle(.white)
-                    Button("Cancel") { onExit() }
-                        .buttonStyle(.bordered)
-                        .tint(TableStyle.teamAmber)
-                }
-                .padding(24)
-                .tablePanel(cornerRadius: 16, shadowOpacity: 0.16)
-            }
-            .onAppear {
-                BackgroundMusicPlayer.shared.setGameActive(false)
-                BackgroundMusicPlayer.shared.playLobbyMusic()
-            }
+            switch client.state {
+            case .connected:
+                ClientGameView(
+                    playerName: gameCenter.localDisplayName,
+                    hostName: client.hostName,
+                    session: session,
+                    onExit: onExit)
+                .transition(TableMotion.screenTransition(reduceMotion: reduceMotion))
+                .onAppear { BackgroundMusicPlayer.shared.setGameActive(true) }
 
-        case .failed(let message):
-            ZStack {
-                TableFeltBackground()
-                VStack(spacing: 14) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.system(size: 40))
-                        .foregroundStyle(TableStyle.teamAmber)
-                    Text(message)
-                        .multilineTextAlignment(.center)
-                        .font(TableTypography.display(.callout))
-                        .foregroundStyle(.white.opacity(0.68))
-                    Button("Back") { onExit() }
-                        .buttonStyle(.borderedProminent)
-                        .tint(TableStyle.actionBlue)
+            case .connecting:
+                ZStack {
+                    TableFeltBackground()
+                    VStack(spacing: 14) {
+                        ProgressView().scaleEffect(1.4).tint(TableStyle.tableGold)
+                        Text("Connecting to \(client.hostName)…")
+                            .font(TableTypography.display(.headline, weight: .bold))
+                            .foregroundStyle(.white)
+                        Button("Cancel") { onExit() }
+                            .buttonStyle(TablePillButtonStyle(tint: TableStyle.teamAmber,
+                                                              emphasis: .tinted,
+                                                              compact: true))
+                    }
+                    .padding(24)
+                    .tablePanel(cornerRadius: 16, shadowOpacity: 0.16)
                 }
-                .padding(24)
-                .tablePanel(cornerRadius: 16, shadowOpacity: 0.16)
-            }
-            .onAppear {
-                BackgroundMusicPlayer.shared.setGameActive(false)
-                BackgroundMusicPlayer.shared.playLobbyMusic()
+                .transition(TableMotion.screenTransition(reduceMotion: reduceMotion))
+                .onAppear {
+                    BackgroundMusicPlayer.shared.setGameActive(false)
+                    BackgroundMusicPlayer.shared.playLobbyMusic()
+                }
+
+            case .failed(let message):
+                ZStack {
+                    TableFeltBackground()
+                    VStack(spacing: 14) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: 40))
+                            .foregroundStyle(TableStyle.teamAmber)
+                        Text(message)
+                            .multilineTextAlignment(.center)
+                            .font(TableTypography.display(.callout))
+                            .foregroundStyle(.white.opacity(0.68))
+                        Button("Back") { onExit() }
+                            .buttonStyle(TablePillButtonStyle(tint: TableStyle.actionBlue,
+                                                              compact: true))
+                    }
+                    .padding(24)
+                    .tablePanel(cornerRadius: 16, shadowOpacity: 0.16)
+                }
+                .transition(TableMotion.screenTransition(reduceMotion: reduceMotion))
+                .onAppear {
+                    BackgroundMusicPlayer.shared.setGameActive(false)
+                    BackgroundMusicPlayer.shared.playLobbyMusic()
+                }
             }
         }
+        .animation(TableMotion.screenAnimation(reduceMotion: reduceMotion),
+                   value: client.state)
     }
 }

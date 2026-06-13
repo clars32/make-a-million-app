@@ -7,6 +7,14 @@
 
 import XCTest
 
+private extension XCUIApplication {
+    static func makeSilent() -> XCUIApplication {
+        let app = XCUIApplication()
+        app.launchEnvironment["MAM_DISABLE_AUDIO"] = "1"
+        return app
+    }
+}
+
 final class Make_A_MillionUITestsLaunchTests: XCTestCase {
 
     override class var runsForEachTargetApplicationUIConfiguration: Bool {
@@ -20,7 +28,7 @@ final class Make_A_MillionUITestsLaunchTests: XCTestCase {
     @MainActor
     func testLaunch() throws {
         XCUIDevice.shared.orientation = .portrait
-        let app = XCUIApplication()
+        let app = XCUIApplication.makeSilent()
         app.launch()
 
         // Insert steps here to perform after app launch but before taking a screenshot,

@@ -32,14 +32,19 @@ struct GameView: View {
                 } label: {
                     Image(systemName: "gearshape.fill")
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(TableIconButtonStyle(tint: TableStyle.cardSelected,
+                                                  size: usesTabletChrome ? 44 : 38))
                 .accessibilityLabel("Settings")
 
-                Button("Back") {
+                Button {
                     SoundEffectPlayer.shared.play(.buttonSelect)
                     onExit()
+                } label: {
+                    Label("Back", systemImage: "chevron.left")
                 }
-                    .buttonStyle(.bordered)
+                .buttonStyle(TablePillButtonStyle(tint: TableStyle.teamAmber,
+                                                  emphasis: .tinted,
+                                                  compact: !usesTabletChrome))
             }
             .font(usesTabletChrome ? TableTypography.display(.title3, weight: .semibold) : TableTypography.display(.body))
             .controlSize(usesTabletChrome ? .large : .regular)
@@ -127,6 +132,14 @@ private struct SoloGameBody: View {
     }
 }
 
+private struct BoardHeaderCenterHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
 // MARK: - Shared body
 
 struct GameBody: View {
@@ -156,6 +169,7 @@ struct GameBody: View {
     @State private var lastDealAnimationToken: Int = -1
     @State private var showingDealAnimation: Bool = false
     @State private var selectedTrickHistorySeat: PlayerID? = nil
+    @State private var boardHeaderCenterHeight: CGFloat = 0
 
     private var teamAName: String {
         guard seatNames.count == 4 else { return "Team A" }
@@ -246,7 +260,7 @@ struct GameBody: View {
         let centerActionActive = actionActive && !biddingActive
         return ZStack {
             VStack(spacing: 8) {
-                boardHeader(table)
+                boardHeader(table, decision: decision, interactive: interactive)
 
                 if showsBidHistoryStrip(table) {
                     bidHistoryStrip(table)
@@ -271,7 +285,7 @@ struct GameBody: View {
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                 } else if !actionActive {
                     if interactive && decision.phase == .trickPlay {
-                        hintText("Tap a card in your hand to play it.")
+                        hintText("Highlighted cards are legal.")
                     } else if !interactive {
                         hintText(caughtUp ? "Waiting for other players…" : "Watching play…")
                     }
@@ -303,7 +317,7 @@ struct GameBody: View {
         let biddingActive = interactive && decision.phase == .bidding
         let centerActionActive = actionActive && !biddingActive
         return VStack(spacing: 8) {
-            boardHeader(table)
+            boardHeader(table, decision: decision, interactive: false)
                 .hidden()
 
             if table.phase == .misdealDecision {
@@ -330,7 +344,7 @@ struct GameBody: View {
                     .hidden()
             } else if !actionActive {
                 if interactive && decision.phase == .trickPlay {
-                    hintText("Tap a card in your hand to play it.")
+                    hintText("Highlighted cards are legal.")
                         .hidden()
                 } else if !interactive {
                     hintText(caughtUp ? "Waiting for other players…" : "Watching play…")
@@ -381,18 +395,124 @@ struct GameBody: View {
 
     // MARK: Board header (scores + phase + trump / high bid)
 
-    private func boardHeader(_ table: PlayerView) -> some View {
-        HStack(alignment: .top, spacing: isTabletLayout ? 14 : 6) {
-            teamScorePill(team: 0, table)
+    private func boardHeader(_ table: PlayerView,
+                             decision: PlayerView,
+                             interactive: Bool) -> some View {
+        let status = phaseStatus(table: table,
+                                 decision: decision,
+                                 interactive: interactive)
+        let scoreMinHeight = boardHeaderCenterHeight > 0 ? boardHeaderCenterHeight : nil
+        return HStack(alignment: .top, spacing: isTabletLayout ? 14 : 6) {
+            teamScorePill(team: 0, table, minHeight: scoreMinHeight)
             VStack(spacing: 6) {
                 Text(table.phase.headline)
                     .font(TableTypography.display(isTabletLayout ? .title2 : .headline, weight: .bold))
                     .foregroundStyle(.white)
                     .lineLimit(1).minimumScaleFactor(0.7)
                 headerBadges(table)
+                if let status {
+                    phaseStatusBadge(status)
+                }
             }
             .frame(maxWidth: .infinity)
-            teamScorePill(team: 1, table)
+            .background {
+                GeometryReader { proxy in
+                    Color.clear.preference(key: BoardHeaderCenterHeightKey.self,
+                                           value: proxy.size.height)
+                }
+            }
+            teamScorePill(team: 1, table, minHeight: scoreMinHeight)
+        }
+        .onPreferenceChange(BoardHeaderCenterHeightKey.self) { height in
+            guard height > 0, abs(boardHeaderCenterHeight - height) > 0.5 else { return }
+            boardHeaderCenterHeight = height
+        }
+    }
+
+    private func phaseStatus(table: PlayerView,
+                             decision: PlayerView,
+                             interactive: Bool)
+    -> (title: String, detail: String?, icon: String, tint: Color)? {
+        if interactive {
+            switch decision.phase {
+            case .bidding:
+                return ("Your bid", "Pick amount or pass", "hand.raised.fill", TableStyle.tableGold)
+            case .namingTrump:
+                return ("Your call", "Choose trump", "paintpalette.fill", TableStyle.cardSelected)
+            case .widowDiscard:
+                return ("Your discard", "\(discardSelection.count)/3 selected", "tray.and.arrow.down.fill", TableStyle.tableGold)
+            case .trickPlay:
+                return ("Your turn", "Play highlighted card", "rectangle.stack.fill", TableStyle.cardPlayable)
+            case .misdealDecision:
+                return ("Your vote", "Redeal or keep hand", "arrow.triangle.2.circlepath", TableStyle.teamAmber)
+            case .handComplete:
+                return nil
+            }
+        }
+
+        guard isLivePhase(table.phase) else { return nil }
+        return (caughtUp ? "Waiting on \(seatName(table.toAct))" : "Watching play",
+                nil,
+                "hourglass",
+                TableStyle.passGray)
+    }
+
+    @ViewBuilder
+    private func phaseStatusBadge(
+        _ status: (title: String, detail: String?, icon: String, tint: Color)
+    ) -> some View {
+        if isTabletLayout {
+            HStack(spacing: 7) {
+                Image(systemName: status.icon)
+                    .font(TableTypography.display(.caption, weight: .bold))
+                Text(status.title)
+                    .font(TableTypography.display(.callout, weight: .bold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+                    .layoutPriority(1)
+                if let detail = status.detail {
+                    Text(detail)
+                        .font(TableTypography.display(.caption))
+                        .foregroundStyle(.white.opacity(0.72))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.55)
+                        .allowsTightening(true)
+                        .layoutPriority(2)
+                }
+            }
+            .foregroundStyle(.white)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(Capsule().fill(status.tint.opacity(0.20)))
+            .overlay(Capsule().stroke(status.tint.opacity(0.58), lineWidth: 1))
+            .accessibilityElement(children: .combine)
+        } else {
+            HStack(alignment: .center, spacing: 7) {
+                Image(systemName: status.icon)
+                    .font(TableTypography.display(.caption, weight: .bold))
+                    .frame(width: 18)
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(status.title)
+                        .font(TableTypography.display(.caption, weight: .bold))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.82)
+                    if let detail = status.detail {
+                        Text(detail)
+                            .font(TableTypography.display(.caption2))
+                            .foregroundStyle(.white.opacity(0.74))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.70)
+                            .allowsTightening(true)
+                    }
+                }
+                .layoutPriority(1)
+            }
+            .foregroundStyle(.white)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(Capsule().fill(status.tint.opacity(0.20)))
+            .overlay(Capsule().stroke(status.tint.opacity(0.58), lineWidth: 1))
+            .accessibilityElement(children: .combine)
         }
     }
 
@@ -415,7 +535,9 @@ struct GameBody: View {
         }
     }
 
-    private func teamScorePill(team: Int, _ table: PlayerView) -> some View {
+    private func teamScorePill(team: Int,
+                               _ table: PlayerView,
+                               minHeight: CGFloat? = nil) -> some View {
         let tint = TableStyle.teamTint(team)
         let isMine = Seats.team(of: table.me) == team
         let hand = table.liveHandScore[team, default: 0]
@@ -440,6 +562,7 @@ struct GameBody: View {
         .padding(.horizontal, isTabletLayout ? 16 : 9)
         .padding(.vertical, isTabletLayout ? 12 : 7)
         .frame(width: isTabletLayout ? 142 : 88, alignment: .leading)
+        .frame(minHeight: minHeight, alignment: .topLeading)
         .background {
             RoundedRectangle(cornerRadius: isTabletLayout ? 16 : 12, style: .continuous)
                 .fill(.ultraThinMaterial)
@@ -893,20 +1016,37 @@ struct GameBody: View {
             && decision.phase == .misdealDecision
             && decision.legalMoves.contains(.declineMisdeal)
         return VStack(spacing: 10) {
-            HStack(spacing: 12) {
-                Image(systemName: "arrow.triangle.2.circlepath")
-                    .font(TableTypography.display(.title2))
-                    .foregroundStyle(TableStyle.teamAmber)
-                VStack(alignment: .leading, spacing: 2) {
+            HStack(alignment: .top, spacing: isTabletLayout ? 14 : 10) {
+                ZStack {
+                    Circle()
+                        .fill(TableStyle.teamAmber.opacity(0.24))
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(TableTypography.display(isTabletLayout ? .title3 : .headline, weight: .bold))
+                        .foregroundStyle(TableStyle.teamAmber)
+                }
+                .frame(width: isTabletLayout ? 42 : 34,
+                       height: isTabletLayout ? 42 : 34)
+
+                VStack(alignment: .leading, spacing: 3) {
                     Text(canVote ? "Misdeal called — redeal?" : "Misdeal called")
-                        .font(TableTypography.display(.subheadline, weight: .bold))
+                        .font(TableTypography.display(isTabletLayout ? .headline : .subheadline, weight: .bold))
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.82)
                     Text("A player has too little money in hand. Your hand: $\(myMoney / 1000)k in money cards.")
-                        .font(TableTypography.display(.caption))
-                        .foregroundStyle(.secondary)
+                        .font(TableTypography.display(isTabletLayout ? .callout : .caption))
+                        .foregroundStyle(.white.opacity(0.78))
                         .fixedSize(horizontal: false, vertical: true)
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
                 Spacer(minLength: 8)
-                if !canVote { ProgressView().controlSize(.small) }
+                if !canVote {
+                    ProgressView()
+                        .controlSize(.small)
+                        .tint(TableStyle.teamAmber)
+                        .padding(.top, 6)
+                }
             }
             if canVote {
                 HStack(spacing: 10) {
@@ -914,21 +1054,41 @@ struct GameBody: View {
                         SoundEffectPlayer.shared.play(.buttonSelect)
                         submit(.callMisdeal)
                     }
-                        .buttonStyle(.borderedProminent)
-                        .tint(TableStyle.actionBlue)
+                    .buttonStyle(TablePillButtonStyle(tint: TableStyle.actionBlue,
+                                                      compact: true))
                     Button("Keep this hand") {
                         SoundEffectPlayer.shared.play(.buttonSelect)
                         submit(.declineMisdeal)
                     }
-                        .buttonStyle(.bordered)
-                        .tint(TableStyle.teamAmber)
+                    .buttonStyle(TablePillButtonStyle(tint: TableStyle.teamAmber,
+                                                      emphasis: .tinted,
+                                                      compact: true))
                 }
                 .font(TableTypography.display(.subheadline, weight: .semibold))
             }
         }
-        .padding(12)
-        .background(TableStyle.teamAmber.opacity(0.16), in: RoundedRectangle(cornerRadius: 10))
-        .overlay(RoundedRectangle(cornerRadius: 10).stroke(TableStyle.teamAmber.opacity(0.5), lineWidth: 1))
+        .padding(.horizontal, isTabletLayout ? 18 : 14)
+        .padding(.vertical, isTabletLayout ? 14 : 12)
+        .frame(maxWidth: isTabletLayout ? 620 : .infinity)
+        .background {
+            RoundedRectangle(cornerRadius: isTabletLayout ? 18 : 14, style: .continuous)
+                .fill(.ultraThinMaterial)
+                .overlay {
+                    RoundedRectangle(cornerRadius: isTabletLayout ? 18 : 14, style: .continuous)
+                        .fill(.black.opacity(0.24))
+                }
+                .overlay(alignment: .leading) {
+                    Rectangle()
+                        .fill(TableStyle.teamAmber)
+                        .frame(width: isTabletLayout ? 7 : 5)
+                }
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: isTabletLayout ? 18 : 14, style: .continuous)
+                .stroke(TableStyle.teamAmber.opacity(0.82), lineWidth: 1.5)
+        }
+        .shadow(color: TableStyle.teamAmber.opacity(0.20), radius: 16, y: 4)
+        .shadow(color: .black.opacity(0.32), radius: 14, y: 6)
     }
 
     // MARK: Bid history strip (during bidding, and through the hand when
@@ -962,7 +1122,7 @@ struct GameBody: View {
             }
             .padding(.horizontal, 2)
         }
-        .defaultScrollAnchor(.trailing)
+        .defaultScrollAnchor(.center)
     }
 
     // MARK: Action panel (bid / name trump / discard)
@@ -1080,7 +1240,7 @@ struct GameBody: View {
             GridItem(.fixed(buttonWidth), spacing: gridSpacing)
         ]
         return VStack(alignment: .leading, spacing: 10) {
-            Text("Pick the trump color for this hand. You'll discard three after.")
+            Text("Choose trump. Discard comes next.")
                 .font(TableTypography.display(.caption))
                 .foregroundStyle(.white.opacity(0.8))
                 .frame(width: contentWidth, alignment: .leading)
@@ -1153,8 +1313,10 @@ struct GameBody: View {
                         discardSelection = []
                     }
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(TablePillButtonStyle(tint: TableStyle.actionBlue,
+                                                  compact: true))
                 .disabled(legalMove == nil)
+                .opacity(legalMove == nil ? 0.50 : 1.0)
             }
             .frame(width: panelWidth)
         }
@@ -1179,9 +1341,9 @@ struct GameBody: View {
     
     private func discardHelpText(for view: PlayerView) -> String {
         if let trump = view.trump {
-            return "Tap three cards in your hand to discard. Tiger, Bull, and Bear never go. \(trump.displayName) (trump) only if nothing else can fill the three — the count is announced. Money only as a last resort — those cards are shown to everyone."
+            return "Select 3 cards. Other colors go first; \(trump.displayName) trump and money unlock only when required."
         } else {
-            return "Tap three cards in your hand to discard. Tiger, Bull, and Bear cannot be discarded."
+            return "Select 3 cards from your hand."
         }
     }
 
@@ -1251,7 +1413,15 @@ struct GameBody: View {
             HandRevealPanel(reveal: s.debugReveal)
             if let dealAnother {
                 let label = (s.matchWinner == nil) ? "Next hand" : "Start new match"
-                Button(label, action: dealAnother).buttonStyle(.borderedProminent)
+                Button {
+                    dealAnother()
+                } label: {
+                    Label(label, systemImage: s.matchWinner == nil
+                          ? "arrow.right.circle.fill"
+                          : "arrow.clockwise.circle.fill")
+                }
+                .buttonStyle(TablePillButtonStyle(tint: TableStyle.actionBlue,
+                                                  compact: true))
             }
         }
         .padding(20)

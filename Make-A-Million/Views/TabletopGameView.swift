@@ -120,7 +120,12 @@ struct TabletopGameView: View {
             headerStrip(table)
 
             if showsBidHistoryStrip(table) {
-                bidHistoryStrip(table)
+                HStack {
+                    bidHistoryStrip(table)
+                        .frame(maxWidth: 560, alignment: .leading)
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 8)
             }
 
             ZStack {
@@ -381,7 +386,7 @@ struct TabletopGameView: View {
             }
             .padding(.horizontal, 4)
         }
-        .defaultScrollAnchor(.trailing)
+        .defaultScrollAnchor(.leading)
         .frame(maxWidth: 720)
     }
 
@@ -484,14 +489,18 @@ struct TabletopGameView: View {
             Button { showingSettings = true } label: {
                 Image(systemName: "gearshape.fill")
             }
-            .font(TableTypography.display(.subheadline, weight: .semibold))
-            .buttonStyle(.bordered)
-            .tint(TableStyle.cardSelected)
+            .buttonStyle(TableIconButtonStyle(tint: TableStyle.cardSelected,
+                                              size: 38))
             .accessibilityLabel("Settings")
-            Button("End Match") { netSession.stop(); onExit() }
-                .font(TableTypography.display(.subheadline, weight: .semibold))
-                .buttonStyle(.bordered)
-                .tint(TableStyle.teamAmber)
+            Button {
+                netSession.stop()
+                onExit()
+            } label: {
+                Label("End Match", systemImage: "xmark")
+            }
+            .buttonStyle(TablePillButtonStyle(tint: TableStyle.teamAmber,
+                                              emphasis: .tinted,
+                                              compact: true))
         }
         .padding(.horizontal, 18)
         .padding(.top, 16)
@@ -564,16 +573,14 @@ struct TabletopGameView: View {
                     Label("Next Hand", systemImage: "arrow.right.circle.fill")
                         .font(TableTypography.display(.title3, weight: .bold))
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(TableStyle.actionBlue)
+                .buttonStyle(TablePillButtonStyle(tint: TableStyle.actionBlue))
                 .padding(.top, 8)
             } else {
                 Button { netSession.start(dealSeed: .random(in: .min ... .max)) } label: {
                     Label("New Match", systemImage: "arrow.clockwise.circle.fill")
                         .font(TableTypography.display(.title3, weight: .bold))
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(TableStyle.actionBlue)
+                .buttonStyle(TablePillButtonStyle(tint: TableStyle.actionBlue))
                 .padding(.top, 8)
             }
         }
@@ -602,15 +609,16 @@ struct TabletopGameView: View {
                     } label: {
                         Label("Continue with Bot", systemImage: "cpu").font(TableTypography.display(.headline, weight: .bold))
                     }
-                    .buttonStyle(.borderedProminent)
-                    .tint(TableStyle.actionBlue)
+                    .buttonStyle(TablePillButtonStyle(tint: TableStyle.actionBlue))
 
                     Button(role: .destructive) {
-                        netSession.stop(); onExit()
+                        netSession.stop()
+                        onExit()
                     } label: {
                         Label("End Match", systemImage: "xmark.circle").font(TableTypography.display(.headline, weight: .bold))
                     }
-                    .buttonStyle(.bordered).tint(TableStyle.teamAmber)
+                    .buttonStyle(TablePillButtonStyle(tint: TableStyle.teamAmber,
+                                                      emphasis: .tinted))
                 }
                 .padding(.top, 8)
             }

@@ -30,6 +30,7 @@ struct OnlineHostLobbyView: View {
     @State private var dealSeed: UInt64 = .random(in: .min ... .max)
     @State private var showingSettings = false
     @State private var bridgeToken: AnyObject? = nil
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// seat raw value → gamePlayerID, for seats 1–3. Seat 0 is always
     /// the host. Cleared when a player drops before the deal.
@@ -60,10 +61,16 @@ struct OnlineHostLobbyView: View {
                         host.stop()
                         onExit()
                     })
+                .transition(TableMotion.screenTransition(reduceMotion: reduceMotion))
+                .zIndex(1)
             } else {
                 lobbyContent
+                    .transition(TableMotion.screenTransition(reduceMotion: reduceMotion))
+                    .zIndex(0)
             }
         }
+        .animation(TableMotion.screenAnimation(reduceMotion: reduceMotion),
+                   value: didStartHand)
         .onAppear {
             if !didStartHand {
                 BackgroundMusicPlayer.shared.setGameActive(false)
@@ -111,15 +118,18 @@ struct OnlineHostLobbyView: View {
             Button { showingSettings = true } label: {
                 Image(systemName: "gearshape.fill")
             }
-            .buttonStyle(.bordered)
-            .tint(TableStyle.cardSelected)
+            .buttonStyle(TableIconButtonStyle(tint: TableStyle.cardSelected,
+                                              size: 38))
             .accessibilityLabel("Settings")
-            Button("Stop") {
+            Button {
                 host.stop()
                 onExit()
+            } label: {
+                Label("Stop", systemImage: "xmark")
             }
-            .buttonStyle(.bordered)
-            .tint(TableStyle.teamAmber)
+            .buttonStyle(TablePillButtonStyle(tint: TableStyle.teamAmber,
+                                              emphasis: .tinted,
+                                              compact: true))
         }
         .sheet(isPresented: $showingSettings) {
             // Pre-match: rules are editable here and apply to the first deal.
@@ -164,8 +174,8 @@ struct OnlineHostLobbyView: View {
                 Button("Sign in to Game Center") {
                     gameCenter.presentSignIn()
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(TableStyle.actionBlue)
+                .buttonStyle(TablePillButtonStyle(tint: TableStyle.actionBlue,
+                                                  compact: true))
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(14)
@@ -197,8 +207,8 @@ struct OnlineHostLobbyView: View {
                       systemImage: "envelope.fill")
                     .font(TableTypography.display(.callout, weight: .bold))
             }
-            .buttonStyle(.borderedProminent)
-            .tint(TableStyle.teamBlue)
+            .buttonStyle(TablePillButtonStyle(tint: TableStyle.teamBlue,
+                                              compact: true))
 
             Text(host.connectedPlayers.isEmpty
                  ? "Invites go out over Game Center — friends can accept from anywhere."
@@ -351,15 +361,10 @@ struct OnlineHostLobbyView: View {
 
     private var startButton: some View {
         Button { startHand() } label: {
-            Text("Start hand")
-                .font(TableTypography.display(.headline, weight: .bold))
-                .foregroundStyle(.white)
+            Label("Start hand", systemImage: "play.fill")
                 .frame(maxWidth: .infinity)
-                .padding(.vertical, 14)
-                .background(Capsule(style: .continuous).fill(TableStyle.actionBlue))
-                .overlay(Capsule(style: .continuous).stroke(.white.opacity(0.20), lineWidth: 1))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(TablePillButtonStyle(tint: TableStyle.actionBlue))
     }
 
     private func startHand() {
@@ -375,6 +380,8 @@ struct OnlineHostLobbyView: View {
         }
         bridgeToken = netSession.bindHostSession(gameSession)
         netSession.start(dealSeed: dealSeed)
-        didStartHand = true
+        withAnimation(TableMotion.screenAnimation(reduceMotion: reduceMotion)) {
+            didStartHand = true
+        }
     }
 }

@@ -346,6 +346,8 @@ struct SettingsView: View {
                     developerSection
                 }
             }
+            .scrollContentBackground(.hidden)
+            .background(TableFeltBackground())
             .navigationTitle("Settings")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
@@ -355,8 +357,12 @@ struct SettingsView: View {
                     Button("Done", action: onClose)
                 }
             }
+            .toolbarBackground(TableStyle.feltMid, for: .navigationBar)
+            .toolbarBackground(.visible, for: .navigationBar)
+            .toolbarColorScheme(.dark, for: .navigationBar)
             .tint(TableStyle.actionBlue)
         }
+        .preferredColorScheme(.dark)
     }
 
     // MARK: Card display
@@ -402,17 +408,6 @@ struct SettingsView: View {
                     .frame(width: 44, alignment: .trailing)
             }
             .disabled(!settings.soundEffectsEnabled)
-            HStack {
-                Button("Test table sound") {
-                    SoundEffectPlayer.shared.play(.cardPlay)
-                }
-                .disabled(!settings.soundEffectsEnabled)
-                Spacer()
-                Button("Test animal sound") {
-                    SoundEffectPlayer.shared.play(.animalTiger)
-                }
-                .disabled(!settings.soundEffectsEnabled || !settings.animalSoundsEnabled)
-            }
         } header: {
             Text("Audiovisual")
         } footer: {

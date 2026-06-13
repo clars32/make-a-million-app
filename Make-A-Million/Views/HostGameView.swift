@@ -70,15 +70,17 @@ struct HostGameView: View {
                     Button { showingSettings = true } label: {
                         Image(systemName: "gearshape.fill")
                     }
-                    .buttonStyle(.bordered)
-                    .tint(TableStyle.cardSelected)
+                    .buttonStyle(TableIconButtonStyle(tint: TableStyle.cardSelected))
                     .accessibilityLabel("Settings")
-                    Button("End") {
+                    Button {
                         netSession.stop()
                         onExit()
+                    } label: {
+                        Label("End", systemImage: "xmark")
                     }
-                    .buttonStyle(.bordered)
-                    .tint(TableStyle.teamAmber)
+                    .buttonStyle(TablePillButtonStyle(tint: TableStyle.teamAmber,
+                                                      emphasis: .tinted,
+                                                      compact: true))
                 }
                 .padding()
                 Spacer()
@@ -120,8 +122,7 @@ struct HostGameView: View {
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 10)
                     }
-                    .buttonStyle(.borderedProminent)
-                    .tint(TableStyle.actionBlue)
+                    .buttonStyle(TablePillButtonStyle(tint: TableStyle.actionBlue))
 
                     Button {
                         netSession.stop()
@@ -131,8 +132,8 @@ struct HostGameView: View {
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 8)
                     }
-                    .buttonStyle(.bordered)
-                    .tint(TableStyle.teamAmber)
+                    .buttonStyle(TablePillButtonStyle(tint: TableStyle.teamAmber,
+                                                      emphasis: .tinted))
                 }
                 .padding(.top, 4)
             }

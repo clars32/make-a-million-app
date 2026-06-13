@@ -29,7 +29,7 @@ import SwiftUI
 
 struct AppRoot: View {
 
-    enum Mode: Equatable {
+    enum Mode: Hashable {
         case picking
         case pickingJoin
         case pickingHost
@@ -56,66 +56,19 @@ struct AppRoot: View {
     @State private var showingSettings = false
     @AppStorage("playerName") private var playerName: String = ""
     @EnvironmentObject private var settings: GameSettings
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject private var gameCenter = GameCenterManager.shared
 
     var body: some View {
-        Group {
-            switch mode {
-            case .picking:
-                ModePickerView(
-                    playerName: $playerName,
-                    onPickSolo: { mode = .solo },
-                    onPickJoin: { mode = .pickingJoin },
-                    onPickHost: { mode = .pickingHost },
-                    onOpenSettings: { showingSettings = true })
+        ZStack {
+            TableFeltBackground()
 
-            case .pickingJoin:
-                JoinPickerView(
-                    playerName: $playerName,
-                    onPickOnline: { mode = .joiningOnline },
-                    onPickLocal: { mode = .joiningLocal },
-                    onBack: { mode = .picking },
-                    onOpenSettings: { showingSettings = true })
-
-            case .pickingHost:
-                HostPickerView(
-                    playerName: $playerName,
-                    onPickLocal: { mode = .hostingLocal },
-                    onPickTabletop: { mode = .hostingTabletop },
-                    onPickOnline: { mode = .hostingOnline },
-                    onBack: { mode = .picking },
-                    onOpenSettings: { showingSettings = true })
-
-            case .solo:
-                // GameView owns its own gear/Back chrome so the in-game
-                // settings entry can lock rules while a hand is running.
-                GameView(onExit: { mode = .picking })
-
-            case .hostingLocal:
-                HostLobbyView(
-                    playerName: effectiveName,
-                    onExit: { mode = .picking })
-
-            case .hostingTabletop:
-                TabletopHostLobbyView(
-                    playerName: effectiveName,
-                    onExit: { mode = .picking })
-
-            case .joiningLocal:
-                ClientLobbyView(
-                    playerName: effectiveName,
-                    onExit: { mode = .picking })
-
-            case .hostingOnline:
-                OnlineHostLobbyView(
-                    playerName: effectiveName,
-                    onExit: { mode = .picking })
-
-            case .joiningOnline:
-                OnlineClientLobbyView(
-                    onExit: { mode = .picking })
-            }
+            currentScreen
+                .id(mode)
+                .transition(TableMotion.screenTransition(reduceMotion: reduceMotion))
         }
+        .animation(TableMotion.screenAnimation(reduceMotion: reduceMotion),
+                   value: mode)
         .onAppear {
             #if canImport(UIKit)
             OrientationLock.shared.lock(.portrait)
@@ -133,7 +86,7 @@ struct AppRoot: View {
             // mid-hand the invite stays pending and connects if they
             // enter "Join Online" themselves.
             if invite != nil && (mode == .picking || mode == .pickingJoin) {
-                mode = .joiningOnline
+                navigate(to: .joiningOnline)
             }
         }
         .onChange(of: mode) { _, mode in
@@ -152,6 +105,72 @@ struct AppRoot: View {
             SettingsView(settings: settings, rulesLocked: false) {
                 showingSettings = false
             }
+        }
+    }
+
+    @ViewBuilder
+    private var currentScreen: some View {
+        switch mode {
+        case .picking:
+            ModePickerView(
+                playerName: $playerName,
+                onPickSolo: { navigate(to: .solo) },
+                onPickJoin: { navigate(to: .pickingJoin) },
+                onPickHost: { navigate(to: .pickingHost) },
+                onOpenSettings: { showingSettings = true })
+
+        case .pickingJoin:
+            JoinPickerView(
+                playerName: $playerName,
+                onPickOnline: { navigate(to: .joiningOnline) },
+                onPickLocal: { navigate(to: .joiningLocal) },
+                onBack: { navigate(to: .picking) },
+                onOpenSettings: { showingSettings = true })
+
+        case .pickingHost:
+            HostPickerView(
+                playerName: $playerName,
+                onPickLocal: { navigate(to: .hostingLocal) },
+                onPickTabletop: { navigate(to: .hostingTabletop) },
+                onPickOnline: { navigate(to: .hostingOnline) },
+                onBack: { navigate(to: .picking) },
+                onOpenSettings: { showingSettings = true })
+
+        case .solo:
+            // GameView owns its own gear/Back chrome so the in-game
+            // settings entry can lock rules while a hand is running.
+            GameView(onExit: { navigate(to: .picking) })
+
+        case .hostingLocal:
+            HostLobbyView(
+                playerName: effectiveName,
+                onExit: { navigate(to: .picking) })
+
+        case .hostingTabletop:
+            TabletopHostLobbyView(
+                playerName: effectiveName,
+                onExit: { navigate(to: .picking) })
+
+        case .joiningLocal:
+            ClientLobbyView(
+                playerName: effectiveName,
+                onExit: { navigate(to: .picking) })
+
+        case .hostingOnline:
+            OnlineHostLobbyView(
+                playerName: effectiveName,
+                onExit: { navigate(to: .picking) })
+
+        case .joiningOnline:
+            OnlineClientLobbyView(
+                onExit: { navigate(to: .picking) })
+        }
+    }
+
+    private func navigate(to newMode: Mode) {
+        guard mode != newMode else { return }
+        withAnimation(TableMotion.screenAnimation(reduceMotion: reduceMotion)) {
+            mode = newMode
         }
     }
 
@@ -430,7 +449,19 @@ private struct PlayerNamePanel: View {
                 .font(TableTypography.display(.caption))
                 .foregroundStyle(.white.opacity(0.68))
             TextField("Player", text: $playerName)
-                .textFieldStyle(.roundedBorder)
+                .textFieldStyle(.plain)
+                .font(TableTypography.display(.headline, weight: .semibold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 12)
+                .frame(height: 44)
+                .background {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(Color.white.opacity(0.09))
+                }
+                .overlay {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .stroke(TableStyle.panelStroke, lineWidth: 1)
+                }
                 .autocorrectionDisabled()
                 .textInputAutocapitalization(.words)
         }

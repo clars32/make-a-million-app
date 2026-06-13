@@ -211,54 +211,80 @@ struct MiniCardFace: View {
     var height: CGFloat = 26
 
     private var tint: Color { card.tint == .primary ? .black : card.tint }
-    private var labelSize: CGFloat { height * 0.35 }
-    private var dotSize: CGFloat { height * 0.15 }
+    private var isLongPrimaryLabel: Bool { primaryMiniLabel.count >= 3 }
+    private var rankSize: CGFloat { height * (isLongPrimaryLabel ? 0.48 : 0.64) }
+    private var detailSize: CGFloat { height * (isLongPrimaryLabel ? 0.18 : 0.22) }
+    private var horizontalPadding: CGFloat { height * (isLongPrimaryLabel ? 0.10 : 0.15) }
 
     var body: some View {
-        miniBody
+        indexChipBody
             .overlay(
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .stroke(Color.black.opacity(0.16), lineWidth: 0.5))
+                    .stroke(Color.black.opacity(0.14), lineWidth: 0.5))
             .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
             .frame(width: width, height: height)
             .opacity(faded ? 0.5 : 1.0)
             .shadow(color: .black.opacity(0.18), radius: 2, y: 1)
     }
 
-    @ViewBuilder
-    private var miniBody: some View {
-        if let image = miniAssetImage {
-            Image(uiImage: image)
-                .resizable()
-                .scaledToFit()
-                .background(Color.white)
-        } else {
-            drawnMiniBody
-        }
-    }
-
-    private var drawnMiniBody: some View {
+    private var indexChipBody: some View {
         RoundedRectangle(cornerRadius: 6, style: .continuous)
             .fill(Color.white)
             .overlay(
-                HStack(spacing: 2) {
-                    Text(card.shortLabel)
-                        .font(TableTypography.display(size: labelSize, weight: .heavy))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.6)
-                    Circle().fill(tint).frame(width: dotSize, height: dotSize)
-                }
-                .padding(.horizontal, height * 0.15)
-                .foregroundStyle(tint))
+                miniLabel
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.42)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.horizontal, horizontalPadding)
+                    .foregroundStyle(tint))
     }
 
-    #if canImport(UIKit)
-    private var miniAssetImage: UIImage? {
-        UIImage(named: card.miniAssetImageName)
+    private var miniLabel: Text {
+        Text(primaryMiniLabel)
+            .font(TableTypography.display(size: rankSize, weight: .heavy))
+        + Text(" ")
+        + Text(secondaryMiniLabel)
+            .font(TableTypography.display(size: detailSize, weight: .heavy))
     }
-    #else
-    private var miniAssetImage: Never? { nil }
-    #endif
+
+    private var primaryMiniLabel: String {
+        switch card {
+        case .colored(_, let rank):
+            return rank.label.hasPrefix("$")
+                ? String(rank.label.dropFirst()) + "K"
+                : rank.label
+        case .tiger:
+            return "T"
+        case .bull:
+            return "B"
+        case .bear:
+            return "B"
+        }
+    }
+
+    private var secondaryMiniLabel: String {
+        switch card {
+        case .colored(let color, _):
+            return color.shortCode
+        case .tiger:
+            return "TGR"
+        case .bull:
+            return "BUL"
+        case .bear:
+            return "BER"
+        }
+    }
+}
+
+private extension CardColor {
+    var shortCode: String {
+        switch self {
+        case .red: return "RED"
+        case .yellow: return "YEL"
+        case .black: return "BLK"
+        case .green: return "GRN"
+        }
+    }
 }
 
 /// The scanned card back, used for transient shuffle/deal animation.

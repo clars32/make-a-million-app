@@ -13,6 +13,7 @@ struct ClientLobbyView: View {
 
     @StateObject private var multipeer: MultipeerClient
     @State private var clientSession: ClientSession? = nil
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     
     // UI Animation State
     @State private var isSearching = false
@@ -24,8 +25,15 @@ struct ClientLobbyView: View {
             wrappedValue: MultipeerClient(displayName: playerName))
     }
 
+    private var showingGame: Bool {
+        if case .connected = multipeer.state, clientSession != nil { return true }
+        return false
+    }
+
     var body: some View {
-        Group {
+        ZStack {
+            background
+
             // Once connected with a live session, hand off to the game
             // view. Don't gate on session.displayView here: clientSession
             // is held in @State, which does NOT observe the session's
@@ -45,6 +53,8 @@ struct ClientLobbyView: View {
                         onExit()
                     }
                 )
+                .transition(TableMotion.screenTransition(reduceMotion: reduceMotion))
+                .zIndex(1)
             } else {
                 // Otherwise, show the normal Lobby UI
                 ZStack {
@@ -56,8 +66,12 @@ struct ClientLobbyView: View {
                     }
                     .padding()
                 }
+                .transition(TableMotion.screenTransition(reduceMotion: reduceMotion))
+                .zIndex(0)
             }
         }
+        .animation(TableMotion.screenAnimation(reduceMotion: reduceMotion),
+                   value: showingGame)
         .onAppear {
             if clientSession == nil {
                 BackgroundMusicPlayer.shared.setGameActive(false)
@@ -107,12 +121,15 @@ struct ClientLobbyView: View {
                     .foregroundStyle(.white.opacity(0.66))
             }
             Spacer()
-            Button("Back") {
+            Button {
                 multipeer.stop()
                 onExit()
+            } label: {
+                Label("Back", systemImage: "chevron.left")
             }
-            .buttonStyle(.bordered)
-            .tint(TableStyle.teamAmber)
+            .buttonStyle(TablePillButtonStyle(tint: TableStyle.teamAmber,
+                                              emphasis: .tinted,
+                                              compact: true))
         }
     }
 
@@ -159,7 +176,7 @@ struct ClientLobbyView: View {
                         .font(TableTypography.display(.callout))
                         .foregroundStyle(.white.opacity(0.52))
                         .italic()
-                    Text("Make sure the host has tapped “Host a Table.”")
+                    Text("Make sure the host chose Host Local or Host Tabletop.")
                         .font(TableTypography.display(.caption2))
                         .foregroundStyle(.white.opacity(0.42))
                         .multilineTextAlignment(.center)
@@ -244,8 +261,8 @@ struct ClientLobbyView: View {
             Button("Try again") {
                 multipeer.startBrowsing()
             }
-            .buttonStyle(.borderedProminent)
-            .tint(TableStyle.actionBlue)
+            .buttonStyle(TablePillButtonStyle(tint: TableStyle.actionBlue,
+                                              compact: true))
         }
         .frame(maxWidth: .infinity)
         .padding(20)
