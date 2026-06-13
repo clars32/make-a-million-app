@@ -391,6 +391,217 @@ final class AIArenaTests: XCTestCase {
         print("TREATMENT (original valuation vs calibrated default):\n" + r.summary)
     }
 
+    /// A/B for the EXACT-ENDGAME root lever (`exactEndgameTricks`): when a
+    /// real decision arrives with ≤N tricks remaining, every sampled
+    /// world × candidate is graded by EndgameSolver (full-information
+    /// alpha-beta over engine moves) instead of a greedy rollout. Read
+    /// TREATMENT against the same-seed control, not 50%.
+    ///
+    /// MEASURED (June 12 2026, 60 / baseSeed 1): control 62% (set 24%/34%);
+    /// gate 4 → 57% (set 26%/35%). Below the paired control — the
+    /// double-dummy trap (see the lever comment): per-world minimax
+    /// amplifies residual world-sampling error, and at 4 tricks out the
+    /// remaining errors are the decisive ones. See the gate probe below
+    /// for the 3/2 sweep that located the crossover; gate 2 was PROMOTED
+    /// to Hard + Extreme.
+    func testSelfPlayExactEndgameRoot() async {
+        var exact = MonteCarloAgent.Difficulty.normal
+        exact.exactEndgameTricks = 4
+        let control = await AIArena.runSelfPlay(matches: 60, challenger: .normal,
+                                                champion: .normal, baseSeed: 1)
+        print("CONTROL (normal vs normal):\n" + control.summary)
+        let r = await AIArena.runSelfPlay(matches: 60, challenger: exact,
+                                          champion: .normal, baseSeed: 1)
+        print("TREATMENT (exactEndgameTricks=4 vs normal):\n" + r.summary)
+    }
+
+    /// Gate-size probe for the exact-endgame root lever, TREATMENT-ONLY
+    /// (the paired control is deterministic at baseSeed 1 — 62% — so it is
+    /// not re-run). Theory under test: at larger gates the per-world
+    /// minimax is too "double-dummy" — it amplifies residual world-sampling
+    /// error, which the greedy rollout's shared blind spots smooth over.
+    ///
+    /// MEASURED (June 12 2026, 60 / baseSeed 1, control 62% set 24%):
+    /// gate 3 → 55% (set 26%), gate 2 → 62% (set 24% — control exactly).
+    /// The sweep confirms the amplification story: 3–4 negative, 2 free.
+    /// Gate 2 PROMOTED to Hard + Extreme on the full-width precedent
+    /// (neutral strength + structural immunity to the final-two-trick
+    /// forced-endplay class); gates ≥3 parked until world sampling gets
+    /// sharper (play-consistency filtering is the named candidate).
+    func testSelfPlayExactEndgameRootGateProbe() async {
+        var gate3 = MonteCarloAgent.Difficulty.normal
+        gate3.exactEndgameTricks = 3
+        let r3 = await AIArena.runSelfPlay(matches: 60, challenger: gate3,
+                                           champion: .normal, baseSeed: 1)
+        print("TREATMENT (exactEndgameTricks=3 vs normal):\n" + r3.summary)
+        var gate2 = MonteCarloAgent.Difficulty.normal
+        gate2.exactEndgameTricks = 2
+        let r2 = await AIArena.runSelfPlay(matches: 60, challenger: gate2,
+                                           champion: .normal, baseSeed: 1)
+        print("TREATMENT (exactEndgameTricks=2 vs normal):\n" + r2.summary)
+    }
+
+    /// A/B for the EXACT-ENDGAME rollout-tail lever (`rolloutExactTricks =
+    /// 2`): mid-hand rollouts hand off to the solver once the side to act
+    /// holds ≤2 cards, so root candidates at tricks 7–11 are graded by
+    /// futures whose final two tricks are played perfectly. TREATMENT-ONLY
+    /// (the paired control is deterministic at baseSeed 1 — 62%, set 24%).
+    ///
+    /// MEASURED (June 12 2026, 60 / baseSeed 1): treatment 55% (set 28%) —
+    /// below the paired control → PARKED at 0. The upside hypothesis
+    /// (exact tails keep TRUE forced-trap differentials, remove false
+    /// ones) lost to double-dummy amplification, and no gate escapes it
+    /// for tails: the world error a tail solve amplifies is the one
+    /// sampled at the MID-HAND root (maximal hidden information),
+    /// regardless of how late the solve fires — unlike the root lever,
+    /// whose gate-2 worlds are sampled late and pinned. See the lever
+    /// comment for the full postmortem.
+    func testSelfPlayExactEndgameRolloutTail() async {
+        var exact = MonteCarloAgent.Difficulty.normal
+        exact.rolloutExactTricks = 2
+        let r = await AIArena.runSelfPlay(matches: 60, challenger: exact,
+                                          champion: .normal, baseSeed: 1)
+        print("TREATMENT (rolloutExactTricks=2 vs normal):\n" + r.summary)
+    }
+
+    /// A/B for PLAY-CONSISTENCY world filtering: the challenger rejects sampled
+    /// worlds that would force a hidden seat into a provably-dominated past play
+    /// (money/Bull donated into a certain loss with a throwaway in hand; the
+    /// Bear declined on a fat certain loss). Conceived as the named successor to
+    /// the parked exact-endgame gates >=3 — sharper WORLDS, the prerequisite the
+    /// double-dummy finding identified. Read TREATMENT against the same-seed
+    /// control, not 50%.
+    ///
+    /// MEASURED (June 12 2026, both checks on, 60 / baseSeed 1): control 62%
+    /// (set 24%) → treatment 50% (set 30%) — NEGATIVE, the agent got SET more.
+    /// The per-check probe below localises ALL the damage to check (A): the
+    /// agents shed by lowest CAPTURE RANK (the $5k/$10k are routinely a seat's
+    /// lowest legal card), so (A) reads normal small-money shedding as a
+    /// "dominated donation" and deletes the TRUE world. The inference-side
+    /// double-dummy trap. PARKED; see the lever comment for the full postmortem.
+    func testSelfPlayPlayConsistency() async {
+        var filtered = MonteCarloAgent.Difficulty.normal
+        filtered.filterDominatedDonation = true
+        filtered.filterBearDecline = true
+        let control = await AIArena.runSelfPlay(matches: 60, challenger: .normal,
+                                                champion: .normal, baseSeed: 1)
+        print("CONTROL (normal vs normal):\n" + control.summary)
+        let r = await AIArena.runSelfPlay(matches: 60, challenger: filtered,
+                                          champion: .normal, baseSeed: 1)
+        print("TREATMENT (both consistency checks vs normal):\n" + r.summary)
+    }
+
+    /// Per-check probe for play-consistency filtering, TREATMENT-ONLY (the
+    /// paired control is deterministic at baseSeed 1 — 62%, set 24%). Locates
+    /// which check drives the −12pp combined regression.
+    ///
+    /// MEASURED (June 12 2026, 60 / baseSeed 1): (A) donation-only → 52%
+    /// (set 30%); (B) Bear-only → 62% (set 23%). ALL the damage is (A), which
+    /// I'd wrongly expected to be the safe one — the agents shed by lowest
+    /// capture RANK, so small money ($5k/$10k) is routinely their lowest legal
+    /// card and (A) mis-reads that normal shed as a dominated donation,
+    /// deleting the true world. (B) is neutral (the event is rare and honored).
+    func testSelfPlayPlayConsistencyPerCheck() async {
+        var aOnly = MonteCarloAgent.Difficulty.normal
+        aOnly.filterDominatedDonation = true
+        let rA = await AIArena.runSelfPlay(matches: 60, challenger: aOnly,
+                                           champion: .normal, baseSeed: 1)
+        print("TREATMENT (donation check only vs normal):\n" + rA.summary)
+        var bOnly = MonteCarloAgent.Difficulty.normal
+        bOnly.filterBearDecline = true
+        let rB = await AIArena.runSelfPlay(matches: 60, challenger: bOnly,
+                                           champion: .normal, baseSeed: 1)
+        print("TREATMENT (Bear-decline check only vs normal):\n" + rB.summary)
+    }
+
+    /// A/B for SINGLE-OBSERVER IS-MCTS (`Difficulty.useISMCTS`): the challenger
+    /// replaces depth-1 PIMC trick search with a determinization-per-iteration
+    /// information-set tree (opponents/partner searched, not assumed greedy-
+    /// omniscient), compute-matched to the PIMC rollout budget so the read
+    /// isolates the ESTIMATOR, not the rollout count. This is the structural
+    /// step the double-dummy / inference-trap findings pointed to: PIMC's
+    /// strategy fusion is untunable, IS-MCTS removes it without assuming an
+    /// opponent-rationality model (the thing that sank play-consistency
+    /// filtering). Read TREATMENT against the same-seed control, not 50%.
+    func testSelfPlayISMCTS() async {
+        var ismcts = MonteCarloAgent.Difficulty.normal
+        ismcts.useISMCTS = true
+        let control = await AIArena.runSelfPlay(matches: 60, challenger: .normal,
+                                                champion: .normal, baseSeed: 1)
+        print("CONTROL (normal vs normal):\n" + control.summary)
+        let r = await AIArena.runSelfPlay(matches: 60, challenger: ismcts,
+                                          champion: .normal, baseSeed: 1)
+        print("TREATMENT (IS-MCTS vs normal):\n" + r.summary)
+    }
+
+    /// IS-MCTS iteration-scaling probe, TREATMENT-ONLY (the PIMC control is
+    /// unaffected by the multiplier and deterministic at baseSeed 1 — 57% set
+    /// 30%, measured in `testSelfPlayISMCTS` on this build). At ×1 IS-MCTS read
+    /// 48% (≈80 iterations — a sparse 2-ply tree). The decisive question is
+    /// whether removing strategy fusion overtakes PIMC's plateau once the tree
+    /// is adequately sampled; this sweeps the budget up to find out.
+    func testSelfPlayISMCTSBudget() async {
+        for mult in [2, 4] {
+            var d = MonteCarloAgent.Difficulty.normal
+            d.useISMCTS = true
+            d.ismctsBudgetMultiplier = mult
+            let r = await AIArena.runSelfPlay(matches: 60, challenger: d,
+                                              champion: .normal, baseSeed: 1)
+            print("TREATMENT (IS-MCTS ×\(mult) budget vs normal):\n" + r.summary)
+        }
+    }
+
+    /// 100-match confirmation of the promising IS-MCTS ×4 read (house rule:
+    /// confirm a ≤60-match A/B at ≥100 before promoting). The ×1→×2→×4 sweep
+    /// climbed 48→52→58 vs a 57% control at N=60; this checks the ×4 setting
+    /// holds against a same-build 100-match PIMC control.
+    func testSelfPlayISMCTSConfirm100() async {
+        var d = MonteCarloAgent.Difficulty.normal
+        d.useISMCTS = true
+        d.ismctsBudgetMultiplier = 4
+        let control = await AIArena.runSelfPlay(matches: 100, challenger: .normal,
+                                                champion: .normal, baseSeed: 1)
+        print("CONTROL (normal vs normal, 100):\n" + control.summary)
+        let r = await AIArena.runSelfPlay(matches: 100, challenger: d,
+                                          champion: .normal, baseSeed: 1)
+        print("TREATMENT (IS-MCTS ×4 vs normal, 100):\n" + r.summary)
+    }
+
+    /// Confirm IS-MCTS on the EXTREME profile before flipping the player-facing
+    /// tier — it must hold with Extreme's full-width root (searchAllLegalMoves),
+    /// deepInference, and exact-endgame gate-2 (which the IS-MCTS leaf keeps via
+    /// max(rolloutExactTricks, exactEndgameTricks)). Extreme's base is 264 iters
+    /// (44 × 6), so ×2 = 528 — past the ~320 that gave +8pp on Normal, with
+    /// headroom for the wider root. Read TREATMENT vs the same-build Extreme
+    /// PIMC control.
+    func testSelfPlayISMCTSExtreme() async {
+        var d = MonteCarloAgent.Difficulty.extreme
+        d.useISMCTS = true
+        d.ismctsBudgetMultiplier = 2
+        let control = await AIArena.runSelfPlay(matches: 60, challenger: .extreme,
+                                                champion: .extreme, baseSeed: 1)
+        print("CONTROL (extreme vs extreme):\n" + control.summary)
+        let r = await AIArena.runSelfPlay(matches: 60, challenger: d,
+                                          champion: .extreme, baseSeed: 1)
+        print("TREATMENT (extreme+IS-MCTS ×2 vs extreme):\n" + r.summary)
+    }
+
+    /// Does gating the IS-MCTS ROOT to the narrow shortlist rescue the
+    /// Extreme-neutral read? Concentrates 528 iters onto ~6 root moves
+    /// (~88 visits/branch, the validated Normal regime) instead of spreading
+    /// them over the full-legal root (~13 early). TREATMENT-ONLY: the PIMC
+    /// Extreme control is unchanged by these default-off params — 67% (set
+    /// 31%/42%) from `testSelfPlayISMCTSExtreme` on this build.
+    func testSelfPlayISMCTSExtremeShortlistRoot() async {
+        var d = MonteCarloAgent.Difficulty.extreme
+        d.useISMCTS = true
+        d.ismctsBudgetMultiplier = 2
+        d.ismctsShortlistRoot = true
+        let r = await AIArena.runSelfPlay(matches: 60, challenger: d,
+                                          champion: .extreme, baseSeed: 1)
+        print("TREATMENT (extreme+IS-MCTS ×2 shortlist-root vs extreme):\n" + r.summary)
+    }
+
     /// Per-card calibration harvest: prints observed vs predicted realization
     /// rates for every money card in forced declarers' playing hands, plus the
     /// residual block. Not pass/fail — this is the instrument that retunes

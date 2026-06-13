@@ -73,16 +73,25 @@ struct Determinizer {
     /// SHAPE prior: bias trump cards toward the declarer (they named trump, so
     /// they're likely long in it). 0 = off. See `Difficulty.declarerTrumpBias`.
     private let declarerTrumpBias: Double
+    /// Play-consistency rejection checks (see `isDominatedPlay`). Each is
+    /// independently A/B-able. When both are false, `isConsistentWithPlay` is a
+    /// no-op and `sampleConsistent` behaves exactly like `sample`.
+    private let filterDominatedDonation: Bool
+    private let filterBearDecline: Bool
 
     init(view: PlayerView, seed: UInt64,
          bidLeanStrength: Double = 0.0,
          deduceWidowHoldings: Bool = false,
-         declarerTrumpBias: Double = 0.0) {
+         declarerTrumpBias: Double = 0.0,
+         filterDominatedDonation: Bool = false,
+         filterBearDecline: Bool = false) {
         self.view = view
         self.rng = SeededRNG(seed: seed)
         self.bidLeanStrength = bidLeanStrength
         self.deduceWidowHoldings = deduceWidowHoldings
         self.declarerTrumpBias = declarerTrumpBias
+        self.filterDominatedDonation = filterDominatedDonation
+        self.filterBearDecline = filterBearDecline
         self.lean = Determinizer.computeLean(view: view)
     }
 
@@ -315,6 +324,144 @@ struct Determinizer {
         hands[view.me] = view.myHand
         guard let st = rebuild(hands: hands) else { return nil }
         return AIWorld(state: st, me: view.me)
+    }
+
+    // MARK: Play-consistency filtering
+
+    /// Floor (dollars already on the table) above which DECLINING a legal Bear
+    /// on a certainly-lost trick counts as dominated. High enough that "saving
+    /// the Bear for a bigger pot" is not a credible alternative line.
+    private static let bearDeclineFloor = 30_000
+
+    /// Like `sample()` but rejects worlds that flunk `isConsistentWithPlay`.
+    /// Tries a bounded number of fresh samples, then falls back to the last
+    /// constrained world (or the unconstrained deal) so the search never
+    /// stalls for want of a "perfect" world.
+    mutating func sampleConsistent(maxAttempts: Int = 6) -> AIWorld? {
+        var last: AIWorld? = nil
+        for _ in 0..<maxAttempts {
+            guard let w = sample() else { break }
+            last = w
+            if isConsistentWithPlay(w) { return w }
+        }
+        return last ?? sampleUnconstrained()
+    }
+
+    /// Replay the public trick history through the ENGINE in this sampled
+    /// world and return false if any HIDDEN seat is forced to have made a
+    /// provably-dominated past play (see `isDominatedPlay`). No rule is
+    /// re-implemented — the engine generates the legal moves and resolves each
+    /// trick. Fail-OPEN: any reconstruction/replay mismatch returns true
+    /// (accept), so the filter only ever REMOVES clearly-impossible worlds and
+    /// never invents a constraint the sampler didn't already honour.
+    func isConsistentWithPlay(_ world: AIWorld) -> Bool {
+        guard let trump = view.trump else { return true }     // trick play only
+
+        // Ordered public record of every card played so far.
+        var history: [PlayedCard] = []
+        for t in view.completedTricks { history += t.plays }
+        if let cur = view.currentTrick { history += cur.plays }
+        guard !history.isEmpty else { return true }
+
+        // Each seat's hand at the START of trick play = its current sampled
+        // remainder plus everything it has since played (all public).
+        var initial: [PlayerID: [Card]] = world.state.hands
+        for pc in history { initial[pc.player, default: []].append(pc.card) }
+
+        guard let leader = view.completedTricks.first?.leader
+                ?? view.currentTrick?.leader else { return true }
+        var state = rebuildInitial(hands: initial, leader: leader)
+
+        for pc in history {
+            if pc.player != view.me {
+                let legal = state.legalMoves(for: pc.player).compactMap {
+                    move -> Card? in
+                    if case .play(let c) = move { return c }
+                    return nil
+                }
+                if isDominatedPlay(actual: pc.card, legal: legal,
+                                   trick: state.currentTrick,
+                                   seat: pc.player, trump: trump) {
+                    return false
+                }
+            }
+            guard let next = try? state.applying(.play(pc.card), by: pc.player)
+            else { return true }      // replay desync (rare) → accept the world
+            state = next
+        }
+        return true
+    }
+
+    /// True iff `actual` is a provably-dominated play here: the seat is LAST to
+    /// play (so the winner is fully determined), the trick goes to the
+    /// OPPONENTS no matter what the seat plays, and the seat either
+    ///   (A) spent money or the Bull (which DOUBLES the enemy's take) when a
+    ///       worthless throwaway was legal, or
+    ///   (B) declined the legal Bear that would have zeroed a fat enemy pot.
+    /// Both are blunders no rational line makes, so a world that requires one
+    /// is near-impossible. Conservative everywhere else (returns false), to
+    /// keep false rejections near zero.
+    private func isDominatedPlay(actual: Card, legal: [Card], trick: Trick?,
+                                 seat: PlayerID, trump: CardColor) -> Bool {
+        guard let trick = trick,
+              trick.plays.count == Seats.count - 1 else { return false }
+        let myTeam = Seats.team(of: seat)
+        func winnerTeam(after card: Card) -> Int {
+            var t = trick
+            t.plays.append(PlayedCard(player: seat, card: card))
+            return Seats.team(of: GameState.trickWinner(t, trump: trump))
+        }
+        // If the seat can secure the trick for its team (overtake, or it is
+        // already going to its partner), this is a live contest, not a certain
+        // loss — don't judge it.
+        guard !legal.contains(where: { winnerTeam(after: $0) == myTeam }) else {
+            return false
+        }
+        // (A) Money / Bull donated into a certain loss when a worthless card
+        //     (non-money, non-special) was a legal alternative.
+        if filterDominatedDonation,
+           actual.isMoney || actual.isBull,
+           legal.contains(where: { !$0.isMoney && !$0.isSpecial }) {
+            return true
+        }
+        // (B) Legal Bear declined on a fat certain loss.
+        if filterBearDecline,
+           !actual.isBear, legal.contains(where: { $0.isBear }) {
+            let pot = trick.plays.reduce(0) { $0 + $1.card.moneyValue }
+            if pot >= Self.bearDeclineFloor { return true }
+        }
+        return false
+    }
+
+    /// A start-of-trick-play `GameState` for this world: the reconstructed
+    /// 13-card hands, the known trump, `leader` on lead, no tricks yet. Mirrors
+    /// `rebuild` but at trick 1; used only to replay the public history for the
+    /// play-consistency filter. `misdealRule: .disabled` (no redeals in replay).
+    private func rebuildInitial(hands: [PlayerID: [Card]],
+                                leader: PlayerID) -> GameState {
+        GameState(
+            dealSeed: 0,
+            dealer: PlayerID(0),
+            hands: hands,
+            widow: [],
+            phase: .trickPlay,
+            toAct: leader,
+            highBid: view.highBid,
+            highBidder: view.highBidder,
+            passed: Set(view.passed),
+            bidHistory: view.bidHistory,
+            trump: view.trump,
+            discardAnnouncement: view.discardAnnouncement,
+            misdealRule: .disabled,
+            endgameRule: .standard,
+            houseRules: view.houseRules,
+            currentTrick: nil,
+            completedTricks: [],
+            capturedByTeam: [0: [], 1: []],
+            matchScore: view.matchScore,
+            dealtHands: [:],
+            dealtWidow: []
+        )
     }
 
     // MARK: Deal mechanics

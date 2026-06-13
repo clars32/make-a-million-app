@@ -122,6 +122,52 @@ struct MonteCarloAgent: PlayerAgent {
         /// own/partner's trump. Lever retained for a future refinement — bias
         /// only LOW trump, or pair it with a reduced `bidLeanStrength`.
         var declarerTrumpBias: Double = 0.0
+        /// HARD world-INFERENCE: play-consistency rejection sampling. After a
+        /// world is sampled, replay the public trick history through the ENGINE
+        /// and reject the world if it forces a hidden seat to have made a
+        /// PROVABLY-DOMINATED past play — a blunder no rational line takes,
+        /// given the cards this world dealt them. Two certainty-gated checks
+        /// (see `Determinizer.isConsistentWithPlay`), split so each is
+        /// independently A/B-able, both restricted to the seat being LAST to
+        /// play so the trick outcome was already certain:
+        ///   (A) `filterDominatedDonation` — the seat donated money / the Bull
+        ///       (which DOUBLES the enemy take) into a trick certainly lost to
+        ///       the opponents when a worthless throwaway was legal; and
+        ///   (B) `filterBearDecline` — the seat declined the loose Bear on a
+        ///       fat (>= bearDeclineFloor) trick certainly lost to the
+        ///       opponents when the Bear was legal.
+        ///
+        /// PARKED — both OFF (June 12 2026). Conceived as the named successor
+        /// to the parked exact-endgame gates >=3 (exact play amplifies world
+        /// quality → sharper worlds first). Measured the OPPOSITE. Paired 60 /
+        /// baseSeed 1 vs the 62% (set 24%) control:
+        ///   both checks   → 50% (set 30%)
+        ///   (A) donation  → 52% (set 30%)   ← carries ALL the damage
+        ///   (B) Bear only → 62% (set 23%)   ← neutral
+        ///
+        /// (A) FAILS because its premise is false FOR THESE AGENTS. It rejects
+        /// a world where a seat played money to a certain-loss trick while
+        /// holding a non-money card — assuming no competent line donates money
+        /// with a throwaway available. But PlayoutPolicy and the shortlist shed
+        /// by lowest CAPTURE RANK, not lowest VALUE: the $5k is rank 4 and the
+        /// $10k rank 8, so they are routinely a seat's lowest legal card and
+        /// get shed to lost tricks WHILE the seat still holds higher non-money
+        /// cards. (A) reads that normal play as "dominated" and deletes the
+        /// TRUE world (the one holding those non-money cards) en masse, biasing
+        /// the sample — hence the higher set-rate. This is the inference-side
+        /// double-dummy trap made concrete: a "hard" deduction is only hard
+        /// relative to a rationality model the POPULATION actually follows, and
+        /// "never donate small money" is not how these agents play. (B) is
+        /// neutral only because the loose-Bear-on-a-fat-lost-trick event is
+        /// rare and mostly honored. Lever + golden locks kept; the salvageable
+        /// variant is a RANK-AWARE donation check — reject only when a strictly
+        /// LOWER-capture-rank non-money card was legal (matching the agents'
+        /// lowest-rank shedding) — but its expected value looks low.
+        var filterDominatedDonation: Bool = false
+        var filterBearDecline: Bool = false
+        /// Master switch read by the trick-play world loop: rejection sampling
+        /// runs iff at least one consistency check is enabled.
+        var playConsistencyFilter: Bool { filterDominatedDonation || filterBearDecline }
         /// A/B-gated ROLLOUT-policy improvement (algorithm work, not a knob):
         /// when the declarer draws trump in a rollout, lead a commanding high
         /// trump rather than the lowest. Sharper rollouts → better MCTS value
@@ -216,6 +262,118 @@ struct MonteCarloAgent: PlayerAgent {
         /// snappy, and keeps arena A/Bs (which run Normal) ~3× faster.
         /// `trickCandidates` is ignored when this is on.
         var searchAllLegalMoves: Bool = false
+        /// ALGORITHM lever: replace the default depth-1 PIMC trick search with
+        /// single-observer IS-MCTS (`AI/ISMCTS.swift`). PIMC samples a world,
+        /// applies each ROOT candidate, then plays the rest greedily with full
+        /// knowledge of the hidden cards — strategy fusion (rollouts "peek")
+        /// and a weak imagined future-self, both untunable. IS-MCTS builds one
+        /// tree over the agent's information set, samples a fresh
+        /// determinization per iteration (a move is explored only where it is
+        /// legal in that world), and searches opponents'/partner's replies with
+        /// availability-count UCB, with PlayoutPolicy finishing the tail past
+        /// the frontier. Compute-matched to the PIMC budget so an A/B isolates
+        /// the estimator, not the rollout count.
+        ///
+        /// VALIDATED (June 12 2026). Compute-matched (×1 ≈ 80 iterations) is a
+        /// sparse 2-ply tree and reads −9pp — but the gain SCALES with
+        /// iterations as MCTS theory predicts. Paired vs the same-build PIMC
+        /// control: ×1 48% → ×2 52% → ×4 58% (control 57%, N=60), CONFIRMED at
+        /// N=100: ×4 58% vs a clean 50% control (set-rate: opponents 35% set vs
+        /// the agent's 27%) — +8pp, the first gain from a better ESTIMATOR
+        /// rather than better worlds/rollouts, and the structural fix the
+        /// double-dummy / inference-trap findings pointed to (it removes PIMC's
+        /// strategy fusion WITHOUT assuming an opponent-rationality model). Cost
+        /// is the catch: it needs ~300+ iterations, so it belongs on the
+        /// compute-tolerant tiers, not the snappy default. See
+        /// `ismctsBudgetMultiplier` and the A/B `testSelfPlayISMCTS*`.
+        ///
+        /// BUT it did NOT replicate on the EXTREME profile (June 12 2026):
+        /// extreme+IS-MCTS ×2 (528 iters) = 68% vs a 67% extreme-vs-extreme
+        /// control (N=60; the seat/seed confound inflates both) — neutral. The
+        /// Normal +8pp was won against a WEAK PIMC; Extreme's full-width search
+        /// + deepInference + exact-endgame already close much of the same gap,
+        /// so the fusion fix has little headroom left on top. The "wide root
+        /// under-budgeting" alternative was TESTED and REJECTED: gating the
+        /// IS-MCTS root to the narrow shortlist (`ismctsShortlistRoot`) to
+        /// concentrate 528 iters read 40% vs the 67% control — −27pp, because
+        /// narrowing reintroduces the shortlist-OMISSION failure class that
+        /// `searchAllLegalMoves` exists to kill (and handicaps the root vs a
+        /// full-width champion). So the full-legal root is load-bearing on
+        /// Extreme and can't be cheaply concentrated; the neutrality is genuine
+        /// REDUNDANCY with Extreme's stack, not budget. NET DISPOSITION: NOT
+        /// promoted to any player-facing tier — IS-MCTS is a validated research
+        /// result (estimator can beat the plateau where PIMC is weak) with no
+        /// clean production home (redundant on the strong tiers, too slow for
+        /// the snappy Normal default). Kept default-off and A/B-able.
+        var useISMCTS: Bool = false
+        /// IS-MCTS ONLY: iterations = (samples × max(4, trickCandidates)) × this.
+        /// MCTS needs far more iterations than PIMC's focused per-candidate
+        /// rollouts to fill its (deep) tree and overcome its higher per-estimate
+        /// variance, so the compute-matched (×1) read understates it. This knob
+        /// scales the search up to test whether removing strategy fusion
+        /// overtakes PIMC's plateau once the tree is adequately sampled.
+        var ismctsBudgetMultiplier: Int = 1
+        /// IS-MCTS only: gate the ROOT to the narrow heuristic shortlist even
+        /// when `searchAllLegalMoves` is on, so the iteration budget
+        /// concentrates onto ~trickCandidates root moves (the tree still
+        /// searches all legal replies deeper). Tests whether the Extreme-
+        /// neutral read was wide-root under-budgeting: a full-legal root (~13
+        /// early) spreads 528 iters thin, where the validated Normal regime had
+        /// a ≤4-move shortlist at ~80 visits/branch.
+        var ismctsShortlistRoot: Bool = false
+        /// EXACT ENDGAME — root decisions: when a real decision arrives with
+        /// ≤ N tricks remaining (my own hand size), every (world × candidate)
+        /// is graded by EndgameSolver — full-information alpha-beta over the
+        /// engine's own legal moves — instead of a greedy PlayoutPolicy
+        /// rollout. Within a determinized world the endgame is a small
+        /// PERFECT-INFORMATION game, so the value is exact: greedy-tail
+        /// misevaluations (systematic, so unlike noise they do NOT cancel
+        /// between candidates — the Bull/Bear endplay leak was this class)
+        /// disappear from late-hand decisions. A skilled human counts the
+        /// last tricks exactly; this is that, per sampled world.
+        ///
+        /// MEASURED (June 2026, 60 matches / baseSeed 1, paired vs the
+        /// same-seed control's 62%): gate 4 → 57%, gate 3 → 55%,
+        /// gate 2 → 62% with set-rate 24%/24% matching control exactly.
+        /// The negative reads at 3–4 are the DOUBLE-DUMMY trap: per-world
+        /// minimax assumes perfectly-informed continuation play, which
+        /// AMPLIFIES whatever card-location error remains in the sampled
+        /// worlds — and at 3–4 tricks out the residual errors are exactly
+        /// the decisive ones (who holds the last trump / the Tiger).
+        /// Perfect play extracts maximum consequence from wrong guesses;
+        /// the greedy rollout's shared blind spots partially cancel between
+        /// candidates instead. At gate 2 the worlds are pinned (voids +
+        /// counting) and exactness is free. PROMOTED at 2 for Hard +
+        /// Extreme on the full-width precedent (neutral strength +
+        /// structural immunity to a failure class, here the final-two-trick
+        /// forced endplays); Easy/Normal stay 0 for the strength ladder and
+        /// to keep the Normal-profile arena baseline comparable across
+        /// sessions. Gates ≥3 stay PARKED until the sampled worlds get
+        /// sharper (play-consistency filtering is the named candidate) —
+        /// exact play amplifies world quality, in both directions.
+        var exactEndgameTricks: Int = 0
+        /// EXACT ENDGAME — rollout tails (A/B lever): mid-hand rollouts
+        /// hand off to the same solver once the side to act holds ≤ N
+        /// cards, so root candidates at tricks 7–10 are graded by futures
+        /// whose endgames are played perfectly rather than greedily.
+        /// Strictly costlier than the root lever (every rollout pays a
+        /// solve), so it is measured separately. 0 = off.
+        ///
+        /// PARKED AT 0 (June 2026): paired 60 / baseSeed 1 at gate 2
+        /// measured control 62% → treatment 55% (challenger set-rate
+        /// 24%→28%) — below the paired control. The hoped-for upside (exact
+        /// tails keep TRUE forced-trap differentials while removing false
+        /// ones the greedy tail overstates) is outweighed by double-dummy
+        /// amplification, and unlike the root lever there is NO gate small
+        /// enough to escape it: the world error a tail solve amplifies is
+        /// the one sampled at the MID-HAND root decision (tricks 7–10,
+        /// maximal hidden information), regardless of how late the solve
+        /// itself fires. The root lever at gate 2 is neutral-and-promoted
+        /// precisely because its worlds are sampled late, when voids +
+        /// counting have pinned them. Lever + probe test kept; re-judge
+        /// only after world sampling itself gets sharper (play-consistency
+        /// filtering).
+        var rolloutExactTricks: Int = 0
         /// Match-aware trick-play OBJECTIVE: utility = teamNet ($) +
         /// weight × P(win match | final scores). 0 = pure team net (off).
         /// P is a logistic in the score difference (scale $300k) with hard
@@ -281,26 +439,30 @@ struct MonteCarloAgent: PlayerAgent {
                                         matchAwareness: 1.0, trickCandidates: 4,
                                         bidLeanStrength: 1.0)
         /// `Hard` — deeper search over EVERY legal move (no shortlist gate),
-        /// strong auction read, no deliberate mistakes.
+        /// strong auction read, no deliberate mistakes, and the last two
+        /// tricks of every sampled world solved exactly (June 2026).
         static let hard    = Difficulty(samples: 36, blunderRate: 0.0,
                                         bidAggression: 1.05, partnerRespect: 0.68,
                                         matchAwareness: 1.0, trickCandidates: 5,
                                         bidLeanStrength: 1.6,
-                                        searchAllLegalMoves: true)
+                                        searchAllLegalMoves: true,
+                                        exactEndgameTricks: 2)
         /// `Extreme` — RIGHT-SIZED (June 2026). Paired self-play showed neither
         /// extra samples (60 vs 36) nor pushier bid knobs (bidLean 2.0,
         /// respect 0.60) beat Hard — the MCTS search has plateaued at Hard's
         /// settings, and the unvalidated bid knobs added drag. So Extreme is now
         /// Hard's VALIDATED bidding + the count-exhaustion card-counting
-        /// deduction + a small search bump (samples 44, shortlist 6). Genuine
-        /// additional strength needs ALGORITHM work (PlayoutPolicy / shortlist
-        /// quality — the high-leverage levers), not more compute.
+        /// deduction + a small search bump (samples 44, shortlist 6) + the
+        /// exact two-trick endgame solve. Genuine additional strength needs
+        /// ALGORITHM work (PlayoutPolicy / world-sampling quality — the
+        /// high-leverage levers), not more compute.
         static let extreme = Difficulty(samples: 44, blunderRate: 0.0,
                                         bidAggression: 1.05, partnerRespect: 0.68,
                                         matchAwareness: 1.0, trickCandidates: 6,
                                         bidLeanStrength: 1.6,
                                         deepInference: true,
-                                        searchAllLegalMoves: true)
+                                        searchAllLegalMoves: true,
+                                        exactEndgameTricks: 2)
 
         /// Player-facing strength tiers. A small, Codable, ordered enum so the
         /// settings layer and UI deal in names, not tuning constants.
@@ -566,12 +728,26 @@ struct MonteCarloAgent: PlayerAgent {
                                        legal: legal,
                                        inference: inference)
 
+        // EXACT-ENDGAME GATE for this decision: rollouts hand off to the
+        // solver once the side to act holds ≤ `rolloutExactTricks` cards;
+        // when the ROOT decision itself falls inside the `exactEndgameTricks`
+        // window the gate rises to my current hand size, so every candidate
+        // is solved immediately (no greedy steps at all).
+        let exactRootActive = difficulty.exactEndgameTricks > 0
+            && view.myHand.count <= difficulty.exactEndgameTricks
+        let exactGate = exactRootActive
+            ? max(difficulty.rolloutExactTricks, view.myHand.count)
+            : difficulty.rolloutExactTricks
+
         // Table-read shared by both paths, built only when capturing. The
         // legal-vs-shortlist line is what makes an OMISSION visible — when the
         // strongest move never reaches MCTS because the heuristic gate dropped
         // it, this is the only place that shows up.
         let baseNotes: [String] = AIDecisionTrace.shared.isEnabled
-            ? shortlistNote(legal: legal, shortlist: shortlist)
+            ? (exactRootActive
+               ? ["exact endgame: candidates graded by alpha-beta per world, not rollouts"]
+               : [])
+              + shortlistNote(legal: legal, shortlist: shortlist)
               + tracePlayNotes(view: view, inference: inference)
             : []
 
@@ -596,31 +772,80 @@ struct MonteCarloAgent: PlayerAgent {
         var totals = [Move: Double]()
         var counts = [Move: Int]()
 
-        // ROLLOUT-BUDGET REALLOCATION: every sampled world is reused for every
-        // candidate, so a 13-candidate decision spends 13× the rollouts of a
-        // 2-candidate one — yet narrow decisions are where variance bites
-        // hardest ("R$5 or R$40 under a loose Tiger" hinges on one hidden
-        // card, and produced opposite $80k+ preferences on back-to-back
-        // identical deals). Hold the rollout budget roughly constant instead:
-        // few candidates → proportionally more sampled worlds, capped at 4×
-        // base; wide decisions keep the base sample count.
+        // Per-decision search budget (rollouts). Shared by both estimators so
+        // an IS-MCTS A/B isolates the estimator, not the compute.
         let budget = difficulty.samples * max(4, difficulty.trickCandidates)
-        let worldCount = min(difficulty.samples * 4,
-                             max(difficulty.samples, budget / max(1, shortlist.count)))
 
-        for s in 0..<worldCount {
-            var det = Determinizer(view: view, seed: seedBox.nextRaw() &+ UInt64(s),
+        // Fresh determinized world with the root player to act — the sampler
+        // both estimators draw from (same hard deductions / soft priors).
+        func sampleWorldState() -> GameState? {
+            var det = Determinizer(view: view, seed: seedBox.nextRaw(),
                                    bidLeanStrength: difficulty.bidLeanStrength,
                                    deduceWidowHoldings: difficulty.deduceWidowHoldings,
-                                   declarerTrumpBias: difficulty.declarerTrumpBias)
-            guard let world = det.sample() ?? det.sampleUnconstrained() else { continue }
-            for cand in shortlist {
-                guard let afterMine = try? world.state.applying(cand, by: view.me)
-                else { continue }
-                let final = rollout(afterMine)
-                let u = utility(final, myTeam: myTeam, baseline: baseline)
-                totals[cand, default: 0] += u
-                counts[cand, default: 0] += 1
+                                   declarerTrumpBias: difficulty.declarerTrumpBias,
+                                   filterDominatedDonation: difficulty.filterDominatedDonation,
+                                   filterBearDecline: difficulty.filterBearDecline)
+            let world = difficulty.playConsistencyFilter
+                ? det.sampleConsistent()
+                : (det.sample() ?? det.sampleUnconstrained())
+            return world?.state
+        }
+
+        if difficulty.useISMCTS {
+            // SINGLE-OBSERVER IS-MCTS: one tree, a fresh determinization per
+            // iteration, opponents/partner searched (not assumed greedy-
+            // omniscient), PlayoutPolicy finishing past the frontier. Root
+            // children map straight onto the same totals/counts the tie-break
+            // and trace tail below already consume.
+            // Optionally narrow the ROOT to the heuristic shortlist (even under
+            // full-width search) so iterations concentrate; the tree still
+            // searches all legal replies at deeper nodes.
+            let ismctsRoot = difficulty.ismctsShortlistRoot
+                ? trickShortlist(view: view, legal: legal,
+                                 inference: inference, forceNarrow: true)
+                : shortlist
+            let stats = ISMCTS.search(
+                rootCandidates: ismctsRoot,
+                rootTeam: myTeam,
+                iterations: budget * max(1, difficulty.ismctsBudgetMultiplier),
+                sampleWorld: sampleWorldState,
+                leafValue: { evaluateWorld($0, myTeam: myTeam,
+                                           baseline: baseline,
+                                           exactGate: max(difficulty.rolloutExactTricks,
+                                                          difficulty.exactEndgameTricks)) },
+                policyMove: { PlayoutPolicy.move(in: $0, seat: $0.toAct,
+                                                 commandingPull: difficulty.rolloutCommandingPull,
+                                                 specialEscape: difficulty.rolloutSpecialEscape,
+                                                 topPull: difficulty.rolloutTopPull,
+                                                 establishDuck: difficulty.rolloutEstablishDuck,
+                                                 bankWin: difficulty.rolloutBankWin) },
+                nextRandom: { seedBox.nextRaw() })
+            for st in stats where st.visits > 0 {
+                totals[st.move] = st.total
+                counts[st.move] = st.visits
+            }
+        } else {
+            // DEPTH-1 PIMC with ROLLOUT-BUDGET REALLOCATION: every sampled
+            // world is reused for every candidate, so a 13-candidate decision
+            // spends 13× the rollouts of a 2-candidate one — yet narrow
+            // decisions are where variance bites hardest ("R$5 or R$40 under a
+            // loose Tiger" hinges on one hidden card, and produced opposite
+            // $80k+ preferences on back-to-back identical deals). Hold the
+            // rollout budget roughly constant instead: few candidates →
+            // proportionally more sampled worlds, capped at 4× base; wide
+            // decisions keep the base sample count.
+            let worldCount = min(difficulty.samples * 4,
+                                 max(difficulty.samples, budget / max(1, shortlist.count)))
+            for _ in 0..<worldCount {
+                guard let worldState = sampleWorldState() else { continue }
+                for cand in shortlist {
+                    guard let afterMine = try? worldState.applying(cand, by: view.me)
+                    else { continue }
+                    let u = evaluateWorld(afterMine, myTeam: myTeam,
+                                          baseline: baseline, exactGate: exactGate)
+                    totals[cand, default: 0] += u
+                    counts[cand, default: 0] += 1
+                }
             }
         }
 
@@ -773,12 +998,18 @@ struct MonteCarloAgent: PlayerAgent {
     /// strong player would seriously consider".
     /// Internal (not private) so the specials-rescue invariant below is
     /// directly testable without MCTS in the loop.
+    /// `forceNarrow` runs the heuristic narrowing even when the profile's
+    /// `searchAllLegalMoves` is on — used to give the IS-MCTS ROOT a small
+    /// candidate set (so iterations concentrate) while the tree still searches
+    /// all legal replies deeper. The PIMC path and the trace use the normal
+    /// (full-width-respecting) call.
     func trickShortlist(view: PlayerView,
                         legal: [Move],
-                        inference: TableInference) -> [Move] {
+                        inference: TableInference,
+                        forceNarrow: Bool = false) -> [Move] {
         // FULL-WIDTH SEARCH (A/B lever): no gate at all — MCTS grades every
         // legal move. Omission failures become structurally impossible.
-        if difficulty.searchAllLegalMoves { return legal }
+        if difficulty.searchAllLegalMoves && !forceNarrow { return legal }
 
         let playCards = legal.compactMap { $0.playedCard }
         guard !playCards.isEmpty,
@@ -1176,10 +1407,33 @@ struct MonteCarloAgent: PlayerAgent {
 
     // MARK: - Rollout + scoring
 
-    private func rollout(_ start: GameState) -> GameState {
+    /// Score one (world × candidate) continuation: roll the determinized
+    /// state forward with the greedy PlayoutPolicy and return the utility of
+    /// the settled hand. With `exactGate > 0`, hand off to EndgameSolver as
+    /// soon as the side to act holds ≤ gate cards — the remainder of the
+    /// hand is then played PERFECTLY by all four seats (each maximising its
+    /// own team's utility) instead of greedily. When the root decision is
+    /// inside the exact window the handoff fires on the first iteration, so
+    /// no greedy step runs at all. If a solve exceeds its node budget
+    /// (pathological width — does not happen at the intended gates), the
+    /// gate is dropped for the rest of this continuation and the greedy
+    /// policy finishes the hand: never a wrong answer, just a softer one.
+    private func evaluateWorld(_ start: GameState,
+                               myTeam: Int,
+                               baseline: [Int: Int],
+                               exactGate: Int) -> Double {
         var s = start
         var steps = 0
+        var solverLive = exactGate > 0
         while s.phase != .handComplete && steps < 600 {
+            if solverLive, (s.hands[s.toAct]?.count ?? .max) <= exactGate {
+                if let v = EndgameSolver.solve(s, myTeam: myTeam, leaf: {
+                    utility($0, myTeam: myTeam, baseline: baseline)
+                }) {
+                    return v
+                }
+                solverLive = false
+            }
             let mv = PlayoutPolicy.move(in: s, seat: s.toAct,
                                         commandingPull: difficulty.rolloutCommandingPull,
                                         specialEscape: difficulty.rolloutSpecialEscape,
@@ -1190,7 +1444,7 @@ struct MonteCarloAgent: PlayerAgent {
             s = ns
             steps += 1
         }
-        return s
+        return utility(s, myTeam: myTeam, baseline: baseline)
     }
 
     private func teamNet(_ final: GameState,
