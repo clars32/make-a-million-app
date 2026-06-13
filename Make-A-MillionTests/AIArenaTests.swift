@@ -223,17 +223,16 @@ final class AIArenaTests: XCTestCase {
         print("TREATMENT (all-legal vs normal):\n" + r.summary)
     }
 
-    /// Probe for the (PARKED) `matchWinWeight` lever (match-aware trick-play
-    /// objective: utility = teamNet + W·P(win match)). Expect any edge to
-    /// show as a MATCH-win-rate gain (the lever deliberately trades
-    /// hand-dollars for match equity near the $1M line and on set/made knife
-    /// edges). Read TREATMENT against the same-seed control, not 50%.
-    /// Measured paired at 60 / baseSeed 1, weight 400k: control 63% →
-    /// treatment 63% (challenger set 15%→14%) — NEUTRAL, so parked at 0 (soft
-    /// priors aren't promoted on neutral reads). Caveat: match context is
-    /// live in only a minority of hands, so this all-phases A/B has little
-    /// power; a fair re-test needs a conditional instrument (e.g. win rate
-    /// given a team reaches $700k first).
+    /// All-phases probe for `matchWinWeight` (match-aware trick-play objective:
+    /// utility = teamNet + W·P(win match)). This run reads NEUTRAL (≈control)
+    /// because match context is live in only a few hands of a from-scratch
+    /// match — too little power. That is NOT a dead lever: the CONDITIONAL
+    /// instrument below (`testSelfPlayMatchObjectiveEndgame` / `*LeadProtect`,
+    /// which seed every match near the finish) exposed a clear effect, and
+    /// matchWinWeight=400k was PROMOTED to Normal/Hard/Extreme. Kept here as the
+    /// from-scratch safety check (must stay ≥ neutral — confirms the lever
+    /// self-gates and doesn't over-conservatize full matches; current code
+    /// 53%→53%).
     func testSelfPlayMatchObjective() async {
         let control = await AIArena.runSelfPlay(matches: 60, challenger: .normal,
                                                 champion: .normal, baseSeed: 1)
@@ -243,6 +242,67 @@ final class AIArenaTests: XCTestCase {
         let r = await AIArena.runSelfPlay(matches: 60, challenger: matchAware,
                                           champion: .normal, baseSeed: 1)
         print("TREATMENT (matchWinWeight 400k vs normal):\n" + r.summary)
+    }
+
+    /// CONDITIONAL INSTRUMENT for `matchWinWeight` (the fix the parked all-phases
+    /// probe above asked for). Seeds every match at a TIED near-finish ($750k
+    /// each) so the race is decided in 1–3 hands, each played under live
+    /// finish-line pressure — exactly where the P-term is steepest. Control
+    /// (weight 0) then a weight sweep, all from the same tied start; read each
+    /// TREATMENT against the control. If even this concentrated instrument reads
+    /// neutral, matchWinWeight is genuinely inert and parks for good.
+    func testSelfPlayMatchObjectiveEndgame() async {
+        let s = 750_000
+        let control = await AIArena.runSelfPlay(matches: 120, challenger: .normal,
+                                                champion: .normal, baseSeed: 1,
+                                                chalStart: s, champStart: s)
+        print("CONTROL (normal vs normal, both $750k):\n" + control.summary)
+        for w in [200_000, 400_000, 700_000] {
+            var mw = MonteCarloAgent.Difficulty.normal
+            mw.matchWinWeight = Double(w)
+            let r = await AIArena.runSelfPlay(matches: 120, challenger: mw,
+                                              champion: .normal, baseSeed: 1,
+                                              chalStart: s, champStart: s)
+            print("TREATMENT (matchWinWeight=\(w / 1000)k, both $750k):\n" + r.summary)
+        }
+    }
+
+    /// Does a match-aware LEADER protect (play safe) and a TRAILER push? Seeds
+    /// the challenger ahead (875/625) then behind (625/875), each vs a same-start
+    /// control so the delta isolates `matchWinWeight` from the starting edge.
+    func testSelfPlayMatchObjectiveLeadProtect() async {
+        var mw = MonteCarloAgent.Difficulty.normal
+        mw.matchWinWeight = 400_000
+        let aheadCtl = await AIArena.runSelfPlay(matches: 100, challenger: .normal,
+                                                 champion: .normal, baseSeed: 1,
+                                                 chalStart: 875_000, champStart: 625_000)
+        print("CONTROL ahead (normal, 875/625):\n" + aheadCtl.summary)
+        let ahead = await AIArena.runSelfPlay(matches: 100, challenger: mw,
+                                              champion: .normal, baseSeed: 1,
+                                              chalStart: 875_000, champStart: 625_000)
+        print("TREATMENT ahead (mw=400k, 875/625):\n" + ahead.summary)
+        let behindCtl = await AIArena.runSelfPlay(matches: 100, challenger: .normal,
+                                                  champion: .normal, baseSeed: 1,
+                                                  chalStart: 625_000, champStart: 875_000)
+        print("CONTROL behind (normal, 625/875):\n" + behindCtl.summary)
+        let behind = await AIArena.runSelfPlay(matches: 100, challenger: mw,
+                                               champion: .normal, baseSeed: 1,
+                                               chalStart: 625_000, champStart: 875_000)
+        print("TREATMENT behind (mw=400k, 625/875):\n" + behind.summary)
+    }
+
+    /// Lock for the start-score instrument: from $950k each, every match is one
+    /// or two hands from the line, so it must conclude almost immediately (not
+    /// run a full ~10-hand match — which is what we'd see if the seed were
+    /// ignored).
+    func testSelfPlayStartScoreSeedsTheCarry() async {
+        let r = await AIArena.runSelfPlay(matches: 8, challenger: .normal,
+                                          champion: .normal, baseSeed: 1,
+                                          chalStart: 950_000, champStart: 950_000)
+        XCTAssertEqual(r.failures, 0, "seeded near-finish matches should conclude")
+        XCTAssertLessThanOrEqual(r.hands, r.matches * 4,
+            "from $950k each, matches should finish in a few hands")
+        XCTAssertEqual(r.challengerWins + r.championWins, r.matches - r.failures)
     }
 
     /// Isolates Extreme's STRENGTH levers from its (suspect, unvalidated) bid
@@ -514,6 +574,76 @@ final class AIArenaTests: XCTestCase {
         print("TREATMENT (Bear-decline check only vs normal):\n" + rB.summary)
     }
 
+    /// A/B for SOFT play-history world weighting: unlike
+    /// `playConsistencyFilter`, this does not reject worlds that require a
+    /// surprising hidden-seat play. It importance-weights them down/up using
+    /// high-confidence card-reading cues, capped so no one rationality
+    /// assumption can dominate a decision. This is the safer successor to the
+    /// hard play-consistency filter: better hidden-card beliefs without
+    /// deleting the true world when the population makes a
+    /// normal-but-surprising small-money shed. Read TREATMENT against the
+    /// same-seed control, not 50%.
+    ///
+    /// Run the smoke test below first. This 60-match probe is the strength
+    /// read; it is intentionally too slow to be the wiring check.
+    func testSelfPlayPlayHistoryWeighting() async {
+        let control = await AIArena.runSelfPlay(matches: 60, challenger: .normal,
+                                                champion: .normal, baseSeed: 1)
+        print("CONTROL (normal vs normal):\n" + control.summary)
+        var weighted = MonteCarloAgent.Difficulty.normal
+        weighted.playHistoryWeighting = 0.45
+        let r = await AIArena.runSelfPlay(matches: 60, challenger: weighted,
+                                          champion: .normal, baseSeed: 1)
+        print("TREATMENT (soft play-history weighting vs normal):\n" + r.summary)
+    }
+
+    /// Cheap wiring/runtime smoke for the soft play-history hook. Uses a tiny
+    /// near-finish self-play run and disables rollout bidding so this isolates
+    /// trick-play weighted sampling, not bid-rollout cost. This is not a
+    /// strength read; it only proves the path starts, finishes, and settles
+    /// every seeded match before launching the 60-match probe above.
+    func testSelfPlayPlayHistoryWeightingSmoke() async {
+        var base = MonteCarloAgent.Difficulty.normal
+        base.rolloutBidEval = false
+        base.samples = 6
+        base.trickCandidates = 3
+        base.searchAllLegalMoves = false
+        base.exactEndgameTricks = 0
+
+        var weighted = base
+        weighted.playHistoryWeighting = 0.45
+
+        let matches = 4
+        let control = await AIArena.runSelfPlay(matches: matches, challenger: base,
+                                                champion: base, baseSeed: 19,
+                                                chalStart: 950_000, champStart: 950_000)
+        print("SMOKE CONTROL (tiny normal vs normal):\n" + control.summary)
+        assertSelfPlaySmoke(control, matches: matches)
+
+        let treatment = await AIArena.runSelfPlay(matches: matches, challenger: weighted,
+                                                  champion: base, baseSeed: 19,
+                                                  chalStart: 950_000, champStart: 950_000)
+        print("SMOKE TREATMENT (tiny soft play-history weighting vs normal):\n"
+              + treatment.summary)
+        assertSelfPlaySmoke(treatment, matches: matches)
+    }
+
+    private func assertSelfPlaySmoke(_ result: AIArena.SelfPlayResult,
+                                     matches: Int,
+                                     file: StaticString = #filePath,
+                                     line: UInt = #line) {
+        XCTAssertEqual(result.failures, 0, "smoke run should settle every match",
+                       file: file, line: line)
+        XCTAssertGreaterThan(result.hands, 0, "smoke run should play hands",
+                             file: file, line: line)
+        XCTAssertLessThanOrEqual(result.hands, matches * 8,
+            "near-finish smoke should not drift into a long from-scratch match",
+            file: file, line: line)
+        XCTAssertEqual(result.challengerWins + result.championWins, matches,
+                       "wins plus losses should equal completed matches",
+                       file: file, line: line)
+    }
+
     /// A/B for SINGLE-OBSERVER IS-MCTS (`Difficulty.useISMCTS`): the challenger
     /// replaces depth-1 PIMC trick search with a determinization-per-iteration
     /// information-set tree (opponents/partner searched, not assumed greedy-
@@ -600,6 +730,55 @@ final class AIArenaTests: XCTestCase {
         let r = await AIArena.runSelfPlay(matches: 60, challenger: d,
                                           champion: .extreme, baseSeed: 1)
         print("TREATMENT (extreme+IS-MCTS ×2 shortlist-root vs extreme):\n" + r.summary)
+    }
+
+    /// A/B for DISTRIBUTION-AWARE bidding (`rolloutBidEval`): the challenger
+    /// bids the `bidMakeProbability` quantile of rolled-out captured gross
+    /// instead of the mean `expectedGross`, pricing set risk directly. Read
+    /// TREATMENT vs the same-seed control. The set-rate line is the key
+    /// secondary read — distribution-aware bidding should move the make-rate
+    /// toward the ~85% (≈15% set) calibration target, even if self-play
+    /// win-rate is insensitive (the bid-aggression lesson).
+    func testSelfPlayRolloutBid() async {
+        var d = MonteCarloAgent.Difficulty.normal
+        d.rolloutBidEval = true
+        let control = await AIArena.runSelfPlay(matches: 60, challenger: .normal,
+                                                champion: .normal, baseSeed: 1)
+        print("CONTROL (normal vs normal):\n" + control.summary)
+        let r = await AIArena.runSelfPlay(matches: 60, challenger: d,
+                                          champion: .normal, baseSeed: 1)
+        print("TREATMENT (rolloutBidEval vs normal):\n" + r.summary)
+    }
+
+    /// `bidMakeProbability` sweep (treatment-only; the PIMC control is
+    /// unchanged by these default-off params). Locates the make-threshold that
+    /// lands the bid-population set-rate near the ~15% calibration target
+    /// without surrendering win-rate.
+    func testSelfPlayRolloutBidProbabilitySweep() async {
+        for p in [0.45, 0.6, 0.75] {
+            var d = MonteCarloAgent.Difficulty.normal
+            d.rolloutBidEval = true
+            d.bidMakeProbability = p
+            let r = await AIArena.runSelfPlay(matches: 60, challenger: d,
+                                              champion: .normal, baseSeed: 1)
+            print("TREATMENT (rolloutBidEval p=\(p) vs normal):\n" + r.summary)
+        }
+    }
+
+    /// 100-match confirmation of the best sweep point (p=0.45): same bid volume
+    /// as the scalar control (49% share) but better selection (set 30%→23%) and
+    /// +5pp at N=60. House rule: confirm a promising ≤60 read at ≥100 before
+    /// promoting.
+    func testSelfPlayRolloutBidConfirm100() async {
+        var d = MonteCarloAgent.Difficulty.normal
+        d.rolloutBidEval = true
+        d.bidMakeProbability = 0.45
+        let control = await AIArena.runSelfPlay(matches: 100, challenger: .normal,
+                                                champion: .normal, baseSeed: 1)
+        print("CONTROL (normal vs normal, 100):\n" + control.summary)
+        let r = await AIArena.runSelfPlay(matches: 100, challenger: d,
+                                          champion: .normal, baseSeed: 1)
+        print("TREATMENT (rolloutBidEval p=0.45 vs normal, 100):\n" + r.summary)
     }
 
     /// Per-card calibration harvest: prints observed vs predicted realization

@@ -50,6 +50,7 @@ case "$MODE" in
     MODE_ARGS=(
       "-only-testing:Make-A-MillionTests/AIArenaTests/testTraceOneHand"
       "-only-testing:Make-A-MillionTests/AIArenaTests/testArenaSmall"
+      "-only-testing:Make-A-MillionTests/AIArenaTests/testSelfPlayPlayHistoryWeightingSmoke"
     )
     ;;
   arena|ai|bench|benchmark)

@@ -332,6 +332,11 @@ struct Determinizer {
     /// on a certainly-lost trick counts as dominated. High enough that "saving
     /// the Bear for a bigger pot" is not a credible alternative line.
     private static let bearDeclineFloor = 30_000
+    /// Keep the soft play-history importance sampler bounded. The newest
+    /// tricks are the strongest evidence about the cards still in hand, while
+    /// replaying the whole hand for every sampled world is too expensive for
+    /// an opt-in search prior.
+    private static let playHistoryWeightTrickWindow = 4
 
     /// Like `sample()` but rejects worlds that flunk `isConsistentWithPlay`.
     /// Tries a bounded number of fresh samples, then falls back to the last
@@ -390,6 +395,154 @@ struct Determinizer {
             state = next
         }
         return true
+    }
+
+    /// Soft counterpart to `isConsistentWithPlay`: return an importance weight
+    /// for a sampled world based on how plausible the already-public hidden-seat
+    /// plays look in that world. This avoids the hard-filter trap: odd plays
+    /// nudge the world down, high-signal plays nudge it up, but no otherwise
+    /// legal world is deleted outright.
+    func playHistoryWeight(_ world: AIWorld,
+                           strength: Double) -> Double {
+        guard strength > 0, let trump = view.trump else { return 1.0 }
+
+        guard let replay = recentHistoryForWeighting() else { return 1.0 }
+        let history = replay.plays
+
+        var initial: [PlayerID: [Card]] = world.state.hands
+        for pc in history { initial[pc.player, default: []].append(pc.card) }
+
+        var state = rebuildInitial(hands: initial, leader: replay.leader)
+        var logWeight = 0.0
+
+        for pc in history {
+            if pc.player != view.me {
+                let legalMoves = state.legalMoves(for: pc.player)
+                let legalCards = legalMoves.compactMap { $0.playedCard }
+                guard legalCards.contains(pc.card) else { return 1.0 } // replay mismatch -> fail open
+                let likelihood = highConfidencePlayLikelihood(
+                    actual: pc.card,
+                    legal: legalCards,
+                    trick: state.currentTrick,
+                    seat: pc.player,
+                    trump: trump)
+                logWeight += log(likelihood)
+            }
+            guard let next = try? state.applying(.play(pc.card), by: pc.player)
+            else { return 1.0 }
+            state = next
+        }
+
+        // Bounded importance sampling: enough to prefer human-plausible worlds,
+        // not enough for one fragile rationality assumption to dominate.
+        let scaled = logWeight * strength
+        let lo = log(0.45)
+        let hi = log(2.25)
+        return exp(min(hi, max(lo, scaled)))
+    }
+
+    private func recentHistoryForWeighting() -> (leader: PlayerID, plays: [PlayedCard])? {
+        var tricks: [(leader: PlayerID, plays: [PlayedCard])] =
+            view.completedTricks.map { ($0.leader, $0.plays) }
+        if let cur = view.currentTrick, !cur.plays.isEmpty {
+            tricks.append((cur.leader, cur.plays))
+        }
+        let recent = tricks.suffix(Self.playHistoryWeightTrickWindow)
+        guard let leader = recent.first?.leader else { return nil }
+        let plays = recent.flatMap { $0.plays }
+        return plays.isEmpty ? nil : (leader, plays)
+    }
+
+    private func highConfidencePlayLikelihood(actual: Card,
+                                              legal: [Card],
+                                              trick: Trick?,
+                                              seat: PlayerID,
+                                              trump: CardColor) -> Double {
+        guard legal.count > 1, let trick else { return 1.0 }
+        let led = trick.ledColor(trump: trump)
+        let myTeam = Seats.team(of: seat)
+        let moneyOnTable = trick.plays.reduce(0) { $0 + $1.card.moneyValue }
+        let currentValue = PlayoutPolicy.tableValue(trick.plays)
+        let beared = PlayoutPolicy.tableIsBeared(trick.plays)
+        let amLastToPlay = trick.plays.count == Seats.count - 1
+
+        func wouldWin(_ card: Card) -> Bool {
+            var t = trick
+            t.plays.append(PlayedCard(player: seat, card: card))
+            return GameState.trickWinner(t, trump: trump) == seat
+        }
+        func winnerTeam(after card: Card) -> Int {
+            var t = trick
+            t.plays.append(PlayedCard(player: seat, card: card))
+            return Seats.team(of: GameState.trickWinner(t, trump: trump))
+        }
+
+        let actualWins = wouldWin(actual)
+        let anyTeamWin = legal.contains { winnerTeam(after: $0) == myTeam }
+        let partnerWinningBeforePlay: Bool = {
+            guard !trick.plays.isEmpty else { return false }
+            let winner = GameState.trickWinner(trick, trump: trump)
+            return Seats.team(of: winner) == myTeam && winner != seat
+        }()
+        let opponentWinningBeforePlay: Bool = {
+            guard !trick.plays.isEmpty else { return false }
+            let winner = GameState.trickWinner(trick, trump: trump)
+            return Seats.team(of: winner) != myTeam
+        }()
+
+        // Bear timing is high-signal because it is legal only when void. A Bear
+        // on an enemy money trick is usually meaningful; declining it when last
+        // to play and unable to win is suspicious but not impossible.
+        if actual.isBear {
+            if opponentWinningBeforePlay && currentValue >= 10_000 { return 1.22 }
+            if partnerWinningBeforePlay && moneyOnTable > 0 { return 0.70 }
+            return 0.96
+        }
+        if legal.contains(where: { $0.isBear }),
+           !actualWins, amLastToPlay, !anyTeamWin, currentValue >= 30_000 {
+            return 0.82
+        }
+
+        // Bull timing is also high-signal. It is excellent on partner money,
+        // bad when it doubles an enemy pot, and mostly neutral on empty pots.
+        if actual.isBull {
+            if partnerWinningBeforePlay && moneyOnTable > 0 && !beared { return 1.20 }
+            if opponentWinningBeforePlay && moneyOnTable > 0 { return 0.70 }
+            return 0.96
+        }
+
+        // The old hard donation filter failed because small money often *is*
+        // the lowest capture-rank legal card. Only treat larger money donated
+        // to a certain loss as evidence, and even then only softly.
+        if actual.moneyValue >= 15_000,
+           !actualWins, !anyTeamWin,
+           hasCheaperNonMoneyAlternative(than: actual, legal: legal,
+                                         led: led, trump: trump) {
+            return 0.86
+        }
+
+        // Money fed to a partner-controlled live trick is a good clue that the
+        // seat lacked a better future for it. Avoid broad policy-agreement
+        // scoring; this boost is intentionally narrow.
+        if actual.isMoney, partnerWinningBeforePlay, !beared {
+            return 1.10
+        }
+        if actual.isMoney, beared {
+            return 0.88
+        }
+
+        return 1.0
+    }
+
+    private func hasCheaperNonMoneyAlternative(than card: Card,
+                                               legal: [Card],
+                                               led: CardColor?,
+                                               trump: CardColor) -> Bool {
+        let cardStrength = PlayoutPolicy.strength(card, led: led, trump: trump)
+        return legal.contains {
+            !$0.isMoney && !$0.isSpecial
+                && PlayoutPolicy.strength($0, led: led, trump: trump) <= cardStrength
+        }
     }
 
     /// True iff `actual` is a provably-dominated play here: the seat is LAST to

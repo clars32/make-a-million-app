@@ -49,14 +49,14 @@ import Foundation
 
 enum PolicyMiner {
 
-    struct Pattern {
+    nonisolated struct Pattern {
         let key: String
         var count = 0
         var totalGap = 0
         var exemplars: [String] = []
     }
 
-    struct Result {
+    nonisolated struct Result {
         let hands: Int
         let decisions: Int        // multi-choice trick-play states mined
         let disagreements: Int    // teacher beats student by ≥ threshold
@@ -103,7 +103,7 @@ enum PolicyMiner {
     /// later). So a pattern is only trustworthy if it survives ACROSS
     /// configurations — mine at a high and a low ε and intersect the tables
     /// before believing any "the policy should cash here" finding.
-    struct Teacher {
+    nonisolated struct Teacher {
         /// Rollouts per candidate. More = tighter means, linearly slower.
         var ensembleSize = 10
         /// Per-step probability (%) of a uniformly random legal move in an

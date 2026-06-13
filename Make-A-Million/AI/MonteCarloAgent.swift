@@ -33,8 +33,10 @@
 //       identical.
 //
 //   Misdeal (heuristic, this file)
-//     • Call misdeal if I won a bid I can't make (HandEvaluator below
-//       a margin) or my hand is structurally dead.
+//     • Agreement-mode redeal vote: KEEP the hand (decline the redeal) when
+//       it values at/above the opening floor; otherwise agree to the redeal.
+//       A redeal is triggered by ANY seat being money-poor, so a strong hand
+//       of ours isn't surrendered just because another seat is short.
 //
 //   Widow discard + trump (heuristic, this file)
 //     • Joint optimisation: for each shortlisted discard, try all 4
@@ -168,6 +170,21 @@ struct MonteCarloAgent: PlayerAgent {
         /// Master switch read by the trick-play world loop: rejection sampling
         /// runs iff at least one consistency check is enabled.
         var playConsistencyFilter: Bool { filterDominatedDonation || filterBearDecline }
+        /// SOFT world-INFERENCE: importance-weight each sampled world by how
+        /// plausible the public trick history looks in that world under a small
+        /// set of high-confidence card-reading cues. This is the softer
+        /// successor to play-consistency rejection: a strange hidden-seat play
+        /// nudges the world down instead of deleting it, so we get human-like
+        /// "they probably did that because of their cards" inference without
+        /// the brittle rationality trap that made the hard donation filter
+        /// over-prune true worlds. 0 = off.
+        ///
+        /// PARKED AT 0 (June 2026): the first 0.45 probe measured below the
+        /// same-seed control (57% control → 52% treatment over 60 matches).
+        /// The hook is kept because the direction is strategically right, but
+        /// the likelihood shape needs tuning before this belongs on a
+        /// player-facing tier.
+        var playHistoryWeighting: Double = 0.0
         /// A/B-gated ROLLOUT-policy improvement (algorithm work, not a knob):
         /// when the declarer draws trump in a rollout, lead a commanding high
         /// trump rather than the lowest. Sharper rollouts → better MCTS value
@@ -385,13 +402,25 @@ struct MonteCarloAgent: PlayerAgent {
         /// Weight is in dollars per unit of win-probability; ~$400k makes a
         /// decisive match swing outweigh any single-hand money difference.
         ///
-        /// PARKED AT 0 (June 2026): paired 60 / baseSeed 1 at weight 400k
-        /// measured neutral (control 63% → treatment 63%, challenger set-rate
-        /// 15%→14%). Expected: match context is live in only a minority of
-        /// hands, so an all-phases 60-match A/B has little power here, and a
-        /// soft prior isn't promoted on a neutral read (declarerTrumpBias
-        /// lesson). Revisit with a conditional instrument — e.g. win rate
-        /// given a team reaches $700k first — before re-judging the lever.
+        /// VALIDATED + PROMOTED to Normal/Hard/Extreme at 400k (June 13 2026;
+        /// Easy stays 0 = relaxed). The all-phases 60-match probe read neutral
+        /// (63%→63%) — but that was a POWER problem, not a dead lever: match
+        /// context is live in only a few hands of a from-scratch match. The
+        /// CONDITIONAL INSTRUMENT (`AIArena.runSelfPlay` `chalStart`/`champStart`
+        /// seed every match near the finish — `testSelfPlayMatchObjective*`)
+        /// exposed a clear effect. Tied near-finish ($750k each, 120 matches):
+        /// dose-response 0→49% / 200k→52% / 400k→55% / 700k→57%. AHEAD (875/625):
+        /// 84%→89% with the leader's set-rate 17%→9% (it PROTECTS the lead).
+        /// BEHIND (625/875): 21%→25% (it PUSHES). And the from-scratch all-phases
+        /// re-check on current code stayed NEUTRAL (53%→53%) — so the lever is
+        /// SELF-GATING (the logistic P is flat far from the line → inert
+        /// early-match, no over-conservatism) and pure upside in the hands that
+        /// decide matches. Free at runtime (one logistic per leaf). 400k is the
+        /// fully-validated weight (neutral all-phases + endgame-positive); 700k
+        /// read better in the tied race but is unconfirmed all-phases — bump
+        /// only after a from-scratch re-check. LESSON: a "neutral" all-phases
+        /// read can hide a real effect that only a CONDITIONAL instrument (seed
+        /// the live-context state) can see — build the instrument before parking.
         var matchWinWeight: Double = 0
         /// EVALUATOR refit: use HandEvaluator's `.calibrated` tables —
         /// keepProbability / offSuitWinProbability / partnerSupport / widowEV
@@ -418,6 +447,49 @@ struct MonteCarloAgent: PlayerAgent {
             calibratedValuation ? .calibrated : .original
         }
 
+        /// DISTRIBUTION-AWARE BIDDING. The scalar bidder declares on the MEAN
+        /// (`expectedGross` vs a ceiling), but a set costs the whole contract —
+        /// so what matters is the DISTRIBUTION of what you'd capture, not its
+        /// mean. When on, `decideBid` replaces `expectedGross` with a rollout
+        /// estimate: sample full deals from the auction, play each out with me
+        /// declaring, collect the captured-gross distribution, and use the
+        /// `bidMakeProbability` quantile — "the contract I make at least p of the
+        /// time" — as the decision figure. Prices set risk directly; reuses the
+        /// determinize + engine + PlayoutPolicy machinery (the bidder leads, so
+        /// setup — name trump, cheapest legal discard — runs through the engine).
+        ///
+        /// VALIDATED + PROMOTED to Normal + Hard + Extreme (June 13 2026,
+        /// p=0.45). Paired
+        /// vs the same-seed scalar control: a make-probability sweep at N=60
+        /// (control 57%) read p=0.45 → 62% (bid-share 49% = control, set
+        /// 30%→23%), 0.55 → 55%, 0.6 → 53%, 0.75 → 47% — a clean dose-response
+        /// (over-conservative bidding loses). CONFIRMED at N=100: p=0.45 → 58%
+        /// vs a clean 50% control, set 22% vs the scalar champion's 33%. The
+        /// mechanism: SAME bid volume, BETTER selection — it declares the
+        /// makeable contracts and skips the traps (champion overbids to $234k
+        /// and gets set). Unlike IS-MCTS this is ORTHOGONAL to trick-play
+        /// strength (the bid decision doesn't touch full-width / deepInference /
+        /// exact-endgame), so it transfers across tiers. On Normal+Hard+Extreme
+        /// for player difficulty — a competent bidder doesn't gift a human
+        /// contracts by overbidding into sets (the scalar champion sets 33%);
+        /// EASY stays scalar so its overbidding keeps it gentle/beatable for
+        /// newcomers. (Arena A/Bs that run Normal now include the bidder on both
+        /// sides — symmetric and still valid, but ~15-20% slower, and the
+        /// pre-bidder numbers in older test comments no longer apply; set
+        /// rolloutBidEval=false on both sides to isolate a non-bidding lever.)
+        /// NOTE: greedy rollouts under-play the
+        /// declarer (pessimistic distribution), which is why the calibrated
+        /// sweet spot is p=0.45, not the 0.85 the make-rate target would suggest.
+        var rolloutBidEval: Bool = false
+        /// Deals sampled per bid decision when `rolloutBidEval` is on.
+        var bidRolloutWorlds: Int = 24
+        /// The make-probability quantile the rollout bidder bids to: the
+        /// decision figure is the contract captured in ≥ this fraction of
+        /// sampled worlds. Lower = more aggressive. 0.45 is the validated sweet
+        /// spot (see `rolloutBidEval`); higher over-conservatively passes +EV
+        /// hands and loses win-rate.
+        var bidMakeProbability: Double = 0.45
+
         // ── Selectable strength tiers (Settings → Opponents) ───────────────
         // The strength ladder is driven, in order, by: `samples` (search
         // depth), `trickCandidates` (shortlist width) and `bidLeanStrength`
@@ -432,21 +504,30 @@ struct MonteCarloAgent: PlayerAgent {
                                         bidAggression: 0.85, partnerRespect: 0.95,
                                         matchAwareness: 0.5, trickCandidates: 3,
                                         bidLeanStrength: 0.0)
-        /// `Normal` — the validated baseline (formerly `.medium`): a solid club
-        /// player. Bids up to its honest valuation and reads the auction.
+        /// `Normal` — a solid club player. Reads the auction and bids what it
+        /// can MAKE (distribution-aware: rolls out P(make) — the +8pp/N=100
+        /// lever was validated on exactly this profile), so it stops gifting a
+        /// human contracts by overbidding into sets. Trick-play depth stays
+        /// modest (shortlist gate, no deep inference / exact-endgame), so a
+        /// skilled player still beats it on PLAY.
         static let normal  = Difficulty(samples: 20, blunderRate: 0.06,
                                         bidAggression: 1.00, partnerRespect: 0.78,
                                         matchAwareness: 1.0, trickCandidates: 4,
-                                        bidLeanStrength: 1.0)
+                                        bidLeanStrength: 1.0,
+                                        matchWinWeight: 400_000,
+                                        rolloutBidEval: true)
         /// `Hard` — deeper search over EVERY legal move (no shortlist gate),
-        /// strong auction read, no deliberate mistakes, and the last two
-        /// tricks of every sampled world solved exactly (June 2026).
+        /// strong auction read, no deliberate mistakes, the last two tricks of
+        /// every sampled world solved exactly, and distribution-aware bidding
+        /// (rolls out P(make) instead of bidding the mean — June 2026).
         static let hard    = Difficulty(samples: 36, blunderRate: 0.0,
                                         bidAggression: 1.05, partnerRespect: 0.68,
                                         matchAwareness: 1.0, trickCandidates: 5,
                                         bidLeanStrength: 1.6,
                                         searchAllLegalMoves: true,
-                                        exactEndgameTricks: 2)
+                                        exactEndgameTricks: 2,
+                                        matchWinWeight: 400_000,
+                                        rolloutBidEval: true)
         /// `Extreme` — RIGHT-SIZED (June 2026). Paired self-play showed neither
         /// extra samples (60 vs 36) nor pushier bid knobs (bidLean 2.0,
         /// respect 0.60) beat Hard — the MCTS search has plateaued at Hard's
@@ -462,7 +543,9 @@ struct MonteCarloAgent: PlayerAgent {
                                         bidLeanStrength: 1.6,
                                         deepInference: true,
                                         searchAllLegalMoves: true,
-                                        exactEndgameTricks: 2)
+                                        exactEndgameTricks: 2,
+                                        matchWinWeight: 400_000,
+                                        rolloutBidEval: true)
 
         /// Player-facing strength tiers. A small, Codable, ordered enum so the
         /// settings layer and UI deal in names, not tuning constants.
@@ -524,12 +607,33 @@ struct MonteCarloAgent: PlayerAgent {
 
         switch view.phase {
         case .bidding:         return decideBid(view, legal: legal)
-        case .misdealDecision: return legal[0]
+        case .misdealDecision: return decideMisdeal(view, legal: legal)
         case .widowDiscard:    return decideDiscard(view, legal: legal)
         case .namingTrump:     return decideTrump(view, legal: legal)
         case .trickPlay:       return decideTrickPlay(view, legal: legal)
         case .handComplete:    return legal[0]
         }
+    }
+
+    // MARK: - Misdeal decision
+
+    /// Agreement-mode misdeal: vote to KEEP the hand (`declineMisdeal`) when it
+    /// is worth playing, else agree to the redeal (`callMisdeal`). The redeal is
+    /// triggered by ANY seat being money-poor — so a strong hand of ours must
+    /// not be thrown away just because someone else is short (the old `legal[0]`
+    /// agreed to EVERY redeal, even holding a monster). In automatic mode the
+    /// only legal move is the forced redeal, so we return it.
+    private func decideMisdeal(_ view: PlayerView, legal: [Move]) -> Move {
+        guard legal.contains(.declineMisdeal) else {
+            return legal.first ?? .callMisdeal      // automatic mode: forced redeal
+        }
+        let valuation = HandEvaluator.bestValuation(view: view, hand: view.myHand,
+                                                    tables: difficulty.evaluatorTables)
+        // A hand that values at or above the opening floor is a real declare
+        // candidate — keep it. Below that, a fresh deal is the better gamble.
+        return valuation.expectedGross >= Bidding.openingMinimum
+            ? .declineMisdeal
+            : .callMisdeal
     }
 
     // MARK: - Bidding
@@ -544,7 +648,14 @@ struct MonteCarloAgent: PlayerAgent {
         // Hand value as if I become declarer with best trump.
         let valuation = HandEvaluator.bestValuation(view: view, hand: view.myHand,
                                                     tables: difficulty.evaluatorTables)
-        let rawGross = Double(valuation.expectedGross)
+        // Distribution-aware bidding (lever): the decision figure becomes the
+        // make-probability quantile of rolled-out captured gross — "the contract
+        // I make at least p of the time" — instead of the mean `expectedGross`,
+        // so set risk is priced directly.
+        let decisionGross = difficulty.rolloutBidEval
+            ? safeContractEstimate(view: view, fallback: valuation.expectedGross)
+            : valuation.expectedGross
+        let rawGross = Double(decisionGross)
 
         // Match awareness — see below.
         let ceiling = applyMatchAwareness(
@@ -597,7 +708,7 @@ struct MonteCarloAgent: PlayerAgent {
                 let threshold = hbAmount + extraNeeded
                 notes.append("partner holds the bid ($\(hbAmount / 1000)k); "
                              + "override needs valuation > $\(threshold / 1000)k")
-                if valuation.expectedGross > threshold
+                if decisionGross > threshold
                     && Double(cheapestAmt) <= ceiling {
                     return cheapestBid
                 }
@@ -633,9 +744,14 @@ struct MonteCarloAgent: PlayerAgent {
             let chosenText = move.isPass
                 ? "pass"
                 : move.bidAmount.map { "$\($0 / 1000)k" } ?? "?"
+            if difficulty.rolloutBidEval {
+                notes.append("rollout bid: P(make)=\(Int(difficulty.bidMakeProbability * 100))% "
+                             + "contract $\(decisionGross / 1000)k "
+                             + "(mean valuation $\(valuation.expectedGross / 1000)k)")
+            }
             AIDecisionTrace.shared.record(.init(
                 seat: view.me, chosen: chosenText,
-                valuationGross: valuation.expectedGross,
+                valuationGross: decisionGross,
                 ceiling: Int(ceiling), notes: notes))
         }
 
@@ -668,6 +784,103 @@ struct MonteCarloAgent: PlayerAgent {
     private func shouldJumpBid() -> Bool {
         // 35% chance, so jump bids are an occasional flavour, not standard.
         seedBox.nextInt(upperBound: 100) < 35
+    }
+
+    // MARK: - Distribution-aware bid evaluation (rolloutBidEval)
+
+    /// The make-probability quantile of the captured-gross distribution if I
+    /// declared this hand: sample `bidRolloutWorlds` full deals from the
+    /// auction, play each out with me declaring, and return the contract level
+    /// I capture in at least `bidMakeProbability` of them. Falls back to the
+    /// scalar `expectedGross` if no rollout completed.
+    private func safeContractEstimate(view: PlayerView, fallback: Int) -> Int {
+        let worlds = max(1, difficulty.bidRolloutWorlds)
+        var grosses: [Int] = []
+        grosses.reserveCapacity(worlds)
+        for w in 0..<worlds {
+            if let g = rolloutDeclareGross(view: view,
+                                           seed: seedBox.nextRaw() &+ UInt64(w)) {
+                grosses.append(g)
+            }
+        }
+        guard !grosses.isEmpty else { return fallback }
+        grosses.sort()
+        // safeContract = the value X with P(captured >= X) ≈ p. With grosses
+        // sorted ascending, the element at rank floor((1-p)·n) has a ≥ p tail
+        // at or above it.
+        let p = min(0.95, max(0.05, difficulty.bidMakeProbability))
+        let idx = Int((1.0 - p) * Double(grosses.count))
+        return grosses[max(0, min(grosses.count - 1, idx))]
+    }
+
+    /// One bid-time rollout: sample the hidden hands + widow, set me up as the
+    /// declarer (name trump with the real heuristic, discard the cheapest legal
+    /// three), play the hand out greedily, and return my team's captured gross.
+    /// The contract amount doesn't affect play, so a placeholder bid is fine.
+    private func rolloutDeclareGross(view: PlayerView, seed: UInt64) -> Int? {
+        guard let deal = sampleBidDeal(view: view, seed: seed) else { return nil }
+        var hands = deal.hands
+        hands[view.me] = view.myHand + deal.widow          // the bidder takes the 16
+        var s = GameState(
+            dealSeed: 0, dealer: PlayerID(0),
+            hands: hands, widow: [],
+            phase: .namingTrump, toAct: view.me,
+            highBid: Bidding.openingMinimum, highBidder: view.me,
+            passed: Set(Seats.all.filter { $0 != view.me }),
+            bidHistory: [], trump: nil, discardAnnouncement: nil,
+            misdealRule: .disabled, endgameRule: .standard,
+            houseRules: view.houseRules,
+            currentTrick: nil, completedTricks: [], capturedByTeam: [0: [], 1: []],
+            matchScore: view.matchScore, dealtHands: [:], dealtWidow: [])
+
+        let trumpMove = decideTrump(s.view(for: view.me),
+                                    legal: s.legalMoves(for: view.me))
+        guard let s1 = try? s.applying(trumpMove, by: view.me) else { return nil }
+        s = s1
+        let discardLegal = s.legalMoves(for: view.me)
+        let discardMove = discardLegal.min {
+            discardCost($0.discardCards ?? []) < discardCost($1.discardCards ?? [])
+        } ?? discardLegal.first
+        guard let dm = discardMove, let s2 = try? s.applying(dm, by: view.me) else {
+            return nil
+        }
+        s = s2
+
+        var steps = 0
+        while s.phase != .handComplete && steps < 600 {
+            let mv = PlayoutPolicy.move(in: s, seat: s.toAct,
+                                        commandingPull: difficulty.rolloutCommandingPull,
+                                        specialEscape: difficulty.rolloutSpecialEscape,
+                                        topPull: difficulty.rolloutTopPull,
+                                        establishDuck: difficulty.rolloutEstablishDuck,
+                                        bankWin: difficulty.rolloutBankWin)
+            guard let ns = try? s.applying(mv, by: s.toAct) else { break }
+            s = ns
+            steps += 1
+        }
+        let myTeam = Seats.team(of: view.me)
+        return (s.capturedByTeam[myTeam] ?? []).reduce(0) { $0 + GameState.trickValue($1) }
+    }
+
+    /// Sample the 3 hidden hands + 3 widow cards from the deck minus my known
+    /// hand (uniform; a bid-lean refinement is deferred). nil only on a deck
+    /// bookkeeping mismatch (e.g. called outside bidding) — never in practice.
+    private func sampleBidDeal(view: PlayerView,
+                               seed: UInt64) -> (hands: [PlayerID: [Card]], widow: [Card])? {
+        let mine = Set(view.myHand)
+        var pool = Deck.full.filter { !mine.contains($0) }
+        guard pool.count == 13 * (Seats.count - 1) + 3 else { return nil }   // 42
+        var rng = SeededRNG(seed: seed)
+        for i in stride(from: pool.count - 1, to: 0, by: -1) {
+            let j = Int(rng.next() % UInt64(i + 1))
+            pool.swapAt(i, j)
+        }
+        var hands: [PlayerID: [Card]] = [view.me: view.myHand]
+        var cursor = 0
+        for s in Seats.all where s != view.me {
+            hands[s] = Array(pool[cursor ..< cursor + 13]); cursor += 13
+        }
+        return (hands, Array(pool[cursor ..< cursor + 3]))
     }
 
     // MARK: - Widow discard (trump already known)
@@ -770,6 +983,7 @@ struct MonteCarloAgent: PlayerAgent {
         let myTeam = Seats.team(of: view.me)
         let baseline = view.matchScore
         var totals = [Move: Double]()
+        var weights = [Move: Double]()
         var counts = [Move: Int]()
 
         // Per-decision search budget (rollouts). Shared by both estimators so
@@ -778,7 +992,7 @@ struct MonteCarloAgent: PlayerAgent {
 
         // Fresh determinized world with the root player to act — the sampler
         // both estimators draw from (same hard deductions / soft priors).
-        func sampleWorldState() -> GameState? {
+        func sampledWorld() -> (world: AIWorld, determinizer: Determinizer)? {
             var det = Determinizer(view: view, seed: seedBox.nextRaw(),
                                    bidLeanStrength: difficulty.bidLeanStrength,
                                    deduceWidowHoldings: difficulty.deduceWidowHoldings,
@@ -788,7 +1002,23 @@ struct MonteCarloAgent: PlayerAgent {
             let world = difficulty.playConsistencyFilter
                 ? det.sampleConsistent()
                 : (det.sample() ?? det.sampleUnconstrained())
-            return world?.state
+            guard let world else { return nil }
+            return (world, det)
+        }
+
+        func sampleWeightedWorld() -> (state: GameState, weight: Double)? {
+            guard let sample = sampledWorld() else { return nil }
+            let world = sample.world
+            let weight = difficulty.playHistoryWeighting > 0
+                ? sample.determinizer.playHistoryWeight(
+                    world,
+                    strength: difficulty.playHistoryWeighting)
+                : 1.0
+            return (world.state, weight)
+        }
+
+        func sampleWorldState() -> GameState? {
+            sampledWorld()?.world.state
         }
 
         if difficulty.useISMCTS {
@@ -837,21 +1067,25 @@ struct MonteCarloAgent: PlayerAgent {
             let worldCount = min(difficulty.samples * 4,
                                  max(difficulty.samples, budget / max(1, shortlist.count)))
             for _ in 0..<worldCount {
-                guard let worldState = sampleWorldState() else { continue }
+                guard let world = sampleWeightedWorld() else { continue }
                 for cand in shortlist {
-                    guard let afterMine = try? worldState.applying(cand, by: view.me)
+                    guard let afterMine = try? world.state.applying(cand, by: view.me)
                     else { continue }
                     let u = evaluateWorld(afterMine, myTeam: myTeam,
                                           baseline: baseline, exactGate: exactGate)
-                    totals[cand, default: 0] += u
+                    totals[cand, default: 0] += world.weight * u
+                    weights[cand, default: 0] += world.weight
                     counts[cand, default: 0] += 1
                 }
             }
         }
 
         let scored = shortlist
-            .filter { (counts[$0] ?? 0) > 0 }
-            .map { ($0, totals[$0]! / Double(counts[$0]!)) }
+            .filter { (weights[$0] ?? Double(counts[$0] ?? 0)) > 0 }
+            .map { move -> (Move, Double) in
+                let denom = weights[move] ?? Double(counts[move] ?? 1)
+                return (move, totals[move]! / denom)
+            }
             .sorted { $0.1 > $1.1 }
 
         guard let topMean = scored.first?.1 else { return shortlist[0] }

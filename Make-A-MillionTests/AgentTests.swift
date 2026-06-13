@@ -97,4 +97,46 @@ final class AgentTests: XCTestCase {
             XCTAssertEqual(final.phase, .handComplete)
         }
     }
+
+    /// The agreement-mode misdeal vote must KEEP a strong hand (a redeal is
+    /// triggered by ANY seat being money-poor, so we mustn't surrender a
+    /// money-rich hand) and accept the fresh deal on a weak one. Automatic mode
+    /// has only the forced redeal. Regression for the old `legal[0]` no-op that
+    /// voted to redeal every time.
+    func testMisdealKeepsStrongHandRedealsWeakOne() async {
+        func view(_ myHand: [Card], _ legal: [Move]) -> PlayerView {
+            PlayerView(me: PlayerID(0), myHand: myHand, phase: .misdealDecision,
+                       toAct: PlayerID(0), trump: nil, highBid: nil,
+                       highBidder: nil, passed: [], opener: PlayerID(0),
+                       bidHistory: [], widow: nil, discardAnnouncement: nil,
+                       currentTrick: nil, completedTrickCount: 0,
+                       completedTricks: [], matchScore: [0: 0, 1: 0],
+                       legalMoves: legal)
+        }
+        let agreement: [Move] = [.callMisdeal, .declineMisdeal]
+        // Money-rich + long red trump — an obvious keep.
+        let strong: [Card] = [.colored(.red, .money40k), .colored(.red, .money30k),
+                              .colored(.red, .money15k), .colored(.red, .money10k),
+                              .colored(.red, .money5k), .colored(.yellow, .money40k),
+                              .colored(.yellow, .money30k), .colored(.yellow, .money15k),
+                              .colored(.yellow, .money10k), .colored(.yellow, .money5k),
+                              .colored(.red, .eleven), .colored(.red, .nine),
+                              .colored(.red, .eight)]
+        // Low, moneyless, no length — an obvious redeal.
+        let weak: [Card] = [.colored(.red, .one), .colored(.red, .two),
+                            .colored(.red, .three), .colored(.red, .four),
+                            .colored(.yellow, .one), .colored(.yellow, .two),
+                            .colored(.yellow, .three), .colored(.green, .one),
+                            .colored(.green, .two), .colored(.green, .three),
+                            .colored(.black, .one), .colored(.black, .two),
+                            .colored(.black, .three)]
+        let agent = MonteCarloAgent(difficulty: .normal, seed: 1)
+        let keep = await agent.chooseMove(from: view(strong, agreement))
+        XCTAssertEqual(keep, .declineMisdeal,
+                       "a money-rich hand must not be surrendered to a redeal")
+        let redeal = await agent.chooseMove(from: view(weak, agreement))
+        XCTAssertEqual(redeal, .callMisdeal, "a weak hand should take the fresh deal")
+        let forced = await agent.chooseMove(from: view(weak, [.callMisdeal]))
+        XCTAssertEqual(forced, .callMisdeal, "automatic mode has only the redeal")
+    }
 }

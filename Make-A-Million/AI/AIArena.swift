@@ -26,7 +26,7 @@ import Foundation
 
 enum AIArena {
 
-    struct Result {
+    nonisolated struct Result {
         let matches: Int
         let mcWins: Int            // matches won by the MC partnership
         let randomWins: Int
@@ -122,7 +122,7 @@ enum AIArena {
     /// arena, both sides are competent, so this measures whether a *change*
     /// actually wins more — and surfaces the bidding telemetry that the
     /// vs-Random run cannot (random opponents never punish under-bidding).
-    struct SelfPlayResult {
+    nonisolated struct SelfPlayResult {
         let matches: Int
         let challengerWins: Int     // the partnership under test ("new")
         let championWins: Int       // the baseline ("old")
@@ -171,10 +171,19 @@ enum AIArena {
     /// MonteCarloAgents; pass two `Difficulty` profiles to A/B a tuning change
     /// (e.g. a more aggressive bid profile against the current one). Seats swap
     /// every other match so neither side gets a permanent opening-bid edge.
+    /// `chalStart`/`champStart` seed each match's carry score (keyed to the
+    /// CHALLENGER team, so the seat-swap can't confound an asymmetric start).
+    /// Default (0, 0) is a normal match from scratch. Seeding both near $1M is
+    /// the CONDITIONAL INSTRUMENT for match-aware levers (`matchWinWeight`):
+    /// every hand is then played under live finish-line pressure, where an
+    /// all-phases run has almost no power (match context is live in only a few
+    /// hands of a from-scratch match).
     static func runSelfPlay(matches: Int,
                             challenger: MonteCarloAgent.Difficulty,
                             champion: MonteCarloAgent.Difficulty,
-                            baseSeed: UInt64 = 1) async -> SelfPlayResult {
+                            baseSeed: UInt64 = 1,
+                            chalStart: Int = 0,
+                            champStart: Int = 0) async -> SelfPlayResult {
         var chalWins = 0, champWins = 0, failures = 0
         var hands = 0
         var declChal = 0, declChamp = 0
@@ -196,7 +205,9 @@ enum AIArena {
             // Play the match hand-by-hand so we can read each hand's contract
             // outcome via debugReveal(). Mirrors GameRunner.playMatch's loop.
             var dealer = PlayerID(0)
-            var carry: [Int: Int] = [0: 0, 1: 0]
+            // Carry seeded by team, keyed to the challenger so an asymmetric
+            // start follows the challenger regardless of the seat-swap.
+            var carry: [Int: Int] = [chalTeam: chalStart, (1 - chalTeam): champStart]
             var handIndex: UInt64 = 0
             let maxHands: UInt64 = 500
             var concluded = false
@@ -248,7 +259,7 @@ enum AIArena {
     // routinely capture at or above it, the evaluator under-values — i.e. the
     // AI is passing makeable hands, which is conservatism in an absolute sense.
 
-    struct CalibrationResult {
+    nonisolated struct CalibrationResult {
         let hands: Int                 // counterfactual declarer playouts
         let avgEstimate: Double
         let avgRealized: Double
@@ -437,8 +448,8 @@ enum AIArena {
     // so refitting the tables AND re-zeroing the residual keeps the aggregate
     // calibration intact by construction.
 
-    struct CardCalibrationResult {
-        struct CardObs {
+    nonisolated struct CardCalibrationResult {
+        nonisolated struct CardObs {
             let inTrump: Bool
             let rank: Card.Rank
             let suitLen: Int      // effective-color length in the playing hand
@@ -448,7 +459,7 @@ enum AIArena {
             let realized: Int     // face × trick multiplier if declarer's team captured, else 0
             let predicted: Double // face × current-model p
         }
-        struct HandObs {
+        nonisolated struct HandObs {
             let trumpLen: Int
             let hasTiger: Bool
             let teamGross: Int

@@ -110,6 +110,31 @@ final class PlayConsistencyTests: XCTestCase {
             "P1 holding only money had no throwaway → the dump was forced → keep")
     }
 
+    /// The soft play-history weight is intentionally gentler than the hard
+    /// filter: a suspicious large-money dump is downweighted, not deleted.
+    func testSoftPlayHistoryWeightDownweightsButKeepsSuspiciousDonation() {
+        let me = P(0)
+        let tr = trick(leader: P(2),
+                       [(P(2), grn(.eleven)), (P(3), grn(.one)),
+                        (P(0), grn(.two)),    (P(1), ylw(.money30k))],
+                       trump: .red)
+        let v = view(me: me, trump: .red, myHand: [], completed: [tr])
+        let det = Determinizer(view: v, seed: 1)
+
+        let suspicious = world(remaining: [P(0): [], P(1): [blk(.two)],
+                                           P(2): [], P(3): []], me: me, trump: .red)
+        let forced = world(remaining: [P(0): [], P(1): [ylw(.money5k)],
+                                       P(2): [], P(3): []], me: me, trump: .red)
+
+        let suspiciousWeight = det.playHistoryWeight(suspicious, strength: 1.0)
+        let forcedWeight = det.playHistoryWeight(forced, strength: 1.0)
+
+        XCTAssertGreaterThan(suspiciousWeight, 0,
+                             "soft weighting must never reject a legal world outright")
+        XCTAssertLessThan(suspiciousWeight, forcedWeight,
+                          "a dump with a cheap throwaway should be less likely than a forced money dump")
+    }
+
     /// The Bull DOUBLES the captured money, so dropping it on a trick the
     /// opponents are certainly taking is at least as dominated as donating cash.
     func testRejectsBullDonationWithThrowawayAvailable() {
