@@ -84,4 +84,68 @@ final class BidEvalTests: XCTestCase {
         XCTAssertEqual(cautious, .bid(.pass),
             "a stricter make threshold must still pass a dead hand")
     }
+
+    /// Bid-lean: the bid-deal sampler reads the auction, so the seat that bid
+    /// big is dealt more money on average than the seat that passed. This is the
+    /// fix for over-optimistic CONTESTED bids (handlog 7) — opponents who bid up
+    /// are modeled as strong, so the rollout stops over-valuing the hand.
+    func testBidDealLeanGivesBiddersStrongerHands() {
+        let me = PlayerID(0)
+        let myHand: [Card] = Card.Rank.allCases.map { .colored(.red, $0) }  // all red
+        let view = PlayerView(
+            me: me, myHand: myHand, phase: .bidding, toAct: me,
+            trump: nil, highBid: 300_000, highBidder: PlayerID(1),
+            passed: [PlayerID(3)], opener: PlayerID(1),
+            bidHistory: [BidRecord(player: PlayerID(1), action: .bid(300_000)),
+                         BidRecord(player: PlayerID(3), action: .pass)],
+            widow: nil, discardAnnouncement: nil, currentTrick: nil,
+            completedTrickCount: 0, completedTricks: [], matchScore: [0: 0, 1: 0],
+            legalMoves: [])
+        var d = MonteCarloAgent.Difficulty.normal
+        d.bidLeanStrength = 1.6
+        let a = MonteCarloAgent(difficulty: d, seed: 1)
+        func money(_ cards: [Card]) -> Int { cards.reduce(0) { $0 + $1.moneyValue } }
+        var bidderMoney = 0, passerMoney = 0, n = 0
+        for s in 0..<80 {
+            guard let deal = a.sampleBidDeal(view: view, seed: UInt64(s) &+ 1) else { continue }
+            XCTAssertEqual(deal.hands[PlayerID(1)]?.count, 13)
+            XCTAssertEqual(deal.widow.count, 3)
+            bidderMoney += money(deal.hands[PlayerID(1)] ?? [])   // bid $300k
+            passerMoney += money(deal.hands[PlayerID(3)] ?? [])   // passed
+            n += 1
+        }
+        XCTAssertGreaterThan(n, 0)
+        XCTAssertGreaterThan(bidderMoney, passerMoney,
+            "the $300k bidder should be dealt more money than the passer")
+    }
+
+    /// Control: with the lean OFF the deal is uniform, so the bidder and passer
+    /// get roughly equal money (no systematic bias).
+    func testBidDealWithoutLeanIsUnbiased() {
+        let me = PlayerID(0)
+        let myHand: [Card] = Card.Rank.allCases.map { .colored(.red, $0) }
+        let view = PlayerView(
+            me: me, myHand: myHand, phase: .bidding, toAct: me,
+            trump: nil, highBid: 300_000, highBidder: PlayerID(1),
+            passed: [PlayerID(3)], opener: PlayerID(1),
+            bidHistory: [BidRecord(player: PlayerID(1), action: .bid(300_000)),
+                         BidRecord(player: PlayerID(3), action: .pass)],
+            widow: nil, discardAnnouncement: nil, currentTrick: nil,
+            completedTrickCount: 0, completedTricks: [], matchScore: [0: 0, 1: 0],
+            legalMoves: [])
+        var d = MonteCarloAgent.Difficulty.normal
+        d.bidRolloutLean = false
+        let a = MonteCarloAgent(difficulty: d, seed: 1)
+        func money(_ cards: [Card]) -> Int { cards.reduce(0) { $0 + $1.moneyValue } }
+        var bidderMoney = 0, passerMoney = 0
+        for s in 0..<80 {
+            guard let deal = a.sampleBidDeal(view: view, seed: UInt64(s) &+ 1) else { continue }
+            bidderMoney += money(deal.hands[PlayerID(1)] ?? [])
+            passerMoney += money(deal.hands[PlayerID(3)] ?? [])
+        }
+        // Within ~15% — uniform dealing, no auction bias.
+        let hi = Double(max(bidderMoney, passerMoney))
+        let lo = Double(min(bidderMoney, passerMoney))
+        XCTAssertLessThan(hi / lo, 1.15, "uniform deal should not systematically favor a seat")
+    }
 }

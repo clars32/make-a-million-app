@@ -301,34 +301,54 @@ final class AITacticsTests: XCTestCase {
     // a money-blind tie once donated a G$40 over a G$5 in real play.
 
     func testTiePreferenceStarvesOpponentBoundTricks() {
-        // Feeding a trick the opponents own: less money strictly preferred.
+        // Feeding a trick the opponents own (not banking): less money strictly
+        // preferred.
         let cheap = MonteCarloAgent.tiePreference(grn(.money5k), trump: .red,
-                                                  dumpToPartner: false, following: true)
+                                                  bankToOwnTeam: false)
         let dear = MonteCarloAgent.tiePreference(grn(.money40k), trump: .red,
-                                                 dumpToPartner: false, following: true)
+                                                 bankToOwnTeam: false)
         XCTAssertTrue(cheap < dear, "tied shed onto opponents must give the $5k, never the $40k")
         // And a free card beats any money at all.
         let free = MonteCarloAgent.tiePreference(grn(.one), trump: .red,
-                                                 dumpToPartner: false, following: true)
+                                                 bankToOwnTeam: false)
         XCTAssertTrue(free < cheap)
     }
 
-    func testTiePreferenceFeedsPartnerBoundTricks() {
-        // Partner safely owns the trick: MORE money preferred (the dump).
+    func testTiePreferenceBanksMostMoneyOntoOwnTeamTricks() {
+        // My team safely owns the trick (a partner's win OR my own): bank the
+        // MOST money. Covers handlog-8's bug where the agent took its own trick
+        // with the smaller money card.
         let dump = MonteCarloAgent.tiePreference(y(.money15k), trump: .red,
-                                                 dumpToPartner: true, following: true)
+                                                 bankToOwnTeam: true)
         let hold = MonteCarloAgent.tiePreference(grn(.seven), trump: .red,
-                                                 dumpToPartner: true, following: true)
-        XCTAssertTrue(dump < hold, "tied choice on partner's safe trick must prefer the money dump")
+                                                 bankToOwnTeam: true)
+        XCTAssertTrue(dump < hold, "on my team's safe trick, bank the money over a free card")
+        // And bank the BIGGER money card (Y$40 over Y$30) — the H3T3 case.
+        let bigger = MonteCarloAgent.tiePreference(y(.money40k), trump: .red,
+                                                   bankToOwnTeam: true)
+        let smaller = MonteCarloAgent.tiePreference(y(.money30k), trump: .red,
+                                                    bankToOwnTeam: true)
+        XCTAssertTrue(bigger < smaller, "banking your own winner must prefer the $40k over the $30k")
+    }
+
+    func testTiePreferenceAvoidsLeadingMoney() {
+        // Leading (bankToOwnTeam false — no winner yet): a led money card is
+        // exposed to the last (opponent) player, so prefer a non-money card even
+        // of higher rank. The H1T1 case (don't open with the Y$5).
+        let money = MonteCarloAgent.tiePreference(y(.money5k), trump: .red,   // rank 4
+                                                  bankToOwnTeam: false)
+        let plain = MonteCarloAgent.tiePreference(y(.eight), trump: .red,     // rank 6
+                                                  bankToOwnTeam: false)
+        XCTAssertTrue(plain < money, "a lead should expose a non-money card, not the Y$5")
     }
 
     func testTiePreferenceNeverSpendsSpecialsOrTigerOnATie() {
         let low = MonteCarloAgent.tiePreference(grn(.one), trump: .red,
-                                                dumpToPartner: false, following: true)
+                                                bankToOwnTeam: false)
         let bear = MonteCarloAgent.tiePreference(.bear, trump: .red,
-                                                 dumpToPartner: false, following: true)
+                                                 bankToOwnTeam: false)
         let tiger = MonteCarloAgent.tiePreference(.tiger, trump: .red,
-                                                  dumpToPartner: false, following: true)
+                                                  bankToOwnTeam: false)
         XCTAssertTrue(low < bear, "specials outrank any plain card in a tie")
         XCTAssertTrue(bear < tiger, "the Tiger is the last card a tie should ever spend")
     }
@@ -336,11 +356,12 @@ final class AITacticsTests: XCTestCase {
     func testTiePreferenceConservesTrumpAfterMoney() {
         // Equal money (none): off-suit shed preferred over breaking trump.
         let offSuit = MonteCarloAgent.tiePreference(grn(.one), trump: .red,
-                                                    dumpToPartner: false, following: true)
+                                                    bankToOwnTeam: false)
         let trumpLow = MonteCarloAgent.tiePreference(.colored(.red, .four), trump: .red,
-                                                     dumpToPartner: false, following: true)
+                                                     bankToOwnTeam: false)
         XCTAssertTrue(offSuit < trumpLow)
     }
+
 
     // MARK: - Mined fix: pull from the top (`topPull`, PolicyMiner June 2026)
 

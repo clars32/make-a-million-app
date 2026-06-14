@@ -489,6 +489,33 @@ struct MonteCarloAgent: PlayerAgent {
         /// spot (see `rolloutBidEval`); higher over-conservatively passes +EV
         /// hands and loses win-rate.
         var bidMakeProbability: Double = 0.45
+        /// Whether the bid rollout's deal sampling reads the AUCTION (passers
+        /// get weak hands, bidders strong ones — same lean as the trick-play
+        /// `Determinizer`, strength `bidLeanStrength`). Without it the bid
+        /// rollout deals opponents AVERAGE hands even when they've bid up,
+        /// making it over-optimistic in CONTESTED auctions — the diagnosed
+        /// cause of war over-bids that get set (handlog 7: declarers fighting to
+        /// ~$255-265k that their own trick-1 search rated as already lost).
+        ///
+        /// MEASURED + KEPT ON (June 13 2026, default true on rollout-bid tiers).
+        /// Paired 100 / baseSeed 1: control (no-lean vs no-lean) 55% set 28/34
+        /// → treatment (lean vs no-lean) 57%, bid-share 52%→48% (more SELECTIVE)
+        /// and set-rate 25% vs the no-lean champion's 33%. Win-rate neutral-to-
+        /// +2pp in symmetric self-play; the real payoff is vs a HUMAN pushing
+        /// the auction (where the handlog over-bids happened). A/B
+        /// `testSelfPlayBidLean`; statistical locks in `BidEvalTests`.
+        var bidRolloutLean: Bool = true
+        /// When the rollout bidder is on, DON'T multiply its ceiling by
+        /// `bidAggression`: the rollout figure (a make-probability quantile)
+        /// already prices set risk, so a 1.05 stretch commits above the agent's
+        /// own safe level and over-bids contested auctions (handlog 7/8). Only
+        /// matters on tiers with bidAggression != 1.0 (Hard/Extreme = 1.05);
+        /// no-op on Normal (1.00). MEASURED + KEPT ON (June 13 2026): on a
+        /// Normal+1.05 proxy, paired 100/baseSeed 1, control (1.05 both) 50% set
+        /// 35% → drop-vs-1.05 51%, bid-share 55%→46% (more selective), set-rate
+        /// 28% vs 31% — win-rate neutral, fewer contested over-bids. A/B
+        /// `testSelfPlayBidAggressionDrop`.
+        var bidRolloutDropAggression: Bool = true
 
         // ── Selectable strength tiers (Settings → Opponents) ───────────────
         // The strength ladder is driven, in order, by: `samples` (search
@@ -657,9 +684,19 @@ struct MonteCarloAgent: PlayerAgent {
             : valuation.expectedGross
         let rawGross = Double(decisionGross)
 
+        // The aggression multiplier is a heuristic stretch over the MEAN
+        // (scalar) valuation. The rollout figure already prices set risk (it's
+        // a make-probability quantile), so multiplying it by 1.05 just commits
+        // ABOVE the agent's own safe level — exactly the war over-bids that get
+        // set (handlog 7/8: fighting to a contract its trick-1 search rated as
+        // already lost). So drop the multiplier for the rollout bidder.
+        let aggressionFactor = (difficulty.rolloutBidEval && difficulty.bidRolloutDropAggression)
+            ? 1.0
+            : difficulty.bidAggression
+
         // Match awareness — see below.
         let ceiling = applyMatchAwareness(
-            base: rawGross * difficulty.bidAggression,
+            base: rawGross * aggressionFactor,
             view: view)
 
         var notes: [String] = []
@@ -863,24 +900,104 @@ struct MonteCarloAgent: PlayerAgent {
     }
 
     /// Sample the 3 hidden hands + 3 widow cards from the deck minus my known
-    /// hand (uniform; a bid-lean refinement is deferred). nil only on a deck
+    /// hand. With `bidRolloutLean` the 39 dealt cards are biased by the AUCTION
+    /// (strong cards drift to seats that bid, weak to passers) so a contested
+    /// auction makes opponents as strong as their bidding implies; the 3 widow
+    /// cards are reserved at random first (the widow is independent of the
+    /// auction). Uniform when the lean is off or `bidLeanStrength == 0`.
+    /// Internal so the lean is statistically testable. nil only on a deck
     /// bookkeeping mismatch (e.g. called outside bidding) — never in practice.
-    private func sampleBidDeal(view: PlayerView,
-                               seed: UInt64) -> (hands: [PlayerID: [Card]], widow: [Card])? {
+    func sampleBidDeal(view: PlayerView,
+                       seed: UInt64) -> (hands: [PlayerID: [Card]], widow: [Card])? {
         let mine = Set(view.myHand)
         var pool = Deck.full.filter { !mine.contains($0) }
         guard pool.count == 13 * (Seats.count - 1) + 3 else { return nil }   // 42
         var rng = SeededRNG(seed: seed)
-        for i in stride(from: pool.count - 1, to: 0, by: -1) {
-            let j = Int(rng.next() % UInt64(i + 1))
-            pool.swapAt(i, j)
+        func shuffle(_ a: inout [Card]) {
+            for i in stride(from: a.count - 1, to: 0, by: -1) {
+                a.swapAt(i, Int(rng.next() % UInt64(i + 1)))
+            }
         }
+        shuffle(&pool)
+        let others = Seats.all.filter { $0 != view.me }
+
+        // The widow is 3 random cards, dealt independently of the bidding.
+        let widow = Array(pool.suffix(3))
+        let deal = Array(pool.prefix(pool.count - 3))     // 39 to distribute
+
         var hands: [PlayerID: [Card]] = [view.me: view.myHand]
-        var cursor = 0
-        for s in Seats.all where s != view.me {
-            hands[s] = Array(pool[cursor ..< cursor + 13]); cursor += 13
+        for s in others { hands[s] = [] }
+
+        if difficulty.bidRolloutLean && difficulty.bidLeanStrength > 0 {
+            let lean = bidLeanBySeat(view: view)
+            for card in deal {
+                let need = others.filter { (hands[$0]?.count ?? 0) < 13 }
+                let pick = weightedSeat(need, card: card, lean: lean,
+                                        strength: difficulty.bidLeanStrength, rng: &rng)
+                hands[pick, default: []].append(card)
+            }
+        } else {
+            var cursor = 0
+            for s in others { hands[s] = Array(deal[cursor ..< cursor + 13]); cursor += 13 }
         }
-        return (hands, Array(pool[cursor ..< cursor + 3]))
+        return (hands, widow)
+    }
+
+    /// Per hidden seat: + if they have bid (scaled by amount), − if they
+    /// passed, 0 if not yet acted. Mirrors `Determinizer.computeLean` for the
+    /// bid-time sampler (no trump is named yet, so it's strength-only).
+    private func bidLeanBySeat(view: PlayerView) -> [PlayerID: Double] {
+        var highestBid: [PlayerID: Int] = [:]
+        for rec in view.bidHistory {
+            if case .bid(let amt) = rec.action {
+                highestBid[rec.player] = max(highestBid[rec.player] ?? 0, amt)
+            }
+        }
+        var lean: [PlayerID: Double] = [:]
+        for s in Seats.all where s != view.me {
+            if let amt = highestBid[s] {
+                lean[s] = min(2.0, 0.5 + Double(amt - Bidding.openingMinimum) / 75_000.0)
+            } else if view.passed.contains(s) {
+                lean[s] = -1.0
+            } else {
+                lean[s] = 0.0
+            }
+        }
+        return lean
+    }
+
+    /// Pick a seat for `card`, weighted by exp(strength · centredValue · lean):
+    /// >1 when a strong card meets a bidder (or a weak card a passer). Among the
+    /// seats that still need cards, so counts stay exact.
+    private func weightedSeat(_ seats: [PlayerID], card: Card,
+                              lean: [PlayerID: Double], strength: Double,
+                              rng: inout SeededRNG) -> PlayerID {
+        guard seats.count > 1 else { return seats.first ?? PlayerID(0) }
+        let v = bidCardValue(card) - 0.5
+        let weights = seats.map { exp(strength * v * (lean[$0] ?? 0)) }
+        let total = weights.reduce(0, +)
+        guard total > 0 else { return seats[0] }
+        let r = Double(rng.next() % 1_000_000) / 1_000_000.0 * total
+        var acc = 0.0
+        for (i, w) in weights.enumerated() {
+            acc += w
+            if r <= acc { return seats[i] }
+        }
+        return seats[seats.count - 1]
+    }
+
+    /// 0…1 "how good to hold" — money and high rank are strong, specials high.
+    /// No trump bonus (trump isn't named at bid time). Mirrors
+    /// `Determinizer.cardValueScore`.
+    private func bidCardValue(_ c: Card) -> Double {
+        switch c {
+        case .tiger: return 1.0
+        case .bull, .bear: return 0.5
+        case .colored(_, let r):
+            var s = Double(r.rawValue) / 12.0 * 0.5
+            s += Double(r.moneyValue) / 40_000.0 * 0.4
+            return min(1.0, s)
+        }
     }
 
     // MARK: - Widow discard (trump already known)
@@ -1099,32 +1216,42 @@ struct MonteCarloAgent: PlayerAgent {
         // conserve trump, then lowest rank. Full-width search made the money
         // term necessary: dominated money-donations now reach MCTS, and a
         // money-blind tie once donated the G$40 over the G$5 in real play.
-        let following = !(view.currentTrick?.plays.isEmpty ?? true)
-        let dumpToPartner: Bool = {
+        // Is MY TEAM safely taking this trick (I win it, OR a partner does and
+        // it can't be overturned)? Then a near-tie should BANK the most money;
+        // otherwise (donating to an opponent, or leading into exposure) it
+        // commits the least. The old form only counted a partner's win, so the
+        // agent under-banked the trick it was taking ITSELF (handlog 8: played
+        // Y$30 over Y$40 / Y$15 over Y$30 on its own winners).
+        let bankToOwnTeam: Bool = {
             guard let trump = view.trump,
                   let trick = view.currentTrick, !trick.plays.isEmpty
             else { return false }
             let winner = GameState.trickWinner(trick, trump: trump)
-            guard Seats.team(of: winner) == Seats.team(of: view.me),
-                  winner != view.me else { return false }
+            guard Seats.team(of: winner) == Seats.team(of: view.me) else { return false }
             return trick.plays.count == Seats.count - 1
                 || !canBeOverturned(trick: trick, onTable: trick.plays,
                                     trump: trump, inference: inference,
                                     view: view)
         }()
-        let tieEps = 20_000.0   // TUNE: dollars of mean-net treated as "a tie"
+        // TIE WINDOW: candidates within this much mean-net of the best are
+        // "ties," decided by the certain dollars (`tiePreference`) rather than
+        // a sub-noise difference in rollout means. A flat $20k is deliberate and
+        // WELL-CALIBRATED: a NOISE-SCALED window (size it to the paired standard
+        // error, trusting the search more when it's confident) was built and
+        // A/B'd (handlog 8 T6 motivation) and read NEUTRAL-to-−5pp vs this flat
+        // value (100 / baseSeed 1: 53% flat → 48% noise-scaled) — sub-$20k mean
+        // gaps really are mostly noise, and the conservation tiebreak beats them.
+        // So the flat window stays; see `tiePreference` for the (separate, kept)
+        // money-direction fix.
+        let tieEps = 20_000.0
         let best = scored
             .filter { $0.1 >= topMean - tieEps }
             .min {
                 guard let trump = view.trump,
                       let a = $0.0.playedCard, let b = $1.0.playedCard
                 else { return false }
-                return Self.tiePreference(a, trump: trump,
-                                          dumpToPartner: dumpToPartner,
-                                          following: following)
-                     < Self.tiePreference(b, trump: trump,
-                                          dumpToPartner: dumpToPartner,
-                                          following: following)
+                return Self.tiePreference(a, trump: trump, bankToOwnTeam: bankToOwnTeam)
+                     < Self.tiePreference(b, trump: trump, bankToOwnTeam: bankToOwnTeam)
             }
             ?? scored[0]
 
@@ -1733,27 +1860,26 @@ struct MonteCarloAgent: PlayerAgent {
     /// Near-tie preference for `decideTrickPlay` (lower tuple = preferred,
     /// compared lexicographically). Layers, in order:
     ///   1. specials are never spent on a tie (Tiger worst, then Bull/Bear);
-    ///   2. CERTAIN money — minimise what an opponent-bound trick is fed,
-    ///      maximise what a safely-partner-bound trick is given (sign flip);
-    ///      neutral when leading (no trick direction exists yet);
+    ///   2. CERTAIN money — when MY TEAM is safely taking the trick (I win it,
+    ///      or a partner does uncontestably), BANK the most (−); otherwise
+    ///      commit the LEAST (+) — both when donating to an opponent's trick
+    ///      AND when leading (a led money card is exposed to the last, opponent,
+    ///      player). `bankToOwnTeam` is false when leading (no winner yet);
     ///   3. conserve trump over off-suit;
     ///   4. lowest rank.
     /// Internal (not private) so the ordering is unit-testable without MCTS
     /// in the loop.
     static func tiePreference(_ c: Card, trump: CardColor,
-                              dumpToPartner: Bool,
-                              following: Bool) -> (Int, Int, Int, Int) {
+                              bankToOwnTeam: Bool) -> (Int, Int, Int, Int) {
         let specialClass: Int
         switch c {
         case .tiger:       specialClass = 2
         case .bull, .bear: specialClass = 1
         default:           specialClass = 0
         }
-        let signedMoney = !following ? 0
-                        : dumpToPartner ? -c.moneyValue
-                        : c.moneyValue
+        let moneyTerm = bankToOwnTeam ? -c.moneyValue : c.moneyValue
         let isTrump = (c.effectiveColor(trump: trump) == trump) ? 1 : 0
-        return (specialClass, signedMoney, isTrump, PlayoutPolicy.rankOf(c))
+        return (specialClass, moneyTerm, isTrump, PlayoutPolicy.rankOf(c))
     }
 
     private func shouldBlunder() -> Bool {

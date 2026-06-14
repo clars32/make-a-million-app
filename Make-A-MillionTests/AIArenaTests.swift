@@ -750,6 +750,47 @@ final class AIArenaTests: XCTestCase {
         print("TREATMENT (rolloutBidEval vs normal):\n" + r.summary)
     }
 
+    /// A/B for BID-LEAN in the bid-deal sampler (`bidRolloutLean`): the rollout
+    /// reads the auction (contested-auction opponents modeled as strong), the
+    /// fix for the war over-bids seen in handlog 7. Control is no-lean vs
+    /// no-lean (the pre-change baseline); treatment is lean vs no-lean. The
+    /// key reads are the challenger's win-rate vs control AND its set-rate vs
+    /// the no-lean champion's (bid-lean should bid contested hands more
+    /// accurately → fewer sets).
+    func testSelfPlayBidLean() async {
+        var noLean = MonteCarloAgent.Difficulty.normal
+        noLean.bidRolloutLean = false
+        let control = await AIArena.runSelfPlay(matches: 100, challenger: noLean,
+                                                champion: noLean, baseSeed: 1)
+        print("CONTROL (no-lean vs no-lean):\n" + control.summary)
+        let r = await AIArena.runSelfPlay(matches: 100, challenger: .normal,
+                                          champion: noLean, baseSeed: 1)
+        print("TREATMENT (bid-lean vs no-lean):\n" + r.summary)
+    }
+
+    /// A/B for the AGGRESSION-MULTIPLIER DROP (`bidRolloutDropAggression`): the
+    /// rollout figure already prices set risk, so multiplying its ceiling by
+    /// 1.05 over-commits in wars. Shipped Normal is 1.00 (the drop is a no-op),
+    /// so this exposes the effect on a fast Normal-speed profile given Hard's
+    /// 1.05 aggression; the result transfers to Hard/Extreme (a bidding-ceiling
+    /// change, orthogonal to trick-play depth). Champion keeps the multiplier;
+    /// challenger drops it. The set-rate is the key read (dropping it should bid
+    /// contested hands less aggressively → fewer sets).
+    func testSelfPlayBidAggressionDrop() async {
+        var base = MonteCarloAgent.Difficulty.normal
+        base.bidAggression = 1.05
+        var withMult = base
+        withMult.bidRolloutDropAggression = false   // ceiling = safeContract × 1.05
+        let control = await AIArena.runSelfPlay(matches: 100, challenger: withMult,
+                                                champion: withMult, baseSeed: 1)
+        print("CONTROL (1.05 multiplier applied, both):\n" + control.summary)
+        var dropped = base
+        dropped.bidRolloutDropAggression = true     // ceiling = safeContract
+        let r = await AIArena.runSelfPlay(matches: 100, challenger: dropped,
+                                          champion: withMult, baseSeed: 1)
+        print("TREATMENT (aggression dropped vs 1.05 applied):\n" + r.summary)
+    }
+
     /// `bidMakeProbability` sweep (treatment-only; the PIMC control is
     /// unchanged by these default-off params). Locates the make-threshold that
     /// lands the bid-population set-rate near the ~15% calibration target
