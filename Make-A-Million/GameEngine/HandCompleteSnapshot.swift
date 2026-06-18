@@ -56,6 +56,24 @@ extension HandCompleteSnapshot {
             trump: state.trump)
     }
 
+    init(publicView view: PlayerView,
+         matchScore: [Int: Int]? = nil,
+         matchWinner: Int?) {
+        let handScore = view.liveHandScore
+        let biddingTeam = view.highBidder.map { Seats.team(of: $0) }
+        self.init(
+            matchScore: matchScore ?? view.matchScore,
+            matchWinner: matchWinner,
+            bidHistory: view.bidHistory,
+            opener: view.opener,
+            debugReveal: nil,
+            bidAmount: view.highBid,
+            bidder: view.highBidder,
+            biddingTeamPoints: biddingTeam.map { handScore[$0, default: 0] },
+            handScore: handScore,
+            trump: view.trump)
+    }
+
     var biddingTeam: Int? {
         bidder.map { Seats.team(of: $0) }
     }

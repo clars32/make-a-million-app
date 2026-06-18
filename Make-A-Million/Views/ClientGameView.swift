@@ -41,6 +41,9 @@ struct ClientGameView: View {
     }
     private var handView: PlayerView? { decisionView }
     private var isMyTurn: Bool { session.pending != nil }
+    private var endOfHandSnapshot: HandCompleteSnapshot? {
+        session.handCompleteSnapshot
+    }
 
     private var displayTick: Int {
         guard let d = session.displayView else { return -1 }
@@ -106,7 +109,15 @@ struct ClientGameView: View {
         ZStack {
             feltBackground
 
-            if let view = handView {
+            if let snapshot = endOfHandSnapshot {
+                HandCompleteScorecard(
+                    snapshot: snapshot,
+                    teamName: { teamName($0) },
+                    seatName: { seatName($0) },
+                    seatShort: { seatShort($0) },
+                    action: nil,
+                    showsDebugReveal: false)
+            } else if let view = handView {
                 VStack(spacing: 8) {
                     Spacer(minLength: 0)
                     if isMyTurn { actionBar(view) }   // only for bid/trump/discard
@@ -117,14 +128,16 @@ struct ClientGameView: View {
                 waitingView
             }
 
-            DealingAnimationOverlay(
-                trigger: dealAnimationToken(for: handView),
-                cardWidth: 62,
-                cardHeight: 88,
-                spreadScale: 0.58)
-            .padding(.horizontal, 26)
-            .padding(.bottom, cardH * 0.35)
-            .zIndex(2)
+            if endOfHandSnapshot == nil {
+                DealingAnimationOverlay(
+                    trigger: dealAnimationToken(for: handView),
+                    cardWidth: 62,
+                    cardHeight: 88,
+                    spreadScale: 0.58)
+                .padding(.horizontal, 26)
+                .padding(.bottom, cardH * 0.35)
+                .zIndex(2)
+            }
         }
         .onAppear { setOrientation(.landscape) }
     }
@@ -135,7 +148,7 @@ struct ClientGameView: View {
             decisionView: decisionView ?? tableView,
             isInteractive: isMyTurn,
             caughtUp: session.caughtUp,
-            endOfHandSnapshot: nil,
+            endOfHandSnapshot: endOfHandSnapshot,
             pendingTick: pendingTick,
             displayTick: displayTick,
             seatNames: clientSeatNames,
@@ -154,6 +167,23 @@ struct ClientGameView: View {
             names[seat.raw] = "You"
         }
         return names
+    }
+
+    private func teamName(_ team: Int) -> String {
+        let seats = team == 0 ? [0, 2] : [1, 3]
+        return "\(seatName(PlayerID(seats[0]))) + \(seatName(PlayerID(seats[1])))"
+    }
+
+    private func seatName(_ seat: PlayerID) -> String {
+        let names = clientSeatNames
+        guard names.indices.contains(seat.raw) else { return "Seat \(seat.raw)" }
+        return names[seat.raw]
+    }
+
+    private func seatShort(_ seat: PlayerID) -> String {
+        let name = seatName(seat)
+        if name == "You" || name.contains("(You)") { return "You" }
+        return String(name.prefix(3)).uppercased()
     }
 
     // MARK: - Hand

@@ -74,6 +74,10 @@ final class ClientSession: ObservableObject {
     /// "Watching play…" affordance between this player's turns.
     @Published private(set) var caughtUp: Bool = true
 
+    /// Public end-of-hand recap for remote clients. Built only from the final
+    /// redacted PlayerView plus the host's settled score marker.
+    @Published private(set) var handCompleteSnapshot: HandCompleteSnapshot? = nil
+
     // MARK: - Pacing knobs (mirror GameSession)
 
     private let frameInterval: Duration       = .milliseconds(800)
@@ -92,7 +96,7 @@ final class ClientSession: ObservableObject {
         case show(PlayerView)
         case decision(PlayerView, UUID)
         case pauseTrickSettle
-        case handFinishedMarker(matchWinner: Int?)
+        case handFinishedMarker(matchScore: [Int: Int], matchWinner: Int?)
     }
     private var queue: [QueueItem] = []
     private var drainTask: Task<Void, Never>? = nil
@@ -132,6 +136,7 @@ final class ClientSession: ObservableObject {
         pendingRequestID = nil
         pending = nil
         isTabletopMode = nil
+        handCompleteSnapshot = nil
     }
 
     /// Send hello with the player's chosen name. Call once after start().
@@ -178,6 +183,7 @@ final class ClientSession: ObservableObject {
                 handle(msg)
             } catch {
                 phase = .disconnected
+                handCompleteSnapshot = nil
                 return
             }
         }
@@ -202,6 +208,7 @@ final class ClientSession: ObservableObject {
             pending = nil
             displayView = nil
             caughtUp = true
+            handCompleteSnapshot = nil
 
         case .observation(let view):
             receiveFrame(view)
@@ -209,10 +216,10 @@ final class ClientSession: ObservableObject {
         case .decisionRequest(let id, let view):
             receiveDecision(view: view, id: id)
 
-        case .handFinished(_, let winner):
+        case .handFinished(let score, let winner):
             // Let the queue drain first so the deciding trick plays out;
             // when the drain reaches the marker, flip phase to handOver.
-            enqueue(.handFinishedMarker(matchWinner: winner))
+            enqueue(.handFinishedMarker(matchScore: score, matchWinner: winner))
 
         case .pauseGame(let reason):
             phase = .paused(reason: reason)
@@ -410,9 +417,15 @@ final class ClientSession: ObservableObject {
                 case .pauseTrickSettle:
                     try? await Task.sleep(for: trickSettleInterval)
 
-                case .handFinishedMarker(let winner):
+                case .handFinishedMarker(let score, let winner):
                     try? await Task.sleep(for: settleInterval)
                     if Task.isCancelled { return }
+                    if let finalView = effectiveTableView() {
+                        handCompleteSnapshot = HandCompleteSnapshot(
+                            publicView: finalView,
+                            matchScore: score,
+                            matchWinner: winner)
+                    }
                     phase = .handOver(matchWinner: winner)
                 }
             }
