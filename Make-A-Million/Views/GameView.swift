@@ -92,12 +92,7 @@ private struct SoloGameBody: View {
 
     private var endOfHandSnapshot: HandCompleteSnapshot? {
         guard let s = session.finished else { return nil }
-        return HandCompleteSnapshot(
-            matchScore: s.matchScore,
-            matchWinner: s.matchWinner,
-            bidHistory: s.bidHistory,
-            opener: Seats.next(s.dealer),
-            debugReveal: s.debugReveal())
+        return HandCompleteSnapshot(final: s)
     }
 
     var body: some View {
@@ -164,7 +159,6 @@ struct GameBody: View {
     @Namespace private var cardNS
     @State private var discardSelection: Set<Card> = []
     @State private var selectedBidIndex: Int = 0
-    @State private var bidHistoryExpanded: Bool = true
     @State private var dealAnimationTrigger: Int = -1
     @State private var lastDealAnimationToken: Int = -1
     @State private var showingDealAnimation: Bool = false
@@ -220,10 +214,6 @@ struct GameBody: View {
             .onChange(of: displayTick) { _, _ in
                 guard let d = tableView else { return }
                 DispatchQueue.main.async { onCaptureLastView?(d) }
-            }
-            .onChange(of: tableView?.phase) { _, newPhase in
-                guard let newPhase else { return }
-                bidHistoryExpanded = (newPhase == .bidding)
             }
             .onChange(of: settings.showFullTrickHistory) { _, enabled in
                 if !enabled { selectedTrickHistorySeat = nil }
@@ -1395,90 +1385,24 @@ struct GameBody: View {
     // MARK: Hand complete
 
     private func handCompleteView(_ s: HandCompleteSnapshot) -> some View {
-        let a = s.matchScore[0, default: 0]
-        let b = s.matchScore[1, default: 0]
-        let matchOver = s.matchWinner != nil
-        return VStack(spacing: 14) {
-            Text(matchOver ? "Match complete" : "Hand complete")
-                .font(TableTypography.display(.title2, weight: .bold)).foregroundStyle(.white)
-            if let winner = s.matchWinner {
-                Text("\(winner == 0 ? teamAName : teamBName) wins!")
-                    .font(TableTypography.display(.headline, weight: .bold)).foregroundStyle(TableStyle.tableGold)
-            }
-            Text("\(teamAName): $\(a / 1000)k").foregroundStyle(.white)
-            Text("\(teamBName): $\(b / 1000)k").foregroundStyle(.white.opacity(0.7))
-            if !s.bidHistory.isEmpty {
-                bidHistoryPanel(records: s.bidHistory, opener: s.opener)
-            }
-            HandRevealPanel(reveal: s.debugReveal)
-            if let dealAnother {
-                let label = (s.matchWinner == nil) ? "Next hand" : "Start new match"
-                Button {
-                    dealAnother()
-                } label: {
-                    Label(label, systemImage: s.matchWinner == nil
-                          ? "arrow.right.circle.fill"
-                          : "arrow.clockwise.circle.fill")
-                }
-                .buttonStyle(TablePillButtonStyle(tint: TableStyle.actionBlue,
-                                                  compact: true))
-            }
+        let action = dealAnother.map { deal in
+            HandCompleteAction(
+                title: s.matchWinner == nil ? "Next hand" : "Start new match",
+                systemImage: s.matchWinner == nil
+                    ? "arrow.right.circle.fill"
+                    : "arrow.clockwise.circle.fill",
+                action: deal)
         }
-        .padding(20)
-        .tablePanel(cornerRadius: 20, shadowOpacity: 0.30)
+        return HandCompleteScorecard(
+            snapshot: s,
+            teamName: { teamName($0) },
+            seatName: { seatName($0) },
+            seatShort: { seatShort($0) },
+            action: action)
     }
 
-    private func bidHistoryPanel(records: [BidRecord], opener: PlayerID) -> some View {
-        DisclosureGroup(isExpanded: $bidHistoryExpanded) {
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 8) {
-                    Text("Opener: \(seatName(opener))").font(TableTypography.display(.caption2, weight: .bold)).foregroundStyle(TableStyle.cardSelected)
-                    Spacer()
-                }
-                if records.isEmpty {
-                    Text("Waiting for \(seatName(opener)) to open").font(TableTypography.display(.caption2)).foregroundStyle(.tertiary)
-                } else {
-                    FlowRow(spacing: 6) {
-                        ForEach(Array(records.enumerated()), id: \.offset) { index, record in
-                            let firstMention = !records[..<index].contains { $0.player == record.player }
-                            HStack(spacing: 4) {
-                                Text(seatShort(record.player)).font(TableTypography.display(.caption2)).foregroundStyle(.secondary)
-                                if record.player == opener && firstMention {
-                                    Text("opens").font(TableTypography.display(.caption2)).foregroundStyle(TableStyle.cardSelected)
-                                }
-                                Text(bidHistoryLabel(record.action)).font(TableTypography.money(.caption2))
-                            }
-                            .padding(.horizontal, 7).padding(.vertical, 5)
-                            .background(RoundedRectangle(cornerRadius: 6).fill(bidHistoryTint(record).opacity(0.14)))
-                            .overlay(RoundedRectangle(cornerRadius: 6).stroke(bidHistoryTint(record).opacity(0.45), lineWidth: 1))
-                        }
-                    }
-                }
-            }
-            .padding(.top, 4)
-        } label: {
-            bidHistorySummary(records: records, opener: opener)
-        }
-        .font(TableTypography.display(.caption))
-        .padding(10)
-        .tablePanel(cornerRadius: 12, shadowOpacity: 0.16)
-    }
-
-    private func bidHistorySummary(records: [BidRecord], opener: PlayerID) -> some View {
-        let winning = records.reversed().first { rec in
-            if case .bid = rec.action { return true }; return false
-        }
-        return HStack(spacing: 8) {
-            Text("Bid history").font(TableTypography.display(.caption)).foregroundStyle(.secondary)
-            Spacer()
-            if let w = winning, case .bid(let amount) = w.action {
-                Text("\(seatShort(w.player)) $\(amount / 1000)k")
-                    .font(TableTypography.money(.caption))
-                    .foregroundStyle(TableStyle.tableGold)
-            } else {
-                Text("Opener: \(seatName(opener))").font(TableTypography.display(.caption2)).foregroundStyle(.tertiary)
-            }
-        }
+    private func teamName(_ team: Int) -> String {
+        team == 0 ? teamAName : teamBName
     }
 
     // MARK: Helpers - Dynamic Seat Naming

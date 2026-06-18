@@ -35,12 +35,7 @@ struct HostGameView: View {
 
     private var endOfHandSnapshot: HandCompleteSnapshot? {
         guard let s = gameSession.finished else { return nil }
-        return HandCompleteSnapshot(
-            matchScore: s.matchScore,
-            matchWinner: s.matchWinner,
-            bidHistory: s.bidHistory,
-            opener: Seats.next(s.dealer),
-            debugReveal: s.debugReveal())
+        return HandCompleteSnapshot(final: s)
     }
 
     var body: some View {

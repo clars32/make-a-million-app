@@ -34,18 +34,7 @@ struct TabletopGameView: View {
 
     private var endOfHandSnapshot: HandCompleteSnapshot? {
         guard let s = gameSession.finished else { return nil }
-        let projection = s.view(for: PlayerID(0))
-        let biddingTeam = s.highBidder.map { Seats.team(of: $0) }
-        let biddingPoints = biddingTeam.map { projection.liveHandScore[$0, default: 0] }
-        return HandCompleteSnapshot(
-            matchScore: s.matchScore,
-            matchWinner: s.matchWinner,
-            bidHistory: s.bidHistory,
-            opener: Seats.next(s.dealer),
-            debugReveal: s.debugReveal(),
-            bidAmount: s.highBid,
-            bidder: s.highBidder,
-            biddingTeamPoints: biddingPoints)
+        return HandCompleteSnapshot(final: s)
     }
 
     var body: some View {
@@ -540,52 +529,24 @@ struct TabletopGameView: View {
     }
 
     private func handCompleteView(_ s: HandCompleteSnapshot) -> some View {
-        VStack(spacing: 16) {
-            Text(s.matchWinner != nil ? "Match Complete!" : "Hand Complete")
-                .font(TableTypography.display(.largeTitle, weight: .bold)).foregroundStyle(.white)
-            if let winner = s.matchWinner {
-                Text(teamName(winner) + " wins!")
-                    .font(TableTypography.display(.title2)).foregroundStyle(TableStyle.tableGold)
-            }
-            if let bid = s.bidAmount, let bidder = s.bidder {
-                let pts = s.biddingTeamPoints ?? 0
-                let made = pts >= bid
-                VStack(spacing: 4) {
-                    Text("\(seatName(bidder)) bid $\(bid / 1000)k")
-                        .font(TableTypography.display(.title3)).foregroundStyle(.white)
-                    Text(made ? "Made it — took $\(pts / 1000)k"
-                              : "Set — took only $\(pts / 1000)k")
-                        .font(TableTypography.display(.headline, weight: .bold))
-                        .foregroundStyle(made ? TableStyle.cardPlayable : TableStyle.teamAmber)
+        let action = HandCompleteAction(
+            title: s.matchWinner == nil ? "Next hand" : "New match",
+            systemImage: s.matchWinner == nil
+                ? "arrow.right.circle.fill"
+                : "arrow.clockwise.circle.fill") {
+                    if s.matchWinner == nil {
+                        netSession.startNextHand()
+                    } else {
+                        netSession.start(dealSeed: .random(in: .min ... .max))
+                    }
                 }
-                .padding(.vertical, 4)
-            }
-
-            HStack(spacing: 28) {
-                VStack { Text(teamName(0)).font(TableTypography.display(.caption)).foregroundStyle(TableStyle.teamTint(0))
-                    Text("$\(s.matchScore[0, default: 0] / 1000)k").font(TableTypography.money(.title3)).foregroundStyle(.white) }
-                VStack { Text(teamName(1)).font(TableTypography.display(.caption)).foregroundStyle(TableStyle.teamTint(1))
-                    Text("$\(s.matchScore[1, default: 0] / 1000)k").font(TableTypography.money(.title3)).foregroundStyle(.white) }
-            }
-
-            if s.matchWinner == nil {
-                Button { netSession.startNextHand() } label: {
-                    Label("Next Hand", systemImage: "arrow.right.circle.fill")
-                        .font(TableTypography.display(.title3, weight: .bold))
-                }
-                .buttonStyle(TablePillButtonStyle(tint: TableStyle.actionBlue))
-                .padding(.top, 8)
-            } else {
-                Button { netSession.start(dealSeed: .random(in: .min ... .max)) } label: {
-                    Label("New Match", systemImage: "arrow.clockwise.circle.fill")
-                        .font(TableTypography.display(.title3, weight: .bold))
-                }
-                .buttonStyle(TablePillButtonStyle(tint: TableStyle.actionBlue))
-                .padding(.top, 8)
-            }
-        }
-        .padding(40)
-        .tablePanel(cornerRadius: 24, shadowOpacity: 0.30)
+        return HandCompleteScorecard(
+            snapshot: s,
+            teamName: { teamName($0) },
+            seatName: { seatName($0) },
+            seatShort: { seatShort($0) },
+            action: action,
+            showsDebugReveal: false)
     }
 
     private func pausedOverlay(reason: PauseReason) -> some View {

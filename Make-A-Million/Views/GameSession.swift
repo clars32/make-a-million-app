@@ -404,11 +404,32 @@ final class GameSession: ObservableObject {
     }
 
     private func publishFrame(_ view: PlayerView) {
+        #if DEBUG
+        warnOnMultiStepAdvance(to: view)
+        #endif
         withAnimation(.spring(response: 0.34, dampingFraction: 0.80)) {
             displayView = view
         }
         lastPublishAt = ContinuousClock.now
     }
+
+    #if DEBUG
+    /// Tripwire for the lost-frame class of bug. During trick play the table
+    /// should advance exactly one card per published frame; trick-settle frames
+    /// (4th card shown, then the cleared trick) keep the count flat, so they
+    /// don't trip this. A jump of more than one card means a frame was swallowed
+    /// — the cards will animate in together under a single sound cue.
+    private func warnOnMultiStepAdvance(to view: PlayerView) {
+        guard let old = displayView,
+              old.phase == .trickPlay, view.phase == .trickPlay else { return }
+        let delta = view.cardsPlayedCount - old.cardsPlayedCount
+        if delta > 1 {
+            print("⚠️ presentation: displayView advanced \(delta) plays in one "
+                  + "frame (\(old.cardsPlayedCount) → \(view.cardsPlayedCount)) — "
+                  + "a frame was dropped; cards will animate together")
+        }
+    }
+    #endif
 
     /// Sleep until at least `frameInterval` has elapsed since the last
     /// published frame. This paces frames that trickle in one at a time
@@ -473,15 +494,24 @@ final class GameSession: ObservableObject {
                 if Task.isCancelled { return }
                 if queue.isEmpty || holdPresentation { break }
 
-                // Belt-and-braces guard — any future await above this line
-                // could also empty the queue, so make removeFirst() honest.
+                // Pace a frame BEFORE it leaves the queue. If we dequeued first
+                // and were then cancelled during the pacing sleep, the frame
+                // would be lost — gone from the queue, never published —
+                // leaving the table a move behind exactly at the human's turn
+                // (where drainBeforeHumanTurn does the cancel). Peeking keeps
+                // the frame in the queue across the await, so a cancel hands it
+                // intact to drainQueueOnMainActor instead of swallowing it.
+                if case .show = queue.first {
+                    await paceSinceLastFrame()
+                    if Task.isCancelled { return }
+                    if queue.isEmpty || holdPresentation { break }
+                }
+
+                // Belt-and-braces guard — any await above this line could also
+                // empty the queue, so make removeFirst() honest.
                 guard !queue.isEmpty else { break }
                 switch queue.removeFirst() {
                 case .show(let view):
-                    // Pace before showing, so frames are evenly spaced whether
-                    // they were buffered or arrived one at a time.
-                    await paceSinceLastFrame()
-                    if Task.isCancelled { return }
                     publishFrame(view)
                 case .pauseTrickSettle:
                     try? await Task.sleep(for: trickSettleInterval)
@@ -565,3 +595,16 @@ extension GameSession: PresentationCoordinator {
         startDrainIfNeeded()
     }
 }
+
+#if DEBUG
+private extension PlayerView {
+    /// Cards played in the hand so far: completed tricks plus the in-progress
+    /// trick. Advances by exactly one per card play and stays flat as a trick
+    /// resolves (the 4th card moves from `currentTrick` into `completedTricks`
+    /// for a net of zero), so a publish that advances it by more than one means
+    /// a frame was dropped. Used by the presentation tripwire only.
+    var cardsPlayedCount: Int {
+        completedTricks.count * Seats.count + (currentTrick?.plays.count ?? 0)
+    }
+}
+#endif
