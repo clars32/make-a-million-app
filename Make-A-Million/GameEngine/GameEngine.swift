@@ -310,17 +310,15 @@ extension GameState {
                    : [.callMisdeal]
 
         case .widowDiscard:
-            // Any 3-card discard that obeys the Money / special restrictions.
-            // Enumerating all C(16,3) combinations is fine (560 max) and lets
-            // the UI/AI see exactly what's legal.
+            // Every legal 3-card discard, built DIRECTLY from the forced tier
+            // sizes (plain → trump → money) rather than generating all
+            // C(16,3) combinations and filtering. The UI/AI see exactly what's
+            // legal, and the bid-rollout discard path (which hits this per
+            // sampled world) no longer pays for 560 throwaway combinations.
             // Trump is always known here — namingTrump precedes widowDiscard.
             guard let hand = hands[player], let trump = trump else { return [] }
-            var moves: [Move] = []
-            let combos = Self.combinations(hand, choose: 3)
-            for combo in combos where Self.isLegalWidowDiscard(combo, from: hand, trump: trump) {
-                moves.append(.discardWidow(combo))
-            }
-            return moves
+            return Self.legalWidowDiscards(from: hand, trump: trump)
+                .map { .discardWidow($0) }
 
         case .namingTrump:
             return CardColor.allCases.map { .nameTrump($0) }
@@ -443,14 +441,63 @@ extension GameState {
         guard arr.count >= k else { return [] }
         if arr.count == k { return [arr] }
         var result: [[T]] = []
-        func recurse(_ start: Int, _ pick: [T]) {
-            if pick.count == k { result.append(pick); return }
-            for i in start..<arr.count {
-                recurse(i + 1, pick + [arr[i]])
+        // One reused index buffer; only the emitted combination allocates,
+        // instead of `pick + [arr[i]]` copying the accumulator at every step.
+        var pick = [Int](repeating: 0, count: k)
+        func recurse(_ start: Int, _ depth: Int) {
+            if depth == k {
+                result.append(pick.map { arr[$0] })
+                return
+            }
+            // Prune: stop early enough to still fill the remaining k-depth slots.
+            let last = arr.count - (k - depth)
+            var i = start
+            while i <= last {
+                pick[depth] = i
+                recurse(i + 1, depth + 1)
+                i += 1
             }
         }
-        recurse(0, [])
+        recurse(0, 0)
         return result
+    }
+
+    /// All legal 3-card widow discards for `hand` under `trump`, built directly
+    /// from the forced tier sizes (plain fills first, then trump, then money —
+    /// the same protection ordering `isLegalWidowDiscard` enforces). Each tier
+    /// contributes a fixed count, so the legal set is the cross-product of
+    /// per-tier combinations — exactly the set the per-discard validator
+    /// accepts, with no specials and no C(16,3) scan.
+    static func legalWidowDiscards(from hand: [Card], trump: CardColor) -> [[Card]] {
+        func isTrumpTier(_ c: Card) -> Bool {
+            !c.isMoney && !c.isSpecial && c.effectiveColor(trump: trump) == trump
+        }
+        func isPlainTier(_ c: Card) -> Bool {
+            !c.isMoney && !c.isSpecial && c.effectiveColor(trump: trump) != trump
+        }
+        let plain  = hand.filter(isPlainTier)
+        let trumps = hand.filter(isTrumpTier)
+        let money  = hand.filter(\.isMoney)
+
+        let plainForced = min(3, plain.count)
+        let trumpForced = min(3 - plainForced, trumps.count)
+        let moneyForced = 3 - plainForced - trumpForced
+        guard moneyForced <= money.count else { return [] }   // can't fill 3
+
+        let plainCombos = combinations(plain,  choose: plainForced)
+        let trumpCombos = combinations(trumps, choose: trumpForced)
+        let moneyCombos = combinations(money,  choose: moneyForced)
+
+        var out: [[Card]] = []
+        out.reserveCapacity(plainCombos.count * trumpCombos.count * moneyCombos.count)
+        for p in plainCombos {
+            for t in trumpCombos {
+                for m in moneyCombos {
+                    out.append(p + t + m)
+                }
+            }
+        }
+        return out
     }
 }
 
@@ -469,48 +516,48 @@ extension GameState {
             try s.applyBid(action, by: player)
             return s
 
-            // MARK: Misdeal — automatic redeal, or one seat's "agree" vote
-            case (.misdealDecision, .callMisdeal):
-                // Agreement mode: record this seat's vote. The redeal only
-                // happens once all four have agreed; until then the decision
-                // passes clockwise to the next seat that hasn't voted.
-                if s.misdealRule.requiresAgreement,
-                   s.misdealVotes.union([player]).count < Seats.count {
-                    s.misdealVotes.insert(player)
-                    var n = Seats.next(player)
-                    while s.misdealVotes.contains(n) { n = Seats.next(n) }
-                    s.toAct = n
-                    return s
-                }
-                // Same dealer, fresh seed, same rules (so a future settings
-                // change persists for the whole match, not just one deal).
-                // SEED STRIDE: must NOT be a small step. The session and the
-                // match runner schedule hand seeds as `base &+ handIndex`, so
-                // the old `&+ 1` made "hand k's redeal" land on exactly the
-                // seed of hand k+1 — and since deals are seat-indexed, the
-                // next hand replayed the IDENTICAL 55-card layout (observed
-                // in real play; the rotated dealer doesn't mask it). A large
-                // odd golden-ratio stride keeps redeals deterministic and
-                // reproducible while staying out of reach of any small-stride
-                // hand schedule.
-                return GameState.newHand(dealer: s.dealer,
-                                         seed: s.dealSeed &+ 0x9E37_79B9_7F4A_7C15,
-                                         carryScore: s.matchScore,
-                                         misdealRule: s.misdealRule,
-                                         endgameRule: s.endgameRule,
-                                         houseRules: s.houseRules)
-
-            // MARK: Misdeal — one seat declines the redeal (agreement mode).
-            // A single decline keeps the hand: votes clear and bidding opens
-            // exactly as if the deal had never been short.
-            case (.misdealDecision, .declineMisdeal):
-                guard s.misdealRule.requiresAgreement else {
-                    throw MoveError.wrongPhase
-                }
-                s.misdealVotes = []
-                s.phase = .bidding
-                s.toAct = Seats.next(s.dealer)
+        // MARK: Misdeal — automatic redeal, or one seat's "agree" vote
+        case (.misdealDecision, .callMisdeal):
+            // Agreement mode: record this seat's vote. The redeal only
+            // happens once all four have agreed; until then the decision
+            // passes clockwise to the next seat that hasn't voted.
+            if s.misdealRule.requiresAgreement,
+               s.misdealVotes.union([player]).count < Seats.count {
+                s.misdealVotes.insert(player)
+                var n = Seats.next(player)
+                while s.misdealVotes.contains(n) { n = Seats.next(n) }
+                s.toAct = n
                 return s
+            }
+            // Same dealer, fresh seed, same rules (so a future settings
+            // change persists for the whole match, not just one deal).
+            // SEED STRIDE: must NOT be a small step. The session and the
+            // match runner schedule hand seeds as `base &+ handIndex`, so
+            // the old `&+ 1` made "hand k's redeal" land on exactly the
+            // seed of hand k+1 — and since deals are seat-indexed, the
+            // next hand replayed the IDENTICAL 55-card layout (observed
+            // in real play; the rotated dealer doesn't mask it). A large
+            // odd golden-ratio stride keeps redeals deterministic and
+            // reproducible while staying out of reach of any small-stride
+            // hand schedule.
+            return GameState.newHand(dealer: s.dealer,
+                                     seed: s.dealSeed &+ 0x9E37_79B9_7F4A_7C15,
+                                     carryScore: s.matchScore,
+                                     misdealRule: s.misdealRule,
+                                     endgameRule: s.endgameRule,
+                                     houseRules: s.houseRules)
+
+        // MARK: Misdeal — one seat declines the redeal (agreement mode).
+        // A single decline keeps the hand: votes clear and bidding opens
+        // exactly as if the deal had never been short.
+        case (.misdealDecision, .declineMisdeal):
+            guard s.misdealRule.requiresAgreement else {
+                throw MoveError.wrongPhase
+            }
+            s.misdealVotes = []
+            s.phase = .bidding
+            s.toAct = Seats.next(s.dealer)
+            return s
 
         // MARK: Widow discard
         case (.widowDiscard, .discardWidow(let cards)):

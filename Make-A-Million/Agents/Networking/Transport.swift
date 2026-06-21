@@ -51,4 +51,9 @@ protocol ClientToHostTransport: AnyObject, Sendable {
 enum TransportError: Error, Equatable {
     case disconnected
     case cancelled
+    /// A second decision was requested for a seat that already has one in
+    /// flight. The engine never asks one seat to act twice concurrently, so
+    /// this only arises from a reconnect race — thrown (not a hard crash) so
+    /// the host can surface a pause/resync instead of taking down the table.
+    case alreadyInFlight
 }

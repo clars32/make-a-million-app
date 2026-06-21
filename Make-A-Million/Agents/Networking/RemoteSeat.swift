@@ -84,8 +84,11 @@ actor RemoteSeat {
     /// on disconnect. Exactly one outstanding request at a time per seat
     /// (the engine never asks the same seat to act twice concurrently).
     func requestMove(view: PlayerView) async throws -> Move {
-        precondition(pendingMove == nil,
-                     "RemoteSeat already has an in-flight decision request")
+        // The engine never asks one seat to act twice concurrently; if a
+        // reconnect race ever re-issues a decision before the prior
+        // continuation cleared, throw rather than crash the host so NetSession
+        // can pause and resync.
+        guard pendingMove == nil else { throw TransportError.alreadyInFlight }
         let id = UUID()
         pendingRequestID = id
 

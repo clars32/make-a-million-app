@@ -1,22 +1,8 @@
 //
 //  GameSession.swift
-//  Make-A-Million
-//
-//  Created by Carter Larsen on 5/20/26.
-//
-
-
-//
-//  GameSession.swift
-//  Make-A-Million
+//  Make-a-Million
 //
 //  Created by Carter Larsen on 5/19/26.
-//
-
-
-//
-//  GameSession.swift
-//  Make-a-Million
 //
 //  Owns one HumanAgent + three MonteCarloAgents and runs a hand via
 //  GameRunner on a background task.
@@ -478,6 +464,30 @@ final class GameSession: ObservableObject {
         enqueue(.handFinishedMarker(final))
     }
 
+    /// Process one dequeued presentation item. Shared by both drain paths
+    /// (the background `startDrainIfNeeded` loop and the synchronous
+    /// `drainQueueOnMainActor` used before the human's turn) so the per-item
+    /// handling lives in exactly one place and can't drift between them.
+    private func handleDequeued(_ item: QueueItem) async {
+        switch item {
+        case .show(let view):
+            publishFrame(view)
+        case .pauseTrickSettle:
+            try? await Task.sleep(for: trickSettleInterval)
+        case .handFinishedMarker(let final):
+            // Hold on the cleared/resolved last-trick frame so the lastTrick
+            // panel registers, then flip to the end-of-hand panel.
+            // `pendingFinal` guards against reset() racing during the sleep.
+            try? await Task.sleep(for: settleInterval)
+            if Task.isCancelled { return }
+            if self.pendingFinal != nil {
+                publishFrame(final.view(for: spectator))
+                self.finished = final
+                self.running = false
+            }
+        }
+    }
+
     private func startDrainIfNeeded() {
         guard !holdPresentation else { return }
         guard !draining else { return }
@@ -510,24 +520,7 @@ final class GameSession: ObservableObject {
                 // Belt-and-braces guard — any await above this line could also
                 // empty the queue, so make removeFirst() honest.
                 guard !queue.isEmpty else { break }
-                switch queue.removeFirst() {
-                case .show(let view):
-                    publishFrame(view)
-                case .pauseTrickSettle:
-                    try? await Task.sleep(for: trickSettleInterval)
-                case .handFinishedMarker(let final):
-                    // Hold on the cleared/resolved last-trick frame so
-                    // the lastTrick panel registers, then flip to the
-                    // end-of-hand panel. `pendingFinal` guards against
-                    // reset() racing during the sleep.
-                    try? await Task.sleep(for: settleInterval)
-                    if Task.isCancelled { return }
-                    if self.pendingFinal != nil {
-                        publishFrame(final.view(for: spectator))
-                        self.finished = final
-                        self.running = false
-                    }
-                }
+                await handleDequeued(queue.removeFirst())
             }
 
             draining = false
@@ -545,19 +538,7 @@ final class GameSession: ObservableObject {
             await paceSinceLastFrame()
 
             guard !queue.isEmpty else { break }
-            switch queue.removeFirst() {
-            case .show(let view):
-                publishFrame(view)
-            case .pauseTrickSettle:
-                try? await Task.sleep(for: trickSettleInterval)
-            case .handFinishedMarker(let final):
-                try? await Task.sleep(for: settleInterval)
-                if self.pendingFinal != nil {
-                    publishFrame(final.view(for: spectator))
-                    self.finished = final
-                    self.running = false
-                }
-            }
+            await handleDequeued(queue.removeFirst())
         }
     }
 }

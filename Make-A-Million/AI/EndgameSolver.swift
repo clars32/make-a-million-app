@@ -54,14 +54,21 @@ enum EndgameSolver {
     /// settled (`.handComplete`) state. Returns nil if the node budget is
     /// exhausted (caller falls back to a greedy rollout) or the state is not
     /// in trick play.
+    ///
+    /// `policyGuess` supplies the move to try first at each node for alpha-beta
+    /// ordering. Pass the SAME flagged `PlayoutPolicy` the rollouts use, so the
+    /// ordering matches the policy that is usually right (better cuts). Ordering
+    /// only affects SPEED, never the value; nil falls back to the default-flag
+    /// policy move.
     static func solve(_ state: GameState,
                       myTeam: Int,
                       nodeBudget: Int = defaultNodeBudget,
+                      policyGuess: ((GameState) -> Move)? = nil,
                       leaf: (GameState) -> Double) -> Double? {
         var budget = nodeBudget
         return alphabeta(state, myTeam: myTeam,
                          alpha: -.infinity, beta: .infinity,
-                         budget: &budget, leaf: leaf)
+                         budget: &budget, policyGuess: policyGuess, leaf: leaf)
     }
 
     // MARK: - Search
@@ -71,6 +78,7 @@ enum EndgameSolver {
                                   alpha: Double,
                                   beta: Double,
                                   budget: inout Int,
+                                  policyGuess: ((GameState) -> Move)?,
                                   leaf: (GameState) -> Double) -> Double? {
         if state.phase == .handComplete { return leaf(state) }
         guard state.phase == .trickPlay else { return nil }   // defensive
@@ -78,7 +86,8 @@ enum EndgameSolver {
         if budget < 0 { return nil }
 
         let seat = state.toAct
-        let moves = ordered(state.legalMoves(for: seat), state: state, seat: seat)
+        let moves = ordered(state.legalMoves(for: seat), state: state, seat: seat,
+                            policyGuess: policyGuess)
         guard !moves.isEmpty else { return nil }              // engine invariant
 
         let maximizing = Seats.team(of: seat) == myTeam
@@ -88,7 +97,7 @@ enum EndgameSolver {
         for mv in moves {
             guard let next = try? state.applying(mv, by: seat) else { continue }
             guard let v = alphabeta(next, myTeam: myTeam, alpha: a, beta: b,
-                                    budget: &budget, leaf: leaf)
+                                    budget: &budget, policyGuess: policyGuess, leaf: leaf)
             else { return nil }                               // budget tripped below
             if maximizing {
                 if v > best { best = v }
@@ -104,12 +113,15 @@ enum EndgameSolver {
 
     /// Try the greedy policy's move first — it is usually best, which is
     /// what makes alpha-beta prune. Pure speed heuristic; the value is the
-    /// same in any order.
+    /// same in any order. Uses the caller's flagged policy when supplied so
+    /// the guess matches the rollout policy (tighter cuts on tiers whose
+    /// `PlayoutPolicy` flags change its preferred move, e.g. `topPull`).
     private static func ordered(_ moves: [Move],
                                 state: GameState,
-                                seat: PlayerID) -> [Move] {
+                                seat: PlayerID,
+                                policyGuess: ((GameState) -> Move)?) -> [Move] {
         guard moves.count > 1 else { return moves }
-        let guess = PlayoutPolicy.move(in: state, seat: seat)
+        let guess = policyGuess?(state) ?? PlayoutPolicy.move(in: state, seat: seat)
         guard let idx = moves.firstIndex(of: guess), idx != 0 else { return moves }
         var out = moves
         out.remove(at: idx)

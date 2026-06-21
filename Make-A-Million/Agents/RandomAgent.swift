@@ -49,4 +49,9 @@ final class RNGBox {
         precondition(upperBound > 0)
         return Int(rng.next() % UInt64(upperBound))
     }
+
+    /// A full 64-bit draw, used where the value seeds another RNG (e.g. a fresh
+    /// `Determinizer` or bid rollout) rather than indexing into a bounded range.
+    /// Exposes the generator's output directly — no modulo, no lost bit.
+    func nextRaw() -> UInt64 { rng.next() }
 }

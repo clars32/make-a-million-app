@@ -51,6 +51,61 @@ struct AIWorld {
     let me: PlayerID
 }
 
+/// The auction-reading model shared by BOTH the trick-play `Determinizer` and
+/// the bid-time deal sampler in `MonteCarloAgent`, so the two can never drift
+/// (they were duplicated copies before). A human reads exactly this: a seat
+/// that bid leans strong (scaled by how far above the floor), a passer weak, an
+/// un-acted seat neutral; strong cards then drift toward the strong-lean seats.
+enum BidLean {
+    /// Per hidden seat (everyone but `view.me`): + if they bid, − if they
+    /// passed, 0 if they have not yet acted.
+    static func bySeat(view: PlayerView) -> [PlayerID: Double] {
+        var highestBid: [PlayerID: Int] = [:]
+        for rec in view.bidHistory {
+            if case .bid(let amt) = rec.action {
+                highestBid[rec.player] = max(highestBid[rec.player] ?? 0, amt)
+            }
+        }
+        var lean: [PlayerID: Double] = [:]
+        for s in Seats.all where s != view.me {
+            if let amt = highestBid[s] {
+                // Bidding signals strength, scaled by how far above the floor.
+                lean[s] = min(2.0, 0.5 + Double(amt - Bidding.openingMinimum) / 75_000.0)
+            } else if view.passed.contains(s) {
+                lean[s] = -1.0          // a pass signals a weaker hand
+            } else {
+                lean[s] = 0.0           // hasn't acted / unknown
+            }
+        }
+        return lean
+    }
+
+    /// A rough 0…1 "how good is this card to hold" score — money and high rank
+    /// are strong, the Tiger tops out, Bull/Bear are treated as neutral. A small
+    /// same-color bonus applies when `trump` is known (it is nil at bid time).
+    static func cardValue(_ c: Card, trump: CardColor?) -> Double {
+        switch c {
+        case .tiger: return 1.0
+        case .bull, .bear: return 0.5
+        case .colored(let col, let r):
+            var s = Double(r.rawValue) / 12.0 * 0.5         // rank → up to 0.5
+            s += Double(r.moneyValue) / 40_000.0 * 0.4      // money → up to 0.4
+            if let trump, col == trump { s += 0.1 }         // trump bonus
+            return min(1.0, s)
+        }
+    }
+
+    /// exp(strength · centredCardValue · seatLean): >1 when a strong card meets
+    /// a bidder (or a weak card meets a passer), <1 for the mismatches.
+    static func weight(card: Card, seat: PlayerID,
+                       lean: [PlayerID: Double], strength: Double,
+                       trump: CardColor?) -> Double {
+        let v = cardValue(card, trump: trump) - 0.5         // [-0.5, +0.5]
+        let l = lean[seat] ?? 0.0                            // [-1, +2]
+        return exp(strength * v * l)
+    }
+}
+
 /// Builds determinized worlds from a PlayerView. Deterministic given its seed
 /// so a weird AI decision is reproducible — same property the engine and the
 /// RandomAgent already have.
@@ -92,29 +147,7 @@ struct Determinizer {
         self.declarerTrumpBias = declarerTrumpBias
         self.filterDominatedDonation = filterDominatedDonation
         self.filterBearDecline = filterBearDecline
-        self.lean = Determinizer.computeLean(view: view)
-    }
-
-    /// Read the public bid record into a per-seat strength lean.
-    private static func computeLean(view: PlayerView) -> [PlayerID: Double] {
-        var highestBid: [PlayerID: Int] = [:]
-        for rec in view.bidHistory {
-            if case .bid(let amt) = rec.action {
-                highestBid[rec.player] = max(highestBid[rec.player] ?? 0, amt)
-            }
-        }
-        var lean: [PlayerID: Double] = [:]
-        for s in Seats.all where s != view.me {
-            if let amt = highestBid[s] {
-                // Bidding signals strength, scaled by how far above the floor.
-                lean[s] = min(2.0, 0.5 + Double(amt - Bidding.openingMinimum) / 75_000.0)
-            } else if view.passed.contains(s) {
-                lean[s] = -1.0          // a pass signals a weaker hand
-            } else {
-                lean[s] = 0.0           // hasn't acted / unknown
-            }
-        }
-        return lean
+        self.lean = BidLean.bySeat(view: view)
     }
 
     // MARK: Public knowledge derived once
@@ -133,7 +166,7 @@ struct Determinizer {
     private func remainingCount(for seat: PlayerID) -> Int {
         if seat == view.me { return view.myHand.count }
         var played = 0
-        for t in view.completedTricks where true {
+        for t in view.completedTricks {
             played += t.plays.filter { $0.player == seat }.count
         }
         if let cur = view.currentTrick {
@@ -637,11 +670,16 @@ struct Determinizer {
                   let v = voids[seat] else { return false }
             return v.contains(ec)
         }
-        let ordered = pool.sorted { a, b in
-            let na = seats.filter { banned(a, $0) }.count
-            let nb = seats.filter { banned(b, $0) }.count
-            return na > nb
+        // A card's ban-count (how many seats its color is void-blocked for)
+        // depends only on the card and the voids, not on the pool, so compute
+        // it ONCE per card instead of re-filtering all seats on every one of
+        // the sort's O(n log n) comparisons.
+        var banCount: [Card: Int] = [:]
+        banCount.reserveCapacity(pool.count)
+        for c in pool where banCount[c] == nil {
+            banCount[c] = seats.reduce(0) { $0 + (banned(c, $1) ? 1 : 0) }
         }
+        let ordered = pool.sorted { (banCount[$0] ?? 0) > (banCount[$1] ?? 0) }
 
         for card in ordered {
             // Eligible seats that still need cards and aren't void-blocked.
@@ -673,9 +711,10 @@ struct Determinizer {
         if candidates.count == 1 { return candidates[0] }
         if bidLeanStrength <= 0 && declarerTrumpBias <= 0 { return candidates[0] }
         let weights = candidates.map { seat -> Double in
-            var w = leanWeight(card: card, seat: seat)
+            var w = BidLean.weight(card: card, seat: seat, lean: lean,
+                                   strength: bidLeanStrength, trump: view.trump)
             // Shape prior: the declarer named trump → likely long in it. Pull
-            // trump cards (any rank) toward the declarer; `leanWeight` only
+            // trump cards (any rank) toward the declarer; the lean weight only
             // captures strength, so it misses low-trump length.
             if declarerTrumpBias > 0,
                let t = view.trump, let d = view.highBidder, d != view.me,
@@ -693,28 +732,6 @@ struct Determinizer {
             if r <= acc { return candidates[i] }
         }
         return candidates[candidates.count - 1]
-    }
-
-    /// exp(strength × centredCardValue × seatLean): >1 when a strong card meets
-    /// a bidder (or a weak card meets a passer), <1 for the mismatches.
-    private func leanWeight(card: Card, seat: PlayerID) -> Double {
-        let v = cardValueScore(card) - 0.5         // [-0.5, +0.5]
-        let l = lean[seat] ?? 0.0                   // [-1, +2]
-        return exp(bidLeanStrength * v * l)
-    }
-
-    /// A rough 0…1 "how good is this card to hold" score, for bid-lean only —
-    /// money and high rank are strong, low pips are weak, Tiger is the top.
-    private func cardValueScore(_ c: Card) -> Double {
-        switch c {
-        case .tiger: return 1.0
-        case .bull, .bear: return 0.5               // situational, treat as neutral
-        case .colored(let col, let r):
-            var s = Double(r.rawValue) / 12.0 * 0.5         // rank → up to 0.5
-            s += Double(r.moneyValue) / 40_000.0 * 0.4      // money → up to 0.4
-            if let t = view.trump, col == t { s += 0.1 }    // trump bonus
-            return min(1.0, s)
-        }
     }
 
     private mutating func shuffle(_ a: inout [Card]) {

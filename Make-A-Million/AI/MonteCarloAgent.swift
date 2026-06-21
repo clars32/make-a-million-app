@@ -875,9 +875,11 @@ struct MonteCarloAgent: PlayerAgent {
         guard let s1 = try? s.applying(trumpMove, by: view.me) else { return nil }
         s = s1
         let discardLegal = s.legalMoves(for: view.me)
-        let discardMove = discardLegal.min {
-            discardCost($0.discardCards ?? []) < discardCost($1.discardCards ?? [])
-        } ?? discardLegal.first
+        // Cost each discard once (not twice per comparison) and take the min.
+        let discardMove = discardLegal
+            .map { ($0, discardCost($0.discardCards ?? [])) }
+            .min { $0.1 < $1.1 }?.0
+            ?? discardLegal.first
         guard let dm = discardMove, let s2 = try? s.applying(dm, by: view.me) else {
             return nil
         }
@@ -885,12 +887,7 @@ struct MonteCarloAgent: PlayerAgent {
 
         var steps = 0
         while s.phase != .handComplete && steps < 600 {
-            let mv = PlayoutPolicy.move(in: s, seat: s.toAct,
-                                        commandingPull: difficulty.rolloutCommandingPull,
-                                        specialEscape: difficulty.rolloutSpecialEscape,
-                                        topPull: difficulty.rolloutTopPull,
-                                        establishDuck: difficulty.rolloutEstablishDuck,
-                                        bankWin: difficulty.rolloutBankWin)
+            let mv = policyMove(in: s, seat: s.toAct)
             guard let ns = try? s.applying(mv, by: s.toAct) else { break }
             s = ns
             steps += 1
@@ -929,7 +926,7 @@ struct MonteCarloAgent: PlayerAgent {
         for s in others { hands[s] = [] }
 
         if difficulty.bidRolloutLean && difficulty.bidLeanStrength > 0 {
-            let lean = bidLeanBySeat(view: view)
+            let lean = BidLean.bySeat(view: view)
             for card in deal {
                 let need = others.filter { (hands[$0]?.count ?? 0) < 13 }
                 let pick = weightedSeat(need, card: card, lean: lean,
@@ -943,38 +940,17 @@ struct MonteCarloAgent: PlayerAgent {
         return (hands, widow)
     }
 
-    /// Per hidden seat: + if they have bid (scaled by amount), − if they
-    /// passed, 0 if not yet acted. Mirrors `Determinizer.computeLean` for the
-    /// bid-time sampler (no trump is named yet, so it's strength-only).
-    private func bidLeanBySeat(view: PlayerView) -> [PlayerID: Double] {
-        var highestBid: [PlayerID: Int] = [:]
-        for rec in view.bidHistory {
-            if case .bid(let amt) = rec.action {
-                highestBid[rec.player] = max(highestBid[rec.player] ?? 0, amt)
-            }
-        }
-        var lean: [PlayerID: Double] = [:]
-        for s in Seats.all where s != view.me {
-            if let amt = highestBid[s] {
-                lean[s] = min(2.0, 0.5 + Double(amt - Bidding.openingMinimum) / 75_000.0)
-            } else if view.passed.contains(s) {
-                lean[s] = -1.0
-            } else {
-                lean[s] = 0.0
-            }
-        }
-        return lean
-    }
-
-    /// Pick a seat for `card`, weighted by exp(strength · centredValue · lean):
-    /// >1 when a strong card meets a bidder (or a weak card a passer). Among the
-    /// seats that still need cards, so counts stay exact.
+    /// Pick a seat for `card`, weighted by the shared `BidLean` model (>1 when a
+    /// strong card meets a bidder, or a weak card a passer). Among the seats that
+    /// still need cards, so counts stay exact. Trump is unnamed at bid time, so
+    /// the model's same-color bonus is inactive (`trump: nil`).
     private func weightedSeat(_ seats: [PlayerID], card: Card,
                               lean: [PlayerID: Double], strength: Double,
                               rng: inout SeededRNG) -> PlayerID {
         guard seats.count > 1 else { return seats.first ?? PlayerID(0) }
-        let v = bidCardValue(card) - 0.5
-        let weights = seats.map { exp(strength * v * (lean[$0] ?? 0)) }
+        let weights = seats.map {
+            BidLean.weight(card: card, seat: $0, lean: lean, strength: strength, trump: nil)
+        }
         let total = weights.reduce(0, +)
         guard total > 0 else { return seats[0] }
         let r = Double(rng.next() % 1_000_000) / 1_000_000.0 * total
@@ -984,20 +960,6 @@ struct MonteCarloAgent: PlayerAgent {
             if r <= acc { return seats[i] }
         }
         return seats[seats.count - 1]
-    }
-
-    /// 0…1 "how good to hold" — money and high rank are strong, specials high.
-    /// No trump bonus (trump isn't named at bid time). Mirrors
-    /// `Determinizer.cardValueScore`.
-    private func bidCardValue(_ c: Card) -> Double {
-        switch c {
-        case .tiger: return 1.0
-        case .bull, .bear: return 0.5
-        case .colored(_, let r):
-            var s = Double(r.rawValue) / 12.0 * 0.5
-            s += Double(r.moneyValue) / 40_000.0 * 0.4
-            return min(1.0, s)
-        }
     }
 
     // MARK: - Widow discard (trump already known)
@@ -1160,12 +1122,7 @@ struct MonteCarloAgent: PlayerAgent {
                                            baseline: baseline,
                                            exactGate: max(difficulty.rolloutExactTricks,
                                                           difficulty.exactEndgameTricks)) },
-                policyMove: { PlayoutPolicy.move(in: $0, seat: $0.toAct,
-                                                 commandingPull: difficulty.rolloutCommandingPull,
-                                                 specialEscape: difficulty.rolloutSpecialEscape,
-                                                 topPull: difficulty.rolloutTopPull,
-                                                 establishDuck: difficulty.rolloutEstablishDuck,
-                                                 bankWin: difficulty.rolloutBankWin) },
+                policyMove: { policyMove(in: $0, seat: $0.toAct) },
                 nextRandom: { seedBox.nextRaw() })
             for st in stats where st.visits > 0 {
                 totals[st.move] = st.total
@@ -1768,6 +1725,18 @@ struct MonteCarloAgent: PlayerAgent {
 
     // MARK: - Rollout + scoring
 
+    /// `PlayoutPolicy.move` with THIS profile's rollout flags applied. The one
+    /// place the lever set is spread, so the greedy rollout, the IS-MCTS tail,
+    /// and the EndgameSolver's move ordering all drive the identical policy.
+    private func policyMove(in state: GameState, seat: PlayerID) -> Move {
+        PlayoutPolicy.move(in: state, seat: seat,
+                           commandingPull: difficulty.rolloutCommandingPull,
+                           specialEscape: difficulty.rolloutSpecialEscape,
+                           topPull: difficulty.rolloutTopPull,
+                           establishDuck: difficulty.rolloutEstablishDuck,
+                           bankWin: difficulty.rolloutBankWin)
+    }
+
     /// Score one (world × candidate) continuation: roll the determinized
     /// state forward with the greedy PlayoutPolicy and return the utility of
     /// the settled hand. With `exactGate > 0`, hand off to EndgameSolver as
@@ -1788,19 +1757,16 @@ struct MonteCarloAgent: PlayerAgent {
         var solverLive = exactGate > 0
         while s.phase != .handComplete && steps < 600 {
             if solverLive, (s.hands[s.toAct]?.count ?? .max) <= exactGate {
-                if let v = EndgameSolver.solve(s, myTeam: myTeam, leaf: {
+                if let v = EndgameSolver.solve(s, myTeam: myTeam,
+                                               policyGuess: { policyMove(in: $0, seat: $0.toAct) },
+                                               leaf: {
                     utility($0, myTeam: myTeam, baseline: baseline)
                 }) {
                     return v
                 }
                 solverLive = false
             }
-            let mv = PlayoutPolicy.move(in: s, seat: s.toAct,
-                                        commandingPull: difficulty.rolloutCommandingPull,
-                                        specialEscape: difficulty.rolloutSpecialEscape,
-                                        topPull: difficulty.rolloutTopPull,
-                                        establishDuck: difficulty.rolloutEstablishDuck,
-                                        bankWin: difficulty.rolloutBankWin)
+            let mv = policyMove(in: s, seat: s.toAct)
             guard let ns = try? s.applying(mv, by: s.toAct) else { break }
             s = ns
             steps += 1
@@ -1922,11 +1888,6 @@ struct MonteCarloAgent: PlayerAgent {
         }
         return top
     }
-}
-
-// Preserve the RNGBox raw accessor that other files depend on.
-extension RNGBox {
-    func nextRaw() -> UInt64 { UInt64(nextInt(upperBound: Int.max)) }
 }
 
 // MARK: - Card convenience
