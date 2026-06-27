@@ -1,24 +1,31 @@
 # Deferred work
 
-Tracked follow-ups that were intentionally left out of the codebase-review
-cleanup because they need an Xcode build to land safely (new source files must
-be registered in `project.pbxproj`, and the second item touches the test
-targets). Do these in an environment where the project can be compiled.
+## 1. Decompose the two oversized files — DONE (June 2026)
 
-## 1. Decompose the two oversized files
+The project uses Xcode 16 file-system-synchronized groups, so new `.swift`
+files in the source directories are picked up automatically — no
+`project.pbxproj` changes were needed. Both types were split into same-type
+`extension` files (public API unchanged):
 
-- `Make-A-Million/AI/MonteCarloAgent.swift` (~1,900 lines): split by phase into
-  separate files/extensions — bidding, widow discard + trump, trick-play
-  shortlist, and rollout/scoring.
-- `Make-A-Million/Views/GameView.swift` (~1,500 lines): break into subviews.
+- `MonteCarloAgent.swift` (1,900 → 170 lines): core struct/init/`chooseMove` +
+  shared helpers. Phase clusters moved to `MonteCarloDifficulty.swift`,
+  `MonteCarloAgent+Bidding.swift`, `MonteCarloAgent+TrickPlay.swift`,
+  `MonteCarloAgent+Rollout.swift`.
+- `GameView.swift` (1,485 → 382 lines): `GameBody`'s rendering moved to
+  `GameView+Board.swift` and `GameView+Panels.swift`.
 
-Both require adding files to the Xcode project (`project.pbxproj`); verify the
-project still opens and builds after registering them.
+> NOT compile-verified in the authoring environment (no Xcode toolchain).
+> Cross-file references were audited by hand (brace balance, method-name
+> uniqueness, no cross-file `private` symbols, imports present). Run a build +
+> the test suite to confirm before relying on it.
 
 ## 2. Split the `Difficulty` struct into shipped knobs + research levers
 
-`MonteCarloAgent.Difficulty` carries ~30 fields, most of which are default-off,
-A/B-gated research levers. Separate the shipped tuning knobs from a nested
-`ResearchLevers` value so the production decision path is easier to follow.
-This touches ~40 call sites across `MonteCarloAgent`, `AIArena`, and several
-test files, so it must be done with the compiler available.
+STILL DEFERRED. `MonteCarloAgent.Difficulty` carries ~30 fields, most of which
+are default-off, A/B-gated research levers. Separating the shipped tuning knobs
+from a nested `ResearchLevers` value would make the production decision path
+easier to follow — but it ripples through ~30 lever mutations in
+`AIArenaTests`/`BidEvalTests` that encode validated experiments (e.g.
+`d.useISMCTS = true`, `exact.exactEndgameTricks = 4`). That churn on the A/B
+harness must be done with the compiler and test suite available, so it is held
+until then.
