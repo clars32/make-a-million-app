@@ -435,7 +435,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.9.1;
+				MARKETING_VERSION = 0.10.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "com.truebluedev.Make-A-Million";
 				PRODUCT_NAME = "Make-A-Million Mobile";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -472,7 +472,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.9.1;
+				MARKETING_VERSION = 0.10.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "com.truebluedev.Make-A-Million";
 				PRODUCT_NAME = "Make-A-Million Mobile";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;

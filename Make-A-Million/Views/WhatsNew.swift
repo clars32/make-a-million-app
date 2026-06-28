@@ -23,12 +23,12 @@
 //
 //  MAINTAINING THE CHANGELOG: each release, prepend a `ReleaseNote` with a
 //  `seq` one greater than the current top entry. That alone makes the pop-up
-//  appear for everyone who updates — no project-file change required. `version`
-//  is the marketing version (semver, matching the git tag, e.g. "0.9.1"); set
-//  it to whatever you bump MARKETING_VERSION to. `build` is the commit-count
-//  build number it ships in (display only; `nil` allowed if unknown). Entries
-//  are curated from the project's commit history — user-facing changes, phrased
-//  for players. See RELEASING.md for the full release flow.
+//  appear for everyone who updates. `version` is the marketing version (semver,
+//  matching the git tag, e.g. "0.9.1") — set it to whatever you bump
+//  MARKETING_VERSION to. Build numbers aren't listed per entry: Xcode Cloud
+//  owns them and they don't track the version history. Entries are curated from
+//  the project's commit history — user-facing changes, phrased for players.
+//  See RELEASING.md for the full release flow.
 //
 
 import SwiftUI
@@ -41,10 +41,9 @@ struct ReleaseNote: Identifiable {
     /// trigger. Higher = newer. Independent of the bundle build number.
     let seq: Int
     /// The marketing version (semver, matching the git tag), e.g. "0.9.1".
+    /// This is the identifier — build numbers are owned by Xcode Cloud and not
+    /// listed per entry (they don't match the version history).
     let version: String
-    /// The commit-count build number this shipped in, shown as a label. `nil`
-    /// when unknown.
-    let build: Int?
     /// Display date the release shipped, e.g. "Jun 27, 2026".
     let date: String
     /// Short headline for the entry.
@@ -57,57 +56,62 @@ struct ReleaseNote: Identifiable {
 
 enum Changelog {
 
-    /// Newest first, ordered by `seq`. Each entry is a tagged release: its
-    /// `version` matches the git tag and `build` is that commit's count (see
-    /// RELEASING.md). Curated from git history to user-facing changes.
+    /// Newest first, ordered by `seq`. Each entry is a tagged release whose
+    /// `version` matches the git tag (see RELEASING.md). Curated from git
+    /// history to user-facing changes.
     static let releases: [ReleaseNote] = [
         ReleaseNote(
-            seq: 10, version: "0.9.1", build: 52,
+            seq: 11, version: "0.10.0",
+            date: "Jun 28, 2026",
+            title: "Save & resume your game",
+            summary: "Solo games now save automatically after every move. Quit whenever you like and tap Continue on the home screen to pick up exactly where you left off."),
+        ReleaseNote(
+            seq: 10, version: "0.9.1",
             date: "Jun 28, 2026",
             title: "What's New & release tracking",
-            summary: "Added this What's New page — reopen it anytime from Settings — plus a proper version-and-build system behind the scenes."),
+            summary: "Added this What's New page — reopen it anytime from Settings — plus a proper versioning system behind the scenes."),
         ReleaseNote(
-            seq: 9, version: "0.9.0", build: 51,
+            seq: 9, version: "0.9.0",
             date: "Jun 27, 2026",
             title: "Adjustable difficulty & Adaptive AI",
             summary: "A new difficulty slider dials the bots across the full skill ladder, plus an optional Adaptive mode for a tougher, search-driven opponent."),
         ReleaseNote(
-            seq: 8, version: "0.8.0", build: 44,
+            seq: 8, version: "0.8.0",
             date: "Jun 27, 2026",
             title: "Landscape support",
             summary: "Added landscape support, made the cards easier to read, and cleaned up under the hood."),
         ReleaseNote(
-            seq: 7, version: "0.7.0", build: 40,
+            seq: 7, version: "0.7.0",
             date: "Jun 17, 2026",
             title: "Smoother between matches",
             summary: "Improved the experience between matches and fixed the multiplayer between-match screen."),
         ReleaseNote(
-            seq: 6, version: "0.6.0", build: 32,
+            seq: 6, version: "0.6.0",
             date: "Jun 12, 2026",
             title: "Remote multiplayer & animations",
             summary: "Added the first version of remote multiplayer, along with new table animations and sound."),
         ReleaseNote(
-            seq: 5, version: "0.5.0", build: 27,
+            seq: 5, version: "0.5.0",
             date: "Jun 4, 2026",
             title: "Smarter opponents",
             summary: "Serious AI strategy improvements and better table visibility."),
         ReleaseNote(
-            seq: 4, version: "0.4.0", build: 17,
+            seq: 4, version: "0.4.0",
             date: "Jun 4, 2026",
             title: "Major AI rework",
             summary: "A ground-up rework of how the bots think, for stronger, more natural play."),
         ReleaseNote(
-            seq: 3, version: "0.3.0", build: 15,
+            seq: 3, version: "0.3.0",
             date: "Jun 3, 2026",
             title: "Tabletop mode",
             summary: "Use one device as the shared board while everyone else joins from their own."),
         ReleaseNote(
-            seq: 2, version: "0.2.0", build: 11,
+            seq: 2, version: "0.2.0",
             date: "May 20, 2026",
             title: "Local multiplayer",
             summary: "The interface became fully playable, and nearby devices could join a local table."),
         ReleaseNote(
-            seq: 1, version: "0.1.0", build: 5,
+            seq: 1, version: "0.1.0",
             date: "May 18, 2026",
             title: "First playable",
             summary: "The first playable version — intelligent AI opponents and live bidding."),
@@ -259,14 +263,6 @@ private struct ReleaseCard: View {
     let release: ReleaseNote
     let isLatest: Bool
 
-    /// "Build 52 · Jun 28, 2026", or just the date when the build is unknown.
-    private var buildAndDate: String {
-        if let build = release.build {
-            return "Build \(build) · \(release.date)"
-        }
-        return release.date
-    }
-
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
@@ -291,10 +287,9 @@ private struct ReleaseCard: View {
 
                 Spacer()
 
-                Text(buildAndDate)
+                Text(release.date)
                     .font(TableTypography.display(.caption))
                     .foregroundStyle(.white.opacity(0.55))
-                    .monospacedDigit()
             }
 
             Text(release.title)

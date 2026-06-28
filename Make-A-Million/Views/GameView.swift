@@ -13,6 +13,10 @@ struct GameView: View {
 
     private var usesTabletChrome: Bool { horizontalSizeClass == .regular }
 
+    /// When true, resume the saved solo match on appear instead of dealing a
+    /// fresh one. Set by the menu's "Continue" entry; defaults to a new game.
+    var resume: Bool = false
+
     /// Return to the home screen. Owned here (rather than in AppRoot's overlay)
     /// so this view can host the in-game settings entry alongside it and gate
     /// rule edits on `session.running`.
@@ -22,7 +26,8 @@ struct GameView: View {
         ZStack(alignment: .topTrailing) {
             SoloGameBody(session: session,
                          human: session.human,
-                         dealSeed: $dealSeed)
+                         dealSeed: $dealSeed,
+                         resume: resume)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             HStack(spacing: usesTabletChrome ? 12 : 8) {
@@ -75,6 +80,7 @@ private struct SoloGameBody: View {
     @ObservedObject var session: GameSession
     @ObservedObject var human: HumanAgent
     @Binding var dealSeed: UInt64
+    var resume: Bool = false
 
     @State private var lastView: PlayerView? = nil
 
@@ -128,7 +134,11 @@ private struct SoloGameBody: View {
             allowsPhoneLandscapeLayout: true)
         .onAppear {
             guard tableView == nil, session.finished == nil, !session.running else { return }
-            session.startNewMatch(dealSeed: dealSeed)
+            if resume, let saved = SoloGameStore.shared.saved {
+                session.resume(from: saved)
+            } else {
+                session.startNewMatch(dealSeed: dealSeed)
+            }
         }
     }
 }

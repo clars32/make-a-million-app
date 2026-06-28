@@ -54,6 +54,9 @@ struct GameRunner {
     ///   - onView: headless sink for emitted views. Called from the runner's
     ///     own context; the consumer is responsible for hopping actors and
     ///     for any pacing. The runner never blocks on it.
+    ///   - onMove: headless sink for each applied move (the auto-misdeal redeal
+    ///     included). The consumer records the log so the hand can be resumed.
+    ///     Same contract as `onView`: nil by default, never blocked on.
     func playHand(dealer: PlayerID,
                   dealSeed: UInt64,
                   carryScore: [Int: Int] = [0: 0, 1: 0],
@@ -61,9 +64,10 @@ struct GameRunner {
                   endgameRule: EndgameTiebreak = .standard,
                   houseRules: HouseRules = .standard,
                   spectator: PlayerID? = nil,
-                  onView: (@Sendable @MainActor (PlayerView) async -> Void)? = nil) async throws -> GameState {
+                  onView: (@Sendable @MainActor (PlayerView) async -> Void)? = nil,
+                  onMove: (@Sendable @MainActor (RecordedMove) async -> Void)? = nil) async throws -> GameState {
 
-        var state = GameState.newHand(dealer: dealer,
+        let state = GameState.newHand(dealer: dealer,
                                       seed: dealSeed,
                                       carryScore: carryScore,
                                       misdealRule: misdealRule,
@@ -76,6 +80,68 @@ struct GameRunner {
             await sink(state.view(for: s))
         }
 
+        return try await runToCompletion(from: state,
+                                         spectator: spectator,
+                                         onView: onView,
+                                         onMove: onMove)
+    }
+
+    /// Resume a hand mid-flight: re-deal the SAME seed and rules, silently
+    /// replay the recorded move log to the exact saved position, then continue
+    /// to completion. The deal and every recorded move are reapplied through
+    /// the normal reducer, so the reconstructed state is identical to the one
+    /// that was saved — "we ship moves, not state".
+    ///
+    /// Replay emits NO callbacks (it neither re-animates the hand nor
+    /// re-records the already-saved log). Only the resumed frame and everything
+    /// that happens after it are surfaced through `onView` / `onMove`, exactly
+    /// as a fresh hand surfaces its tail.
+    func resumeHand(dealer: PlayerID,
+                    dealSeed: UInt64,
+                    carryScore: [Int: Int],
+                    misdealRule: MisdealRule,
+                    endgameRule: EndgameTiebreak,
+                    houseRules: HouseRules,
+                    moves: [RecordedMove],
+                    spectator: PlayerID? = nil,
+                    onView: (@Sendable @MainActor (PlayerView) async -> Void)? = nil,
+                    onMove: (@Sendable @MainActor (RecordedMove) async -> Void)? = nil) async throws -> GameState {
+
+        var state = GameState.newHand(dealer: dealer,
+                                      seed: dealSeed,
+                                      carryScore: carryScore,
+                                      misdealRule: misdealRule,
+                                      endgameRule: endgameRule,
+                                      houseRules: houseRules)
+
+        // Silent replay: reapply each recorded move, by its recorded seat, in
+        // order. `applying` validates the seat is on turn, so a tampered or
+        // stale log throws here instead of resuming into a corrupted state.
+        for recorded in moves {
+            state = try state.applying(recorded.move, by: recorded.player)
+        }
+
+        // Surface the resumed position as the first frame, then continue as if
+        // the hand had reached here normally.
+        if let s = spectator, let sink = onView {
+            await sink(state.view(for: s))
+        }
+
+        return try await runToCompletion(from: state,
+                                         spectator: spectator,
+                                         onView: onView,
+                                         onMove: onMove)
+    }
+
+    /// The headless game loop, shared by the fresh-deal and resume entry
+    /// points: ask whoever is on turn, apply, emit, repeat until the hand is
+    /// complete. Auto-misdeals are applied here without consulting an agent.
+    private func runToCompletion(from start: GameState,
+                                 spectator: PlayerID?,
+                                 onView: (@Sendable @MainActor (PlayerView) async -> Void)?,
+                                 onMove: (@Sendable @MainActor (RecordedMove) async -> Void)?) async throws -> GameState {
+        var state = start
+
         // Safety bound: a hand is 4 bids-ish + misdeal + discard + trump + 52
         // card plays. A few hundred steps is a generous ceiling; exceeding it
         // means a state-machine bug, and we want a loud failure, not a hang.
@@ -83,6 +149,8 @@ struct GameRunner {
         let maxSteps = 1_000
 
         while state.phase != .handComplete {
+            let mover = state.toAct
+
             // Auto-misdeal: the rule fires before bidding, no agent is asked.
             // The notice frame was already emitted (initial deal, or the
             // post-move frame of a prior redeal). Hold it visible briefly,
@@ -91,7 +159,8 @@ struct GameRunner {
             // each seat is consulted like any other decision.)
             if state.phase == .misdealDecision && !state.misdealRule.requiresAgreement {
                 try? await Task.sleep(for: .milliseconds(2200))
-                state = try state.applying(.callMisdeal, by: state.toAct)
+                state = try state.applying(.callMisdeal, by: mover)
+                await onMove?(RecordedMove(player: mover, move: .callMisdeal))
                 if let s = spectator, let sink = onView {
                     await sink(state.view(for: s))
                 }
@@ -103,10 +172,10 @@ struct GameRunner {
                 continue
             }
 
-            let mover = state.toAct
             let view = state.view(for: mover)
             let move = await agents[mover.raw].chooseMove(from: view)
             state = try state.applying(move, by: mover)
+            await onMove?(RecordedMove(player: mover, move: move))
 
             // Post-move frame. This is what makes single-step animation
             // possible: between any two consecutive emitted views exactly

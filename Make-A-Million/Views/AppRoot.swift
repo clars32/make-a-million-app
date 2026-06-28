@@ -54,10 +54,14 @@ struct AppRoot: View {
 
     @State private var mode: Mode = .picking
     @State private var showingSettings = false
+    /// True while entering Solo via "Continue" — resume the saved match rather
+    /// than dealing a fresh one. Reset whenever "Solo" (new game) is chosen.
+    @State private var resumeSolo = false
     @AppStorage("playerName") private var playerName: String = ""
     @EnvironmentObject private var settings: GameSettings
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject private var gameCenter = GameCenterManager.shared
+    @ObservedObject private var soloStore = SoloGameStore.shared
 
     var body: some View {
         ZStack {
@@ -119,7 +123,9 @@ struct AppRoot: View {
         case .picking:
             ModePickerView(
                 playerName: $playerName,
-                onPickSolo: { navigate(to: .solo) },
+                savedGame: soloStore.saved,
+                onPickContinue: { resumeSolo = true; navigate(to: .solo) },
+                onPickSolo: { resumeSolo = false; navigate(to: .solo) },
                 onPickJoin: { navigate(to: .pickingJoin) },
                 onPickHost: { navigate(to: .pickingHost) },
                 onOpenSettings: { showingSettings = true })
@@ -144,7 +150,7 @@ struct AppRoot: View {
         case .solo:
             // GameView owns its own gear/Back chrome so the in-game
             // settings entry can lock rules while a hand is running.
-            GameView(onExit: { navigate(to: .picking) })
+            GameView(resume: resumeSolo, onExit: { navigate(to: .picking) })
 
         case .hostingLocal:
             HostLobbyView(
@@ -200,6 +206,9 @@ struct AppRoot: View {
 private struct ModePickerView: View {
 
     @Binding var playerName: String
+    /// The saved solo match, if any — drives the "Continue" entry.
+    let savedGame: SavedSoloGame?
+    let onPickContinue: () -> Void
     let onPickSolo: () -> Void
     let onPickJoin: () -> Void
     let onPickHost: () -> Void
@@ -215,9 +224,19 @@ private struct ModePickerView: View {
             systemImage: "suit.club.fill",
             onBack: nil,
             onOpenSettings: onOpenSettings) {
+                if let saved = savedGame {
+                    ModeButton(
+                        title: "Continue",
+                        subtitle: continueSubtitle(saved),
+                        systemImage: "play.fill",
+                        color: TableStyle.tableGold,
+                        action: onPickContinue)
+                }
                 ModeButton(
-                    title: "Solo",
-                    subtitle: "Play a full table against three bots",
+                    title: savedGame == nil ? "Solo" : "New Solo Game",
+                    subtitle: savedGame == nil
+                        ? "Play a full table against three bots"
+                        : "Start over against three bots",
                     systemImage: "person.fill",
                     color: TableStyle.actionBlue,
                     action: onPickSolo)
@@ -234,6 +253,14 @@ private struct ModePickerView: View {
                     color: TableStyle.teamBlue,
                     action: onPickHost)
         }
+    }
+
+    /// Where you left off: hand number and the running match score (the score
+    /// going into the saved hand). Team 0 is You + North, team 1 West + East.
+    private func continueSubtitle(_ saved: SavedSoloGame) -> String {
+        let you = (saved.carry[0] ?? 0) / 1000
+        let them = (saved.carry[1] ?? 0) / 1000
+        return "Hand \(saved.handNumber) · You $\(you)k – Them $\(them)k"
     }
 }
 

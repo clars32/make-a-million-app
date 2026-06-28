@@ -73,6 +73,32 @@ final class GameSession: ObservableObject {
     /// Cumulative match score carried into the next hand.
     private var currentCarry: [Int: Int] = [0: 0, 1: 0]
 
+    // MARK: Resume / autosave
+
+    /// The single resumable-solo-match slot. Written after every move so the
+    /// game can be resumed to the exact card; cleared when the match is decided.
+    private let store = SoloGameStore.shared
+    /// Move log of the hand in progress, persisted after every move. Reset at
+    /// the start of each hand; pre-seeded from the save when resuming.
+    private var recordedMoves: [RecordedMove] = []
+    /// Rules frozen onto the current hand at deal time, saved alongside the log
+    /// so a resume replays under identical legality. Set in `runHand`.
+    private var currentMisdealRule: MisdealRule = .standard
+    private var currentEndgameRule: EndgameTiebreak = .standard
+    private var currentHouseRules: HouseRules = .standard
+    /// Set by `resume(from:)` and consumed by the next `runHand`: the saved log
+    /// to replay plus the rules to deal/continue the current hand under. nil
+    /// for a fresh hand.
+    private var pendingResume: (moves: [RecordedMove],
+                                misdealRule: MisdealRule,
+                                endgameRule: EndgameTiebreak,
+                                houseRules: HouseRules)? = nil
+    /// True only for a GameSession that drives the SOLO flow, so the shared
+    /// solo save is owned by exactly one instance. The networked-host bridge
+    /// (which reuses this object only as a presentation buffer) leaves it false
+    /// and never reads, writes, or clears the slot.
+    private var managesSoloSave = false
+
     /// The runner emits much faster than we can pace; without a cap the queue
     /// replays the whole hand at the end. Keep only recent frames.
     private let maxQueuedItems = 12
@@ -111,13 +137,34 @@ final class GameSession: ObservableObject {
     }
 
     /// Begin a fresh match. Resets dealer rotation, hand index, and carry
-    /// score, then kicks off the first hand.
+    /// score, then kicks off the first hand. Takes ownership of the solo save
+    /// slot — the first deal overwrites whatever was there.
     func startNewMatch(dealSeed: UInt64) {
         guard !running else { return }
+        managesSoloSave = true
+        pendingResume = nil
         matchSeedBase = dealSeed
         handIndex = 0
         currentDealer = PlayerID(0)
         currentCarry = [0: 0, 1: 0]
+        runHand()
+    }
+
+    /// Resume a previously saved solo match exactly where it was left.
+    /// Restores match progression and the current hand's frozen rules + move
+    /// log, then re-deals and silently replays to that position before handing
+    /// control back. No-op if a hand is already running.
+    func resume(from saved: SavedSoloGame) {
+        guard !running else { return }
+        managesSoloSave = true
+        matchSeedBase = saved.matchSeedBase
+        handIndex = saved.handIndex
+        currentDealer = saved.dealer
+        currentCarry = saved.carry
+        pendingResume = (moves: saved.moves,
+                         misdealRule: saved.misdealRule,
+                         endgameRule: saved.endgameRule,
+                         houseRules: saved.houseRules)
         runHand()
     }
 
@@ -178,25 +225,59 @@ final class GameSession: ObservableObject {
         let spectator = self.spectator
         let dealer = currentDealer
         let carry = currentCarry
-        // Snapshot the house rules at deal time so a mid-hand settings change
-        // can't alter the hand in progress.
-        let misdealRule = GameSettings.shared.misdealRule
-        let endgameRule = GameSettings.shared.endgameRule
-        let houseRules = GameSettings.shared.houseRules
+
+        // Resuming replays a saved log under the SAME rules the hand was dealt
+        // with; a fresh hand snapshots the current settings so a mid-hand
+        // settings change can't alter the hand in progress. Either way the
+        // rules used are remembered so the log saved this hand carries them.
+        let resume = pendingResume
+        pendingResume = nil
+        let misdealRule = resume?.misdealRule ?? GameSettings.shared.misdealRule
+        let endgameRule = resume?.endgameRule ?? GameSettings.shared.endgameRule
+        let houseRules  = resume?.houseRules  ?? GameSettings.shared.houseRules
+        currentMisdealRule = misdealRule
+        currentEndgameRule = endgameRule
+        currentHouseRules  = houseRules
+
+        // Start (or restore) the move log for this hand and persist immediately,
+        // so even a hand resumed-then-backgrounded before any new move is saved.
+        recordedMoves = resume?.moves ?? []
+        persistSavedGame()
+
+        let onView: @Sendable @MainActor (PlayerView) async -> Void = { [weak self] view in
+            await self?.receivePublicFrameAndHoldForDealIfNeeded(view)
+        }
+        let onMove: @Sendable @MainActor (RecordedMove) async -> Void = { [weak self] move in
+            self?.recordAppliedMove(move)
+        }
 
         runTask = Task {
             do {
-                let final = try await runner.playHand(
-                    dealer: dealer,
-                    dealSeed: handSeed,
-                    carryScore: carry,
-                    misdealRule: misdealRule,
-                    endgameRule: endgameRule,
-                    houseRules: houseRules,
-                    spectator: spectator,
-                    onView: { [weak self] view in
-                        await self?.receivePublicFrameAndHoldForDealIfNeeded(view)
-                    })
+                let final: GameState
+                if let resume {
+                    final = try await runner.resumeHand(
+                        dealer: dealer,
+                        dealSeed: handSeed,
+                        carryScore: carry,
+                        misdealRule: misdealRule,
+                        endgameRule: endgameRule,
+                        houseRules: houseRules,
+                        moves: resume.moves,
+                        spectator: spectator,
+                        onView: onView,
+                        onMove: onMove)
+                } else {
+                    final = try await runner.playHand(
+                        dealer: dealer,
+                        dealSeed: handSeed,
+                        carryScore: carry,
+                        misdealRule: misdealRule,
+                        endgameRule: endgameRule,
+                        houseRules: houseRules,
+                        spectator: spectator,
+                        onView: onView,
+                        onMove: onMove)
+                }
                 await MainActor.run {
                     self.finishHand(final)
                 }
@@ -205,6 +286,29 @@ final class GameSession: ObservableObject {
                 assertionFailure("GameRunner threw: \(error)")
             }
         }
+    }
+
+    /// Append an applied move to the live log and persist the snapshot. Called
+    /// from the runner's `onMove` sink for every move past the resumed point.
+    private func recordAppliedMove(_ move: RecordedMove) {
+        recordedMoves.append(move)
+        persistSavedGame()
+    }
+
+    /// Write the current hand's resumable snapshot. No-op for a session that
+    /// does not own the solo slot (the networked-host presentation bridge).
+    private func persistSavedGame() {
+        guard managesSoloSave else { return }
+        store.save(SavedSoloGame(
+            matchSeedBase: matchSeedBase,
+            handIndex: handIndex,
+            dealer: currentDealer,
+            carry: currentCarry,
+            misdealRule: currentMisdealRule,
+            endgameRule: currentEndgameRule,
+            houseRules: currentHouseRules,
+            moves: recordedMoves,
+            savedAt: Date()))
     }
 
     func reset() {
@@ -227,6 +331,9 @@ final class GameSession: ObservableObject {
         handIndex = 0
         currentDealer = PlayerID(0)
         currentCarry = [0: 0, 1: 0]
+        // Resume state — the next start (startNewMatch) takes the slot afresh.
+        recordedMoves = []
+        pendingResume = nil
     }
 
     /// Reset only the presentation buffer for a NetSession-driven next hand —
@@ -459,6 +566,13 @@ final class GameSession: ObservableObject {
                                      decisions: AIDecisionTrace.shared.snapshot())
             HandLog.append(log)
             print(log)
+        }
+        // Resume bookkeeping: a decided match has nothing left to resume, so
+        // drop the slot. A match that continues keeps the just-finished hand
+        // saved (resuming lands on the end-of-hand scorecard) until "Deal
+        // another" rewrites the log for the next hand via startNextHand.
+        if managesSoloSave, final.matchWinner != nil {
+            store.clear()
         }
         pendingFinal = final
         enqueue(.handFinishedMarker(final))
