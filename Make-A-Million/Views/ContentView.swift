@@ -12,12 +12,28 @@ import SwiftUI
 
 struct ContentView: View {
     @State private var showingSplash = true
+    /// Non-nil when the player just updated: drives the What's New pop-up.
+    @State private var whatsNew: WhatsNewPresentation?
 
     var body: some View {
         ZStack {
             AppRoot()
                 .environmentObject(GameSettings.shared)
                 .font(TableTypography.display(.body))
+
+            // The post-update changelog is an in-app overlay rather than a
+            // `.sheet`. At launch a UIKit modal (e.g. Game Center's sign-in)
+            // can own the presenter and silently swallow a sheet; an overlay
+            // lives in the view tree and simply reveals itself once anything
+            // above it clears.
+            if let presentation = whatsNew {
+                WhatsNewView(releases: presentation.releases) {
+                    WhatsNewGate.markCurrentBuildSeen()
+                    withAnimation(.easeInOut(duration: 0.3)) { whatsNew = nil }
+                }
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+                .zIndex(6)
+            }
 
             if showingSplash {
                 SplashScreen {
@@ -37,6 +53,17 @@ struct ContentView: View {
         guard showingSplash else { return }
         withAnimation(.easeOut(duration: 0.45)) {
             showingSplash = false
+        }
+        // Surface the changelog after an update — but only on the first launch
+        // following one (handled inside the gate). Defer past the splash's
+        // removal transition so the slide-up doesn't fight it.
+        guard whatsNew == nil,
+              let notes = WhatsNewGate.notesToPresentOnLaunch() else { return }
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(600))
+            withAnimation(.spring(response: 0.42, dampingFraction: 0.86)) {
+                whatsNew = WhatsNewPresentation(releases: notes)
+            }
         }
     }
 }

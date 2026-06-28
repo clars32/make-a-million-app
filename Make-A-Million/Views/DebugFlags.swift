@@ -364,6 +364,7 @@ struct SettingsView: View {
     private static let developerUnlockTaps = 5
     @State private var creditsTapCount = 0
     @State private var creditsFeedback: String? = nil
+    @State private var showingWhatsNew = false
 
     var body: some View {
         NavigationStack {
@@ -576,6 +577,14 @@ struct SettingsView: View {
                         .font(TableTypography.display(.subheadline, weight: .semibold))
                         .frame(maxWidth: .infinity)
                         .multilineTextAlignment(.center)
+                    Text(Changelog.currentBuild.map {
+                            "Version \(Changelog.currentVersion) · Build \($0)"
+                        } ?? "Version \(Changelog.currentVersion)")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                        .frame(maxWidth: .infinity)
+                        .multilineTextAlignment(.center)
                     if let creditsFeedback {
                         Text(creditsFeedback)
                             .font(.caption2)
@@ -588,6 +597,18 @@ struct SettingsView: View {
             }
             .buttonStyle(.plain)
             .accessibilityIdentifier("settings.creditsPanel")
+
+            Button {
+                showingWhatsNew = true
+            } label: {
+                Label("What's New", systemImage: "sparkles")
+            }
+            .accessibilityIdentifier("settings.whatsNewButton")
+        }
+        .sheet(isPresented: $showingWhatsNew) {
+            WhatsNewView(releases: Changelog.releases, title: "Release Notes") {
+                showingWhatsNew = false
+            }
         }
     }
 
