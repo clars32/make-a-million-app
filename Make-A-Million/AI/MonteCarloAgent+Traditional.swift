@@ -318,10 +318,11 @@ extension MonteCarloAgent {
                         out.append(.init(card: hi, role: .dumpToPartner))
                     }
                 }
-                // POSITIONAL — a hedge (shed low instead of committing money) the
-                // look-ahead tiers weigh against the dump; under a Bear threat at
-                // COMPLETE it is the only money-safe option, so offer it then too.
-                if cap >= .positional || beared || (cap >= .complete) {
+                // A hedge (shed low instead of committing money): the look-ahead
+                // tiers weigh it against the dump as a fork; the no-look-ahead
+                // tiers only need it when no dump was offered (a Beared trick),
+                // to guarantee a legal exit.
+                if cap >= .positional || beared {
                     let safeLow = pool.filter { !$0.isSpecial && !$0.isMoney }
                     let lowPool = safeLow.isEmpty ? pool.filter { !$0.isSpecial } : safeLow
                     for c in bestKeyGroup(lowPool, ctx: ctx) {

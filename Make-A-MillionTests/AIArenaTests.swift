@@ -842,4 +842,28 @@ final class AIArenaTests: XCTestCase {
                                                  baseSeed: 7)
         print(r.summary)
     }
+
+    // MARK: - Traditional ladder monotonicity (§7.2)
+
+    /// Proves the Traditional ladder is a REAL ladder: each higher rung beats
+    /// the one below it head-to-head over seeded, seat-swapped self-play. The
+    /// acceptance target is > ~55%; the hard assertion here is the weaker
+    /// "the higher rung is not behind" (> 0.50) so the run flags only a genuine
+    /// inversion/flatness, while the printed rates carry the calibration signal.
+    /// Lives in AIArenaTests (arena mode) — it plays full matches and is slow.
+    func testTraditionalLadderMonotonicity() async {
+        let steps: [(String, MonteCarloAgent.Difficulty, MonteCarloAgent.Difficulty)] = [
+            ("casual > novice",  .casual,  .novice),
+            ("skilled > casual", .skilled, .casual),
+            ("expert > skilled", .expert,  .skilled),
+        ]
+        for (label, higher, lower) in steps {
+            let r = await AIArena.runSelfPlay(matches: 60, challenger: higher,
+                                              champion: lower, baseSeed: 1)
+            print("LADDER \(label):\n" + r.summary)
+            XCTAssertGreaterThan(r.challengerWinRate, 0.50,
+                                 "\(label): higher rung must not be behind "
+                                 + "(got \(r.challengerWinRate))")
+        }
+    }
 }

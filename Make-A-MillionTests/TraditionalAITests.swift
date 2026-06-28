@@ -44,6 +44,46 @@ final class TraditionalAITests: XCTestCase {
         }
     }
 
+    // MARK: - Ladder & style wiring (cheap locks)
+
+    /// The ladder is a real ladder by construction: capability depth only ever
+    /// increases, every rung is Traditional, scalar-bidding, and zero-blunder
+    /// (weakness is reduced capability, never injected error — §1).
+    func testLadderCapabilitiesAreMonotonicAndLegible() {
+        let ladder = MonteCarloAgent.Difficulty.Level.ladder.map { $0.profile }
+        for i in 1..<ladder.count {
+            XCTAssertTrue(ladder[i].capabilities.principles
+                        >= ladder[i - 1].capabilities.principles,
+                          "principles must not regress up the ladder")
+            XCTAssertTrue(ladder[i].capabilities.inference
+                        >= ladder[i - 1].capabilities.inference,
+                          "inference must not regress up the ladder")
+        }
+        for profile in ladder {
+            XCTAssertEqual(profile.style, .traditional)
+            XCTAssertFalse(profile.rolloutBidEval, "Traditional bids on the scalar mean")
+            XCTAssertEqual(profile.blunderRate, 0,
+                           "the ladder gets weaker by capability, not by error")
+        }
+        // The rungs span the full capability range.
+        XCTAssertEqual(MonteCarloAgent.Difficulty.Level.novice.profile.capabilities.inference, .none)
+        XCTAssertEqual(MonteCarloAgent.Difficulty.Level.novice.profile.capabilities.principles, .core)
+        XCTAssertEqual(MonteCarloAgent.Difficulty.Level.expert.profile.capabilities.inference, .deep)
+        XCTAssertEqual(MonteCarloAgent.Difficulty.Level.expert.profile.capabilities.principles, .complete)
+        // Only skilled/expert plan ahead (bounded fork search).
+        XCTAssertFalse(MonteCarloAgent.Difficulty.Level.casual.profile.capabilities.plansAhead)
+        XCTAssertTrue(MonteCarloAgent.Difficulty.Level.skilled.profile.capabilities.plansAhead)
+    }
+
+    /// Adaptive is the off-ladder search side-door, not "Expert + 1".
+    func testAdaptiveIsTheSearchSideDoor() {
+        let adaptive = MonteCarloAgent.Difficulty.Level.adaptive.profile
+        XCTAssertEqual(adaptive.style, .adaptive)
+        XCTAssertTrue(adaptive.searchAllLegalMoves, "Adaptive grades every legal move")
+        XCTAssertTrue(MonteCarloAgent.Difficulty.Level.adaptive.isAdaptive)
+        XCTAssertFalse(MonteCarloAgent.Difficulty.Level.ladder.contains(.adaptive))
+    }
+
     // MARK: - Legibility (the hard gate, §7.1)
 
     /// Step real hands and assert EVERY non-forced trick-play move a Traditional

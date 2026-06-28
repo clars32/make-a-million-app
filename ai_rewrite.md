@@ -1,9 +1,28 @@
 # Implementation Plan — Traditional / Adaptive AI
 
-Status: design agreed, not yet implemented. This document is the build spec.
-It must be carried out in an environment where the Xcode project compiles and
-the test suite runs (new source files must be registered in
-`Make-A-Million.xcodeproj/project.pbxproj`, and several test targets change).
+Status: IMPLEMENTED (branch `ai-traditional-rewrite`). This document is the
+build spec; it was carried out phase-by-phase, each phase compiling and keeping
+the quick test suite green. Notable deviations from the original draft, all
+driven by the codebase having since been decomposed into per-concern files:
+
+- The flat `Difficulty` had already been split into shipped knobs + a nested
+  `research` lever group. Rather than the verbatim field-move into an `adaptive`
+  struct (pure call-site churn), the split is realized as `style`
+  (`.traditional`/`.adaptive`) + a `Capabilities` set; the existing fields ARE
+  the Adaptive configuration, and `chooseMove` routes by `style`.
+- The Traditional shortlist is a NEW, dedicated builder
+  (`MonteCarloAgent+Traditional.swift`) rather than a refactor of the shared
+  `leadShortlist`/`followShortlist` — those stay the Adaptive candidate gate and
+  keep their golden tests. The dedicated builder is principle-gated, decisive,
+  and role-tagged exactly as §3b intends.
+- `TableInference` takes `inference: InferenceLevel` (the two pre-existing
+  behaviours map to `.counting`/`.deep` unchanged).
+- New `.swift` files auto-compile via the project's synchronized file groups, so
+  no `project.pbxproj` edits were needed.
+
+Remaining: the human playtest (§7.6) is the final judge of "feels like a
+sensible partner"; the slow PolicyMiner-against-Traditional pass (§7) is left as
+a future instrument.
 
 ---
 
