@@ -22,6 +22,49 @@ import Foundation
 extension MonteCarloAgent {
 
     nonisolated struct Difficulty {
+        // ── Play style: which decision stack drives this profile ────────────
+        /// `.adaptive` runs the MCTS / search stack — full-width PIMC, the
+        /// exact endgame, the rollout/research levers below. It is the research
+        /// baseline and the off-ladder expert side-door. `.traditional` runs the
+        /// legible principle ladder (`decide*Traditional`): every move has a
+        /// nameable reason, strength rises by capability depth, never by error.
+        /// Default `.adaptive` so every existing preset/test is behaviour-
+        /// unchanged until a profile opts into `.traditional`.
+        nonisolated enum Style: String, Codable, Sendable { case traditional, adaptive }
+        var style: Style = .adaptive
+
+        // ── Traditional capability ladder (used when style == .traditional) ─
+        /// How many principle layers the shortlist applies. Each rung adds a
+        /// nameable skill a human would also learn next (see `Capabilities`).
+        nonisolated enum PrincipleLevel: Int, Comparable, Codable, Sendable {
+            case core, cooperative, positional, complete
+            static func < (a: Self, b: Self) -> Bool { a.rawValue < b.rawValue }
+        }
+        /// How much the table-read (`TableInference`) deduces. Gates void
+        /// tracking, card counting, and count-exhaustion deductions.
+        nonisolated enum InferenceLevel: Int, Comparable, Codable, Sendable {
+            case none, voids, counting, deep
+            static func < (a: Self, b: Self) -> Bool { a.rawValue < b.rawValue }
+        }
+        /// The Traditional ladder's capability set. Coupled by the presets
+        /// (e.g. `.positional` principles want `.counting` inference for
+        /// `iControlColor`); the individual fields stay settable so tests/A-Bs
+        /// can probe combos. Ignored entirely when `style == .adaptive`.
+        nonisolated struct Capabilities: Sendable {
+            var principles: PrincipleLevel
+            var inference: InferenceLevel
+            /// Resolve genuine forks by a bounded search confined to the
+            /// co-principled candidate set; false → resolve by shortlist
+            /// priority (deterministic).
+            var plansAhead: Bool
+            /// Worlds sampled per fork when `plansAhead`.
+            var forkSamples: Int
+        }
+        var capabilities: Capabilities = Capabilities(principles: .complete,
+                                                      inference: .deep,
+                                                      plansAhead: true,
+                                                      forkSamples: 20)
+
         // ── Shipped strength knobs (set by the player-facing tiers) ─────────
         /// Determinized worlds sampled per trick-play decision. More =
         /// stronger but slower. With the new tactical playout 12-30 is
@@ -181,6 +224,15 @@ extension MonteCarloAgent {
         /// The HandEvaluator constant set this profile plays with.
         var evaluatorTables: HandEvaluator.Tables {
             calibratedValuation ? .calibrated : .original
+        }
+
+        /// The table-reading depth this profile builds `TableInference` at.
+        /// Traditional reads it off the capability ladder; Adaptive maps its
+        /// legacy `deepInference` flag (deep when set, otherwise full counting —
+        /// the behaviour the boolean encoded before the ladder existed).
+        var inferenceLevel: InferenceLevel {
+            style == .traditional ? capabilities.inference
+                                  : (deepInference ? .deep : .counting)
         }
 
         /// DISTRIBUTION-AWARE BIDDING. The scalar bidder declares on the MEAN
@@ -540,39 +592,120 @@ extension MonteCarloAgent {
                                         matchWinWeight: 400_000,
                                         rolloutBidEval: true)
 
+        // ── Traditional ladder (style == .traditional) ─────────────────────
+        // The player-facing strength ladder. Each rung adds a NAMEABLE skill a
+        // human would learn next; weakness is REDUCED CAPABILITY, not injected
+        // error (blunderRate stays 0 at every rung). Scalar bidding everywhere
+        // (rolloutBidEval is an Adaptive feature). `samples`/`trickCandidates`
+        // shape the bounded fork search; `capabilities` is the real lever.
+
+        /// `Novice` — the basics, cleanly: follow suit, take cheap, shed low,
+        /// dump money to a winning partner. No table-reading, no look-ahead.
+        static let novice  = Difficulty(style: .traditional,
+                                        capabilities: .init(principles: .core,
+                                                            inference: .none,
+                                                            plansAhead: false,
+                                                            forkSamples: 0),
+                                        samples: 8, blunderRate: 0.0,
+                                        bidAggression: 0.85, partnerRespect: 0.95,
+                                        matchAwareness: 0.5, trickCandidates: 3,
+                                        bidLeanStrength: 0.0,
+                                        calibratedValuation: false)
+        /// `Casual` — adds money sense and basic defense: don't waste big money,
+        /// Bear an enemy money trick, bank when safely winning. Tracks voids.
+        static let casual  = Difficulty(style: .traditional,
+                                        capabilities: .init(principles: .cooperative,
+                                                            inference: .voids,
+                                                            plansAhead: false,
+                                                            forkSamples: 0),
+                                        samples: 12, blunderRate: 0.0,
+                                        bidAggression: 1.00, partnerRespect: 0.85,
+                                        matchAwareness: 0.75, trickCandidates: 4,
+                                        bidLeanStrength: 0.0,
+                                        calibratedValuation: false)
+        /// `Skilled` — positional play and counting: preserve controllers, lead
+        /// the $40k on a virgin suit, pull trump as declarer, count cards, and
+        /// plan one move ahead at clear forks.
+        static let skilled = Difficulty(style: .traditional,
+                                        capabilities: .init(principles: .positional,
+                                                            inference: .counting,
+                                                            plansAhead: true,
+                                                            forkSamples: 12),
+                                        samples: 16, blunderRate: 0.0,
+                                        bidAggression: 1.00, partnerRespect: 0.78,
+                                        matchAwareness: 1.0, trickCandidates: 5,
+                                        bidLeanStrength: 1.0)
+        /// `Expert` — the complete strong-human game: bear/Bull threats, void
+        /// creation, establishment ducks, full count-exhaustion card-counting,
+        /// and bounded look-ahead at every genuine fork.
+        static let expert  = Difficulty(style: .traditional,
+                                        capabilities: .init(principles: .complete,
+                                                            inference: .deep,
+                                                            plansAhead: true,
+                                                            forkSamples: 20),
+                                        samples: 20, blunderRate: 0.0,
+                                        bidAggression: 1.05, partnerRespect: 0.68,
+                                        matchAwareness: 1.0, trickCandidates: 6,
+                                        bidLeanStrength: 1.6)
+
+        /// `Adaptive` — the off-ladder expert side-door. Today's strongest
+        /// validated search stack (the ex-`extreme` settings): full-width MCTS
+        /// over every legal move, exact two-trick endgames, deep card-counting,
+        /// distribution-aware bidding, and the match-aware objective. Free to
+        /// explore unconventional, possibly-stronger lines — reached by a
+        /// deliberate toggle, never by dragging difficulty up.
+        static let adaptive = Difficulty.extreme
+
         /// Player-facing strength tiers. A small, Codable, ordered enum so the
         /// settings layer and UI deal in names, not tuning constants.
         nonisolated enum Level: String, Codable, CaseIterable, Identifiable, Sendable {
-            case easy, normal, hard, extreme
+            case novice, casual, skilled, expert   // the Traditional ladder (slider)
+            case adaptive                          // off-ladder expert side-door
 
             var id: String { rawValue }
 
+            /// The four Traditional rungs, in slider order. Adaptive is reached
+            /// by a separate toggle (Settings), not by sliding past Expert.
+            static let ladder: [Level] = [.novice, .casual, .skilled, .expert]
+
+            /// Is this the experimental, off-ladder search mode?
+            var isAdaptive: Bool { self == .adaptive }
+
             var displayName: String {
                 switch self {
-                case .easy:    return "Easy"
-                case .normal:  return "Normal"
-                case .hard:    return "Hard"
-                case .extreme: return "Extreme"
+                case .novice:   return "Novice"
+                case .casual:   return "Casual"
+                case .skilled:  return "Skilled"
+                case .expert:   return "Expert"
+                case .adaptive: return "Adaptive"
                 }
             }
 
-            /// One-line description for the settings footer.
+            /// One-line description for the settings footer — describes the
+            /// CAPABILITY each rung adds, since that is what the player chooses.
             var blurb: String {
                 switch self {
-                case .easy:    return "Relaxed. Thinks shallowly, ignores the bidding, and slips up now and then."
-                case .normal:  return "A solid club player. Bids honestly and reads the auction. The default."
-                case .hard:    return "Searches deeper — every legal card is considered — and reads the bidding closely."
-                case .extreme: return "Maximum search, full card-counting deduction, and every legal card considered."
+                case .novice:
+                    return "The basics, cleanly: follows suit, takes cheap, and dumps money to a winning partner. Doesn't count cards."
+                case .casual:
+                    return "Adds money sense and basic defense — won't waste big money, bears an enemy's money trick, and banks when safely winning."
+                case .skilled:
+                    return "Counts cards and plays positionally: preserves controllers, leads the $40k on a fresh suit, pulls trump, and plans a move ahead."
+                case .expert:
+                    return "The complete strong-human game — bear/Bull threats, void creation, establishment ducks, full counting, and look-ahead at every fork."
+                case .adaptive:
+                    return "Experimental. Explores unconventional, sometimes stronger lines instead of fixed principles — for players who already beat Expert."
                 }
             }
 
             /// The tuning profile this level plays with.
             var profile: Difficulty {
                 switch self {
-                case .easy:    return .easy
-                case .normal:  return .normal
-                case .hard:    return .hard
-                case .extreme: return .extreme
+                case .novice:   return .novice
+                case .casual:   return .casual
+                case .skilled:  return .skilled
+                case .expert:   return .expert
+                case .adaptive: return .adaptive
                 }
             }
         }

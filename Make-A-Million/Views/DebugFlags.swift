@@ -150,8 +150,28 @@ final class GameSettings: ObservableObject {
             .flatMap(EndgameTiebreak.init(rawValue:))) ?? .standard
         developerMode            = d.object(forKey: Key.developerMode) as? Bool ?? false
         logHandsToFile           = d.object(forKey: Key.logHands) as? Bool ?? false
-        aiDifficulty = (d.string(forKey: Key.aiDifficulty)
-            .flatMap(MonteCarloAgent.Difficulty.Level.init(rawValue:))) ?? .normal
+        // The difficulty ladder was renamed (easy/normal/hard/extreme →
+        // novice/casual/skilled/expert + Adaptive). Decode the current keys
+        // first, then migrate the legacy ones, then fall back to a strong-but-
+        // legible default. `extreme` migrates to `.expert` (Traditional), NOT
+        // `.adaptive`: nobody is silently moved into the experimental mode.
+        let storedDifficulty = d.string(forKey: Key.aiDifficulty)
+        aiDifficulty = storedDifficulty
+                .flatMap(MonteCarloAgent.Difficulty.Level.init(rawValue:))
+            ?? storedDifficulty.flatMap(GameSettings.migrateLegacyDifficulty)
+            ?? .skilled
+    }
+
+    /// Map the pre-ladder difficulty keys onto the new ladder, 1:1 by strength.
+    private static func migrateLegacyDifficulty(
+        _ raw: String) -> MonteCarloAgent.Difficulty.Level? {
+        switch raw {
+        case "easy":    return .novice
+        case "normal":  return .casual
+        case "hard":    return .skilled
+        case "extreme": return .expert
+        default:        return nil
+        }
     }
 
     private func persist() {
