@@ -40,6 +40,34 @@
 import Foundation
 import Combine
 import MultipeerConnectivity
+import os
+
+// MARK: - Diagnostics
+
+/// Breadcrumbs for the MPC handshake. The connect path is otherwise
+/// invisible — there is no UI for `.connecting`/`.notConnected` flaps or
+/// for advertise/browse failures — so when a join is flaky, stream these
+/// while reproducing:
+///
+///     log stream --predicate 'subsystem == "<bundle id>"' --level debug
+///
+/// (or filter by the "multipeer" category in Console.app). Every peer state
+/// transition on both ends lands here, which is what makes "connects
+/// sometimes" diagnosable instead of guesswork.
+private let mpcLog = Logger(
+    subsystem: Bundle.main.bundleIdentifier ?? "make-a-million",
+    category: "multipeer")
+
+private extension MCSessionState {
+    var label: String {
+        switch self {
+        case .notConnected: return "notConnected"
+        case .connecting:   return "connecting"
+        case .connected:    return "connected"
+        @unknown default:   return "unknown(\(rawValue))"
+        }
+    }
+}
 
 // MARK: - Service constants
 
@@ -97,12 +125,15 @@ final class MultipeerHost: NSObject, ObservableObject {
     let localPeerID: MCPeerID
     var maxConnectedPeers: Int = Seats.count - 1
 
-    /// All three are rebuilt together by `resetStack()`. MultipeerConnectivity
-    /// retains stale per-peer state tied to the MCPeerID + session once a
-    /// connection has completed, which makes the *next* handshake fail
-    /// ("connects once, then never until a restart"). Swapping only the
-    /// session isn't enough — the identity the framework keys on must change
-    /// too — so we recreate peerID, session, and advertiser as a unit.
+    /// Session + advertiser are rebuilt together by `resetStack()` once a
+    /// *previously connected* table empties out, so the next joiner
+    /// handshakes against a clean session. The peer identity is intentionally
+    /// reused (the persistent `localPeerID`, per `persistentPeerID`) rather
+    /// than re-minted — a stable identity is Apple's guidance for the
+    /// encryption handshake. Crucially this rebuild is gated to genuine
+    /// disconnects (see the session delegate): it must NEVER run during an
+    /// in-flight handshake, or it tears down the very session the joiner is
+    /// connecting against — which was the dominant "connects sometimes" bug.
     private let displayName: String
     private var session: MCSession
     private var advertiser: MCNearbyServiceAdvertiser
@@ -184,6 +215,7 @@ extension MultipeerHost: MCSessionDelegate {
                              peer peerID: MCPeerID,
                              didChange state: MCSessionState) {
         Task { @MainActor in
+            mpcLog.debug("host: peer \(peerID.displayName, privacy: .public) -> \(state.label, privacy: .public)")
             switch state {
             case .connected:
                 let t = MultipeerHostTransport(session: session, peer: peerID)
@@ -192,14 +224,25 @@ extension MultipeerHost: MCSessionDelegate {
                     self.connectedPeers.append(ConnectedPeer(id: peerID))
                 }
             case .notConnected:
+                // Distinguish a peer that was actually *connected* leaving
+                // from a handshake that never completed. MultipeerConnectivity
+                // routinely flaps .connecting → .notConnected during a normal
+                // handshake (more so with .required encryption). A flapping
+                // peer was never added to `connectedPeers`, so it doesn't
+                // count toward the rebuild decision below — rebuilding on it
+                // would disconnect the session the joiner is negotiating
+                // against and the join would fail.
+                let wasConnected = self.connectedPeers.contains { $0.id == peerID }
                 self.transports[peerID]?.markDisconnected()
                 self.transports[peerID] = nil
                 self.connectedPeers.removeAll { $0.id == peerID }
-                // Table is empty again — rebuild the whole stack with a
-                // fresh identity so the next joiner isn't blocked by the
-                // stale per-peer state MPC keeps after a completed session.
-                if self.connectedPeers.isEmpty {
+                // Only rebuild when a peer that had actually connected leaves
+                // and the table is now empty — never mid-handshake.
+                if wasConnected && self.connectedPeers.isEmpty {
+                    mpcLog.debug("host: connected table emptied — rebuilding stack")
                     self.resetStack()
+                } else if !wasConnected {
+                    mpcLog.debug("host: ignoring notConnected for never-connected peer \(peerID.displayName, privacy: .public) (handshake flap)")
                 }
             case .connecting:
                 break
@@ -253,12 +296,14 @@ extension MultipeerHost: MCNearbyServiceAdvertiserDelegate {
                                 invitationHandler: @escaping (Bool, MCSession?) -> Void) {
         Task { @MainActor in
             let accept = self.connectedPeers.count < self.maxConnectedPeers
+            mpcLog.debug("host: invitation from \(peerID.displayName, privacy: .public) -> \(accept ? "accept" : "decline (table full)", privacy: .public)")
             invitationHandler(accept, accept ? self.session : nil)
         }
     }
 
     nonisolated func advertiser(_ advertiser: MCNearbyServiceAdvertiser,
                                 didNotStartAdvertisingPeer error: Error) {
+        mpcLog.error("host: advertiser failed to start: \(error.localizedDescription, privacy: .public)")
         Task { @MainActor in
             self.isAdvertising = false
         }
@@ -378,6 +423,7 @@ final class MultipeerClient: NSObject, ObservableObject {
         guard discovered.contains(where: { $0.id == host.id }) else { return }
         // The stack is already fresh from startBrowsing(); invite directly.
         hostPeerID = host.id
+        mpcLog.debug("client: inviting host \(host.displayName, privacy: .public)")
         browser.invitePeer(host.id, to: session,
                            withContext: nil, timeout: 15)
         state = .connecting(to: host.id)
@@ -392,9 +438,11 @@ extension MultipeerClient: MCSessionDelegate {
                              peer peerID: MCPeerID,
                              didChange state: MCSessionState) {
         Task { @MainActor in
+            let isHost = (peerID == self.hostPeerID)
+            mpcLog.debug("client: peer \(peerID.displayName, privacy: .public) -> \(state.label, privacy: .public)\(isHost ? "" : " (ignored: not the host we invited)", privacy: .public)")
             // Ignore mesh peers (other clients MPC connected us to). Only the
             // host we invited drives our connection state.
-            guard peerID == self.hostPeerID else { return }
+            guard isHost else { return }
             switch state {
             case .connected:
                 let t = MultipeerClientTransport(session: session, host: peerID)
@@ -458,6 +506,7 @@ extension MultipeerClient: MCNearbyServiceBrowserDelegate {
                              withDiscoveryInfo info: [String : String]?) {
         Task { @MainActor in
             if !self.discovered.contains(where: { $0.id == peerID }) {
+                mpcLog.debug("client: found host \(peerID.displayName, privacy: .public)")
                 self.discovered.append(DiscoveredHost(id: peerID))
             }
         }
@@ -466,12 +515,14 @@ extension MultipeerClient: MCNearbyServiceBrowserDelegate {
     nonisolated func browser(_ browser: MCNearbyServiceBrowser,
                              lostPeer peerID: MCPeerID) {
         Task { @MainActor in
+            mpcLog.debug("client: lost host \(peerID.displayName, privacy: .public)")
             self.discovered.removeAll { $0.id == peerID }
         }
     }
 
     nonisolated func browser(_ browser: MCNearbyServiceBrowser,
                              didNotStartBrowsingForPeers error: Error) {
+        mpcLog.error("client: browse failed: \(error.localizedDescription, privacy: .public)")
         Task { @MainActor in
             self.state = .failed(message: "Browse failed: \(error.localizedDescription)")
         }
