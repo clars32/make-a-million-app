@@ -209,7 +209,7 @@ final class EndgameSolverTests: XCTestCase {
         var d = MonteCarloAgent.Difficulty.easy
         d.blunderRate = 0
         d.exactEndgameTricks = 4    // root decisions solved at ≤4 tricks
-        d.rolloutExactTricks = 3    // rollout tails solved at ≤3 tricks
+        d.research.rolloutExactTricks = 3    // rollout tails solved at ≤3 tricks
         let agents: [PlayerAgent] = (0..<4).map {
             MonteCarloAgent(name: "EX\($0)", difficulty: d,
                             seed: UInt64($0) &* 7919 &+ 1)

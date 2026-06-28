@@ -142,11 +142,11 @@ final class AIArenaTests: XCTestCase {
     /// samples flat. Read against the same-seed control, not 50%. Measured
     /// paired at 60 matches / baseSeed 1: control 55% → treatment 53% at BOTH
     /// 0.4 and 0.8, i.e. −~2pp — so the lever is parked at 0 (see
-    /// `Difficulty.declarerTrumpBias`). Re-run this after a refinement (bias
+    /// `Difficulty.research.declarerTrumpBias`). Re-run this after a refinement (bias
     /// only low trump, or reduce `bidLeanStrength` alongside).
     func testSelfPlayTrumpShape() async {
         var withShape = MonteCarloAgent.Difficulty.normal
-        withShape.declarerTrumpBias = 0.4
+        withShape.research.declarerTrumpBias = 0.4
         let r = await AIArena.runSelfPlay(matches: 30, challenger: withShape,
                                           champion: .normal, baseSeed: 1)
         print(r.summary)
@@ -173,7 +173,7 @@ final class AIArenaTests: XCTestCase {
     /// Lesson: confirm promising small-N results at higher N before promoting.
     func testSelfPlayCommandingPull() async {
         var withPull = MonteCarloAgent.Difficulty.normal
-        withPull.rolloutCommandingPull = true
+        withPull.research.rolloutCommandingPull = true
         let r = await AIArena.runSelfPlay(matches: 30, challenger: withPull,
                                           champion: .normal, baseSeed: 1)
         print(r.summary)
@@ -196,7 +196,7 @@ final class AIArenaTests: XCTestCase {
                                                 champion: .normal, baseSeed: 1)
         print("CONTROL (normal vs normal):\n" + control.summary)
         var withEscape = MonteCarloAgent.Difficulty.normal
-        withEscape.rolloutSpecialEscape = true
+        withEscape.research.rolloutSpecialEscape = true
         let r = await AIArena.runSelfPlay(matches: 60, challenger: withEscape,
                                           champion: .normal, baseSeed: 1)
         print("TREATMENT (specialEscape vs normal):\n" + r.summary)
@@ -398,7 +398,7 @@ final class AIArenaTests: XCTestCase {
     /// 60% (neutral). PARKED at false — see the lever comment.
     func testSelfPlayEstablishDuck() async {
         var duck = MonteCarloAgent.Difficulty.normal
-        duck.rolloutEstablishDuck = true
+        duck.research.rolloutEstablishDuck = true
         let control = await AIArena.runSelfPlay(matches: 60, challenger: .normal,
                                                 champion: .normal, baseSeed: 1)
         print("CONTROL (normal vs normal):\n" + control.summary)
@@ -418,7 +418,7 @@ final class AIArenaTests: XCTestCase {
     /// signal aligned with the ε-teacher's greedy bias (see lever comment).
     func testSelfPlayBankWin() async {
         var bank = MonteCarloAgent.Difficulty.normal
-        bank.rolloutBankWin = true
+        bank.research.rolloutBankWin = true
         let control = await AIArena.runSelfPlay(matches: 60, challenger: .normal,
                                                 champion: .normal, baseSeed: 1)
         print("CONTROL (normal vs normal):\n" + control.summary)
@@ -518,7 +518,7 @@ final class AIArenaTests: XCTestCase {
     /// comment for the full postmortem.
     func testSelfPlayExactEndgameRolloutTail() async {
         var exact = MonteCarloAgent.Difficulty.normal
-        exact.rolloutExactTricks = 2
+        exact.research.rolloutExactTricks = 2
         let r = await AIArena.runSelfPlay(matches: 60, challenger: exact,
                                           champion: .normal, baseSeed: 1)
         print("TREATMENT (rolloutExactTricks=2 vs normal):\n" + r.summary)
@@ -541,8 +541,8 @@ final class AIArenaTests: XCTestCase {
     /// double-dummy trap. PARKED; see the lever comment for the full postmortem.
     func testSelfPlayPlayConsistency() async {
         var filtered = MonteCarloAgent.Difficulty.normal
-        filtered.filterDominatedDonation = true
-        filtered.filterBearDecline = true
+        filtered.research.filterDominatedDonation = true
+        filtered.research.filterBearDecline = true
         let control = await AIArena.runSelfPlay(matches: 60, challenger: .normal,
                                                 champion: .normal, baseSeed: 1)
         print("CONTROL (normal vs normal):\n" + control.summary)
@@ -563,12 +563,12 @@ final class AIArenaTests: XCTestCase {
     /// deleting the true world. (B) is neutral (the event is rare and honored).
     func testSelfPlayPlayConsistencyPerCheck() async {
         var aOnly = MonteCarloAgent.Difficulty.normal
-        aOnly.filterDominatedDonation = true
+        aOnly.research.filterDominatedDonation = true
         let rA = await AIArena.runSelfPlay(matches: 60, challenger: aOnly,
                                            champion: .normal, baseSeed: 1)
         print("TREATMENT (donation check only vs normal):\n" + rA.summary)
         var bOnly = MonteCarloAgent.Difficulty.normal
-        bOnly.filterBearDecline = true
+        bOnly.research.filterBearDecline = true
         let rB = await AIArena.runSelfPlay(matches: 60, challenger: bOnly,
                                            champion: .normal, baseSeed: 1)
         print("TREATMENT (Bear-decline check only vs normal):\n" + rB.summary)
@@ -591,7 +591,7 @@ final class AIArenaTests: XCTestCase {
                                                 champion: .normal, baseSeed: 1)
         print("CONTROL (normal vs normal):\n" + control.summary)
         var weighted = MonteCarloAgent.Difficulty.normal
-        weighted.playHistoryWeighting = 0.45
+        weighted.research.playHistoryWeighting = 0.45
         let r = await AIArena.runSelfPlay(matches: 60, challenger: weighted,
                                           champion: .normal, baseSeed: 1)
         print("TREATMENT (soft play-history weighting vs normal):\n" + r.summary)
@@ -611,7 +611,7 @@ final class AIArenaTests: XCTestCase {
         base.exactEndgameTricks = 0
 
         var weighted = base
-        weighted.playHistoryWeighting = 0.45
+        weighted.research.playHistoryWeighting = 0.45
 
         let matches = 4
         let control = await AIArena.runSelfPlay(matches: matches, challenger: base,
@@ -644,7 +644,7 @@ final class AIArenaTests: XCTestCase {
                        file: file, line: line)
     }
 
-    /// A/B for SINGLE-OBSERVER IS-MCTS (`Difficulty.useISMCTS`): the challenger
+    /// A/B for SINGLE-OBSERVER IS-MCTS (`Difficulty.research.useISMCTS`): the challenger
     /// replaces depth-1 PIMC trick search with a determinization-per-iteration
     /// information-set tree (opponents/partner searched, not assumed greedy-
     /// omniscient), compute-matched to the PIMC rollout budget so the read
@@ -655,7 +655,7 @@ final class AIArenaTests: XCTestCase {
     /// filtering). Read TREATMENT against the same-seed control, not 50%.
     func testSelfPlayISMCTS() async {
         var ismcts = MonteCarloAgent.Difficulty.normal
-        ismcts.useISMCTS = true
+        ismcts.research.useISMCTS = true
         let control = await AIArena.runSelfPlay(matches: 60, challenger: .normal,
                                                 champion: .normal, baseSeed: 1)
         print("CONTROL (normal vs normal):\n" + control.summary)
@@ -673,8 +673,8 @@ final class AIArenaTests: XCTestCase {
     func testSelfPlayISMCTSBudget() async {
         for mult in [2, 4] {
             var d = MonteCarloAgent.Difficulty.normal
-            d.useISMCTS = true
-            d.ismctsBudgetMultiplier = mult
+            d.research.useISMCTS = true
+            d.research.ismctsBudgetMultiplier = mult
             let r = await AIArena.runSelfPlay(matches: 60, challenger: d,
                                               champion: .normal, baseSeed: 1)
             print("TREATMENT (IS-MCTS ×\(mult) budget vs normal):\n" + r.summary)
@@ -687,8 +687,8 @@ final class AIArenaTests: XCTestCase {
     /// holds against a same-build 100-match PIMC control.
     func testSelfPlayISMCTSConfirm100() async {
         var d = MonteCarloAgent.Difficulty.normal
-        d.useISMCTS = true
-        d.ismctsBudgetMultiplier = 4
+        d.research.useISMCTS = true
+        d.research.ismctsBudgetMultiplier = 4
         let control = await AIArena.runSelfPlay(matches: 100, challenger: .normal,
                                                 champion: .normal, baseSeed: 1)
         print("CONTROL (normal vs normal, 100):\n" + control.summary)
@@ -706,8 +706,8 @@ final class AIArenaTests: XCTestCase {
     /// PIMC control.
     func testSelfPlayISMCTSExtreme() async {
         var d = MonteCarloAgent.Difficulty.extreme
-        d.useISMCTS = true
-        d.ismctsBudgetMultiplier = 2
+        d.research.useISMCTS = true
+        d.research.ismctsBudgetMultiplier = 2
         let control = await AIArena.runSelfPlay(matches: 60, challenger: .extreme,
                                                 champion: .extreme, baseSeed: 1)
         print("CONTROL (extreme vs extreme):\n" + control.summary)
@@ -724,9 +724,9 @@ final class AIArenaTests: XCTestCase {
     /// 31%/42%) from `testSelfPlayISMCTSExtreme` on this build.
     func testSelfPlayISMCTSExtremeShortlistRoot() async {
         var d = MonteCarloAgent.Difficulty.extreme
-        d.useISMCTS = true
-        d.ismctsBudgetMultiplier = 2
-        d.ismctsShortlistRoot = true
+        d.research.useISMCTS = true
+        d.research.ismctsBudgetMultiplier = 2
+        d.research.ismctsShortlistRoot = true
         let r = await AIArena.runSelfPlay(matches: 60, challenger: d,
                                           champion: .extreme, baseSeed: 1)
         print("TREATMENT (extreme+IS-MCTS ×2 shortlist-root vs extreme):\n" + r.summary)

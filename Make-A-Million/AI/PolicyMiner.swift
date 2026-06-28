@@ -215,11 +215,11 @@ enum PolicyMiner {
         // mining the bare defaults would re-flag patterns already fixed by a
         // promoted rollout lever (e.g. rolloutTopPull).
         let studentMove = PlayoutPolicy.move(in: s, seat: seat,
-                                             commandingPull: difficulty.rolloutCommandingPull,
-                                             specialEscape: difficulty.rolloutSpecialEscape,
+                                             commandingPull: difficulty.research.rolloutCommandingPull,
+                                             specialEscape: difficulty.research.rolloutSpecialEscape,
                                              topPull: difficulty.rolloutTopPull,
-                                             establishDuck: difficulty.rolloutEstablishDuck,
-                                             bankWin: difficulty.rolloutBankWin)
+                                             establishDuck: difficulty.research.rolloutEstablishDuck,
+                                             bankWin: difficulty.research.rolloutBankWin)
         guard legal.contains(studentMove) else { return nil }
 
         // Ensemble values per candidate. Rollout i uses the SAME perturbation
@@ -301,11 +301,11 @@ enum PolicyMiner {
         guard var ns = try? s.applying(move, by: seat) else { return nil }
         func policyMove(_ state: GameState, _ mover: PlayerID) -> Move {
             PlayoutPolicy.move(in: state, seat: mover,
-                               commandingPull: difficulty.rolloutCommandingPull,
-                               specialEscape: difficulty.rolloutSpecialEscape,
+                               commandingPull: difficulty.research.rolloutCommandingPull,
+                               specialEscape: difficulty.research.rolloutSpecialEscape,
                                topPull: difficulty.rolloutTopPull,
-                               establishDuck: difficulty.rolloutEstablishDuck,
-                               bankWin: difficulty.rolloutBankWin)
+                               establishDuck: difficulty.research.rolloutEstablishDuck,
+                               bankWin: difficulty.research.rolloutBankWin)
         }
         let rng = RNGBox(seed: rolloutSeed)
         var steps = 0

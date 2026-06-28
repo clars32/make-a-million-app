@@ -154,7 +154,7 @@ final class ISMCTSTests: XCTestCase {
     func testAgentWithISMCTSSettlesAHand() async throws {
         var d = MonteCarloAgent.Difficulty.normal
         d.blunderRate = 0
-        d.useISMCTS = true
+        d.research.useISMCTS = true
         let agents: [PlayerAgent] = (0..<4).map {
             MonteCarloAgent(name: "IS\($0)", difficulty: d,
                             seed: UInt64($0) &* 7919 &+ 1)

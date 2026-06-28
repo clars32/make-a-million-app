@@ -17,11 +17,11 @@ extension MonteCarloAgent {
     /// and the EndgameSolver's move ordering all drive the identical policy.
     func policyMove(in state: GameState, seat: PlayerID) -> Move {
         PlayoutPolicy.move(in: state, seat: seat,
-                           commandingPull: difficulty.rolloutCommandingPull,
-                           specialEscape: difficulty.rolloutSpecialEscape,
+                           commandingPull: difficulty.research.rolloutCommandingPull,
+                           specialEscape: difficulty.research.rolloutSpecialEscape,
                            topPull: difficulty.rolloutTopPull,
-                           establishDuck: difficulty.rolloutEstablishDuck,
-                           bankWin: difficulty.rolloutBankWin)
+                           establishDuck: difficulty.research.rolloutEstablishDuck,
+                           bankWin: difficulty.research.rolloutBankWin)
     }
 
     /// Score one (world × candidate) continuation: roll the determinized

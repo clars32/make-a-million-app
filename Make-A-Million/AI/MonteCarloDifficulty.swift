@@ -2,10 +2,19 @@
 //  MonteCarloDifficulty.swift
 //  Make-a-Million
 //
-//  The MonteCarloAgent tuning profile — strength tiers plus the A/B-gated
-//  research levers — split out of MonteCarloAgent.swift so the agent file
-//  stays focused on decision logic. Declared as an extension so every
-//  reference stays `MonteCarloAgent.Difficulty`, unchanged.
+//  The MonteCarloAgent tuning profile — the shipped strength knobs up top,
+//  the A/B-gated research levers walled off in a nested `ResearchLevers` —
+//  split out of MonteCarloAgent.swift so the agent file stays focused on
+//  decision logic. Declared as an extension so every reference stays
+//  `MonteCarloAgent.Difficulty`, unchanged.
+//
+//  WHY THE SPLIT: `Difficulty` had grown ~30 fields, most of them default-off
+//  experiments that no shipped tier (`easy`/`normal`/`hard`/`extreme`) ever
+//  sets. Interleaving them with the production knobs made the live decision
+//  path hard to read. The default-off levers now live in `research`
+//  (`Difficulty.research.useISMCTS`, …); the top-level fields are exactly the
+//  ones a shipped tier tunes. `research` defaults to all-off, so the tier
+//  initializers are unaffected.
 //
 
 import Foundation
@@ -13,6 +22,7 @@ import Foundation
 extension MonteCarloAgent {
 
     nonisolated struct Difficulty {
+        // ── Shipped strength knobs (set by the player-facing tiers) ─────────
         /// Determinized worlds sampled per trick-play decision. More =
         /// stronger but slower. With the new tactical playout 12-30 is
         /// often enough; old version needed 40+.
@@ -53,106 +63,6 @@ extension MonteCarloAgent {
         /// whose suit has run dry. Provably correct, but TIERED (off below
         /// Extreme) to keep Extreme a distinctly stronger card-counter.
         var deepInference: Bool = false
-        /// SHAPE prior for world sampling: the declarer NAMED trump, so they
-        /// are likely LONG in it. Biases trump cards (any rank) toward the
-        /// declarer's sampled hand. Soft prior (shifts the distribution, never
-        /// breaks a count/void/widow constraint). 0 = off; higher = stronger
-        /// pull (≈ exp(value) odds multiplier per trump card).
-        ///
-        /// PARKED AT 0 (June 2026): measured −~2pp at BOTH 0.4 and 0.8 in
-        /// paired self-play. Hypothesis: `bidLeanStrength` already drifts high
-        /// trump to the (bidder) declarer, so adding a length bias on top
-        /// over-concentrates trump there and the defenders under-model their
-        /// own/partner's trump. Lever retained for a future refinement — bias
-        /// only LOW trump, or pair it with a reduced `bidLeanStrength`.
-        var declarerTrumpBias: Double = 0.0
-        /// HARD world-INFERENCE: play-consistency rejection sampling. After a
-        /// world is sampled, replay the public trick history through the ENGINE
-        /// and reject the world if it forces a hidden seat to have made a
-        /// PROVABLY-DOMINATED past play — a blunder no rational line takes,
-        /// given the cards this world dealt them. Two certainty-gated checks
-        /// (see `Determinizer.isConsistentWithPlay`), split so each is
-        /// independently A/B-able, both restricted to the seat being LAST to
-        /// play so the trick outcome was already certain:
-        ///   (A) `filterDominatedDonation` — the seat donated money / the Bull
-        ///       (which DOUBLES the enemy take) into a trick certainly lost to
-        ///       the opponents when a worthless throwaway was legal; and
-        ///   (B) `filterBearDecline` — the seat declined the loose Bear on a
-        ///       fat (>= bearDeclineFloor) trick certainly lost to the
-        ///       opponents when the Bear was legal.
-        ///
-        /// PARKED — both OFF (June 12 2026). Conceived as the named successor
-        /// to the parked exact-endgame gates >=3 (exact play amplifies world
-        /// quality → sharper worlds first). Measured the OPPOSITE. Paired 60 /
-        /// baseSeed 1 vs the 62% (set 24%) control:
-        ///   both checks   → 50% (set 30%)
-        ///   (A) donation  → 52% (set 30%)   ← carries ALL the damage
-        ///   (B) Bear only → 62% (set 23%)   ← neutral
-        ///
-        /// (A) FAILS because its premise is false FOR THESE AGENTS. It rejects
-        /// a world where a seat played money to a certain-loss trick while
-        /// holding a non-money card — assuming no competent line donates money
-        /// with a throwaway available. But PlayoutPolicy and the shortlist shed
-        /// by lowest CAPTURE RANK, not lowest VALUE: the $5k is rank 4 and the
-        /// $10k rank 8, so they are routinely a seat's lowest legal card and
-        /// get shed to lost tricks WHILE the seat still holds higher non-money
-        /// cards. (A) reads that normal play as "dominated" and deletes the
-        /// TRUE world (the one holding those non-money cards) en masse, biasing
-        /// the sample — hence the higher set-rate. This is the inference-side
-        /// double-dummy trap made concrete: a "hard" deduction is only hard
-        /// relative to a rationality model the POPULATION actually follows, and
-        /// "never donate small money" is not how these agents play. (B) is
-        /// neutral only because the loose-Bear-on-a-fat-lost-trick event is
-        /// rare and mostly honored. Lever + golden locks kept; the salvageable
-        /// variant is a RANK-AWARE donation check — reject only when a strictly
-        /// LOWER-capture-rank non-money card was legal (matching the agents'
-        /// lowest-rank shedding) — but its expected value looks low.
-        var filterDominatedDonation: Bool = false
-        var filterBearDecline: Bool = false
-        /// Master switch read by the trick-play world loop: rejection sampling
-        /// runs iff at least one consistency check is enabled.
-        var playConsistencyFilter: Bool { filterDominatedDonation || filterBearDecline }
-        /// SOFT world-INFERENCE: importance-weight each sampled world by how
-        /// plausible the public trick history looks in that world under a small
-        /// set of high-confidence card-reading cues. This is the softer
-        /// successor to play-consistency rejection: a strange hidden-seat play
-        /// nudges the world down instead of deleting it, so we get human-like
-        /// "they probably did that because of their cards" inference without
-        /// the brittle rationality trap that made the hard donation filter
-        /// over-prune true worlds. 0 = off.
-        ///
-        /// PARKED AT 0 (June 2026): the first 0.45 probe measured below the
-        /// same-seed control (57% control → 52% treatment over 60 matches).
-        /// The hook is kept because the direction is strategically right, but
-        /// the likelihood shape needs tuning before this belongs on a
-        /// player-facing tier.
-        var playHistoryWeighting: Double = 0.0
-        /// A/B-gated ROLLOUT-policy improvement (algorithm work, not a knob):
-        /// when the declarer draws trump in a rollout, lead a commanding high
-        /// trump rather than the lowest. Sharper rollouts → better MCTS value
-        /// estimates → potentially better moves at every tier. Off by default
-        /// until a paired A/B confirms it; promote globally if it helps.
-        var rolloutCommandingPull: Bool = false
-        /// A/B-gated ROLLOUT-policy improvement: Bull endgame management.
-        /// With this on, rollout seats shed the Bull on worthless tricks late
-        /// in the hand, and when trapped with BER+BUL as the last two cards
-        /// they spend the BULL on the small pot and keep the BEAR for the big
-        /// one (a trapped Bear is harmless — a forced Bear lead cancels its
-        /// own trick).
-        ///
-        /// PARKED AT FALSE (June 2026): paired self-play at 60 matches /
-        /// baseSeed 1 measured control 63% → treatment 50% (challenger
-        /// set-rate 15%→19%) — negative-to-noise, so not promoted. The
-        /// UNGATED agent-side fixes (Bull-escape shortlist candidates +
-        /// specials rescue) are what cure the observed Bull endplays, and
-        /// they work BECAUSE rollouts stay pessimistic: the root candidate
-        /// "shed the Bull now" rolls out clean while "hold it" rolls out into
-        /// the forced final-trick double, giving MCTS the differential. This
-        /// rollout rule as written likely over-fires (any moneyless trick
-        /// late, for all four rollout seats), washing out futures where one
-        /// more trick lands the Bull on partner's money. Lever + golden tests
-        /// kept for a refined version.
-        var rolloutSpecialEscape: Bool = false
         /// ROLLOUT-policy improvement (PolicyMiner, June 2026 — the #1 mined
         /// disagreement pattern, stable across both teacher configs): the
         /// rollout declarer pulls trump from the TOP (Tiger included)
@@ -170,41 +80,6 @@ extension MonteCarloAgent {
         /// rollouts lift every consumer of PlayoutPolicy. Kept as a field
         /// so it stays A/B-able (turn it off on one side).
         var rolloutTopPull: Bool = true
-        /// A/B-gated ROLLOUT-policy improvement (PolicyMiner, June 2026 —
-        /// the #2 mined pattern): with length (≥3 cards) behind a side-suit
-        /// boss, the rollout leader DUCKS the first round (lowest card of
-        /// the suit, ≤ $5k risk) and cashes the boss later, when opponents'
-        /// money is forced to follow. Singleton/doubleton bosses still cash
-        /// immediately (calibration: a singleton $40k cashes 100%).
-        ///
-        /// PARKED AT FALSE (June 2026): the blanket version (duck every time
-        /// rules 2/3 would cash with length) measured control 62% →
-        /// treatment 52% at paired 60/baseSeed 1 — repeated ducking donates
-        /// tempo while voids develop. Refined to VIRGIN suits only (one duck
-        /// per suit, the exemplars' actual shape) it recovered to 60% vs 62%
-        /// — neutral, and a soft rollout prior isn't promoted on a neutral
-        /// read. Mined per-position signal evidently doesn't survive as a
-        /// blanket rollout rule here (contrast rolloutTopPull, which did).
-        /// Lever + golden locks kept for a future, more conditional variant.
-        var rolloutEstablishDuck: Bool = false
-        /// A/B-gated ROLLOUT-policy improvement (PolicyMiner, June 2026 —
-        /// the top follow-side family in the post-topPull re-mine, and the
-        /// resurfaced "second-seat ruff/bank" candidate): when winning a
-        /// trick mid-round, bank the lowest-rank UNASSAILABLE money winner —
-        /// full information says no yet-to-play seat can legally beat it or
-        /// Bear the trick — instead of always winning cheap. Last-to-play
-        /// keeps the existing max-money bank (B2).
-        ///
-        /// PARKED AT FALSE (June 2026): paired 60/baseSeed 1 measured
-        /// control 62% → treatment 57% — below the paired control. The
-        /// deduction is sound but the TRADE is not: banking spends a future
-        /// round-winner for present certainty, while the cheap win keeps the
-        /// money card as a SECOND winner that competent rollout futures
-        /// realize anyway. The mined signal was inflated by the ε-teacher's
-        /// greedy bias (sloppy futures squander held winners) — this pattern
-        /// ALIGNED with the bias, unlike topPull (bias-neutral, promoted).
-        /// Weigh bias alignment before spending a cycle on a mined pattern.
-        var rolloutBankWin: Bool = false
         /// Bypass the heuristic shortlist gate entirely and let MCTS grade
         /// EVERY legal move. The shortlist exists for compute (no longer
         /// binding — worst case ~13 candidates vs 4) and to shield the search
@@ -221,65 +96,6 @@ extension MonteCarloAgent {
         /// snappy, and keeps arena A/Bs (which run Normal) ~3× faster.
         /// `trickCandidates` is ignored when this is on.
         var searchAllLegalMoves: Bool = false
-        /// ALGORITHM lever: replace the default depth-1 PIMC trick search with
-        /// single-observer IS-MCTS (`AI/ISMCTS.swift`). PIMC samples a world,
-        /// applies each ROOT candidate, then plays the rest greedily with full
-        /// knowledge of the hidden cards — strategy fusion (rollouts "peek")
-        /// and a weak imagined future-self, both untunable. IS-MCTS builds one
-        /// tree over the agent's information set, samples a fresh
-        /// determinization per iteration (a move is explored only where it is
-        /// legal in that world), and searches opponents'/partner's replies with
-        /// availability-count UCB, with PlayoutPolicy finishing the tail past
-        /// the frontier. Compute-matched to the PIMC budget so an A/B isolates
-        /// the estimator, not the rollout count.
-        ///
-        /// VALIDATED (June 12 2026). Compute-matched (×1 ≈ 80 iterations) is a
-        /// sparse 2-ply tree and reads −9pp — but the gain SCALES with
-        /// iterations as MCTS theory predicts. Paired vs the same-build PIMC
-        /// control: ×1 48% → ×2 52% → ×4 58% (control 57%, N=60), CONFIRMED at
-        /// N=100: ×4 58% vs a clean 50% control (set-rate: opponents 35% set vs
-        /// the agent's 27%) — +8pp, the first gain from a better ESTIMATOR
-        /// rather than better worlds/rollouts, and the structural fix the
-        /// double-dummy / inference-trap findings pointed to (it removes PIMC's
-        /// strategy fusion WITHOUT assuming an opponent-rationality model). Cost
-        /// is the catch: it needs ~300+ iterations, so it belongs on the
-        /// compute-tolerant tiers, not the snappy default. See
-        /// `ismctsBudgetMultiplier` and the A/B `testSelfPlayISMCTS*`.
-        ///
-        /// BUT it did NOT replicate on the EXTREME profile (June 12 2026):
-        /// extreme+IS-MCTS ×2 (528 iters) = 68% vs a 67% extreme-vs-extreme
-        /// control (N=60; the seat/seed confound inflates both) — neutral. The
-        /// Normal +8pp was won against a WEAK PIMC; Extreme's full-width search
-        /// + deepInference + exact-endgame already close much of the same gap,
-        /// so the fusion fix has little headroom left on top. The "wide root
-        /// under-budgeting" alternative was TESTED and REJECTED: gating the
-        /// IS-MCTS root to the narrow shortlist (`ismctsShortlistRoot`) to
-        /// concentrate 528 iters read 40% vs the 67% control — −27pp, because
-        /// narrowing reintroduces the shortlist-OMISSION failure class that
-        /// `searchAllLegalMoves` exists to kill (and handicaps the root vs a
-        /// full-width champion). So the full-legal root is load-bearing on
-        /// Extreme and can't be cheaply concentrated; the neutrality is genuine
-        /// REDUNDANCY with Extreme's stack, not budget. NET DISPOSITION: NOT
-        /// promoted to any player-facing tier — IS-MCTS is a validated research
-        /// result (estimator can beat the plateau where PIMC is weak) with no
-        /// clean production home (redundant on the strong tiers, too slow for
-        /// the snappy Normal default). Kept default-off and A/B-able.
-        var useISMCTS: Bool = false
-        /// IS-MCTS ONLY: iterations = (samples × max(4, trickCandidates)) × this.
-        /// MCTS needs far more iterations than PIMC's focused per-candidate
-        /// rollouts to fill its (deep) tree and overcome its higher per-estimate
-        /// variance, so the compute-matched (×1) read understates it. This knob
-        /// scales the search up to test whether removing strategy fusion
-        /// overtakes PIMC's plateau once the tree is adequately sampled.
-        var ismctsBudgetMultiplier: Int = 1
-        /// IS-MCTS only: gate the ROOT to the narrow heuristic shortlist even
-        /// when `searchAllLegalMoves` is on, so the iteration budget
-        /// concentrates onto ~trickCandidates root moves (the tree still
-        /// searches all legal replies deeper). Tests whether the Extreme-
-        /// neutral read was wide-root under-budgeting: a full-legal root (~13
-        /// early) spreads 528 iters thin, where the validated Normal regime had
-        /// a ≤4-move shortlist at ~80 visits/branch.
-        var ismctsShortlistRoot: Bool = false
         /// EXACT ENDGAME — root decisions: when a real decision arrives with
         /// ≤ N tricks remaining (my own hand size), every (world × candidate)
         /// is graded by EndgameSolver — full-information alpha-beta over the
@@ -311,28 +127,6 @@ extension MonteCarloAgent {
         /// sharper (play-consistency filtering is the named candidate) —
         /// exact play amplifies world quality, in both directions.
         var exactEndgameTricks: Int = 0
-        /// EXACT ENDGAME — rollout tails (A/B lever): mid-hand rollouts
-        /// hand off to the same solver once the side to act holds ≤ N
-        /// cards, so root candidates at tricks 7–10 are graded by futures
-        /// whose endgames are played perfectly rather than greedily.
-        /// Strictly costlier than the root lever (every rollout pays a
-        /// solve), so it is measured separately. 0 = off.
-        ///
-        /// PARKED AT 0 (June 2026): paired 60 / baseSeed 1 at gate 2
-        /// measured control 62% → treatment 55% (challenger set-rate
-        /// 24%→28%) — below the paired control. The hoped-for upside (exact
-        /// tails keep TRUE forced-trap differentials while removing false
-        /// ones the greedy tail overstates) is outweighed by double-dummy
-        /// amplification, and unlike the root lever there is NO gate small
-        /// enough to escape it: the world error a tail solve amplifies is
-        /// the one sampled at the MID-HAND root decision (tricks 7–10,
-        /// maximal hidden information), regardless of how late the solve
-        /// itself fires. The root lever at gate 2 is neutral-and-promoted
-        /// precisely because its worlds are sampled late, when voids +
-        /// counting have pinned them. Lever + probe test kept; re-judge
-        /// only after world sampling itself gets sharper (play-consistency
-        /// filtering).
-        var rolloutExactTricks: Int = 0
         /// Match-aware trick-play OBJECTIVE: utility = teamNet ($) +
         /// weight × P(win match | final scores). 0 = pure team net (off).
         /// P is a logistic in the score difference (scale $300k) with hard
@@ -458,6 +252,236 @@ extension MonteCarloAgent {
         /// 28% vs 31% — win-rate neutral, fewer contested over-bids. A/B
         /// `testSelfPlayBidAggressionDrop`.
         var bidRolloutDropAggression: Bool = true
+
+        /// A/B-gated research levers — default-off experiments that no shipped
+        /// tier sets. Walled off here so the production fields above are exactly
+        /// the knobs the strength ladder tunes. Access as
+        /// `difficulty.research.<lever>`; flip one in a paired self-play probe to
+        /// measure it. See `ResearchLevers` for the per-lever findings.
+        var research = ResearchLevers()
+
+        /// The parked / under-investigation tuning levers. Every field defaults
+        /// OFF and is excluded from the shipped tiers; each carries the paired
+        /// self-play result that justified parking it (so a future pass starts
+        /// from the evidence, not a re-derivation).
+        nonisolated struct ResearchLevers {
+            /// SHAPE prior for world sampling: the declarer NAMED trump, so they
+            /// are likely LONG in it. Biases trump cards (any rank) toward the
+            /// declarer's sampled hand. Soft prior (shifts the distribution, never
+            /// breaks a count/void/widow constraint). 0 = off; higher = stronger
+            /// pull (≈ exp(value) odds multiplier per trump card).
+            ///
+            /// PARKED AT 0 (June 2026): measured −~2pp at BOTH 0.4 and 0.8 in
+            /// paired self-play. Hypothesis: `bidLeanStrength` already drifts high
+            /// trump to the (bidder) declarer, so adding a length bias on top
+            /// over-concentrates trump there and the defenders under-model their
+            /// own/partner's trump. Lever retained for a future refinement — bias
+            /// only LOW trump, or pair it with a reduced `bidLeanStrength`.
+            var declarerTrumpBias: Double = 0.0
+            /// HARD world-INFERENCE: play-consistency rejection sampling. After a
+            /// world is sampled, replay the public trick history through the ENGINE
+            /// and reject the world if it forces a hidden seat to have made a
+            /// PROVABLY-DOMINATED past play — a blunder no rational line takes,
+            /// given the cards this world dealt them. Two certainty-gated checks
+            /// (see `Determinizer.isConsistentWithPlay`), split so each is
+            /// independently A/B-able, both restricted to the seat being LAST to
+            /// play so the trick outcome was already certain:
+            ///   (A) `filterDominatedDonation` — the seat donated money / the Bull
+            ///       (which DOUBLES the enemy take) into a trick certainly lost to
+            ///       the opponents when a worthless throwaway was legal; and
+            ///   (B) `filterBearDecline` — the seat declined the loose Bear on a
+            ///       fat (>= bearDeclineFloor) trick certainly lost to the
+            ///       opponents when the Bear was legal.
+            ///
+            /// PARKED — both OFF (June 12 2026). Conceived as the named successor
+            /// to the parked exact-endgame gates >=3 (exact play amplifies world
+            /// quality → sharper worlds first). Measured the OPPOSITE. Paired 60 /
+            /// baseSeed 1 vs the 62% (set 24%) control:
+            ///   both checks   → 50% (set 30%)
+            ///   (A) donation  → 52% (set 30%)   ← carries ALL the damage
+            ///   (B) Bear only → 62% (set 23%)   ← neutral
+            ///
+            /// (A) FAILS because its premise is false FOR THESE AGENTS. It rejects
+            /// a world where a seat played money to a certain-loss trick while
+            /// holding a non-money card — assuming no competent line donates money
+            /// with a throwaway available. But PlayoutPolicy and the shortlist shed
+            /// by lowest CAPTURE RANK, not lowest VALUE: the $5k is rank 4 and the
+            /// $10k rank 8, so they are routinely a seat's lowest legal card and
+            /// get shed to lost tricks WHILE the seat still holds higher non-money
+            /// cards. (A) reads that normal play as "dominated" and deletes the
+            /// TRUE world (the one holding those non-money cards) en masse, biasing
+            /// the sample — hence the higher set-rate. This is the inference-side
+            /// double-dummy trap made concrete: a "hard" deduction is only hard
+            /// relative to a rationality model the POPULATION actually follows, and
+            /// "never donate small money" is not how these agents play. (B) is
+            /// neutral only because the loose-Bear-on-a-fat-lost-trick event is
+            /// rare and mostly honored. Lever + golden locks kept; the salvageable
+            /// variant is a RANK-AWARE donation check — reject only when a strictly
+            /// LOWER-capture-rank non-money card was legal (matching the agents'
+            /// lowest-rank shedding) — but its expected value looks low.
+            var filterDominatedDonation: Bool = false
+            var filterBearDecline: Bool = false
+            /// Master switch read by the trick-play world loop: rejection sampling
+            /// runs iff at least one consistency check is enabled.
+            var playConsistencyFilter: Bool { filterDominatedDonation || filterBearDecline }
+            /// SOFT world-INFERENCE: importance-weight each sampled world by how
+            /// plausible the public trick history looks in that world under a small
+            /// set of high-confidence card-reading cues. This is the softer
+            /// successor to play-consistency rejection: a strange hidden-seat play
+            /// nudges the world down instead of deleting it, so we get human-like
+            /// "they probably did that because of their cards" inference without
+            /// the brittle rationality trap that made the hard donation filter
+            /// over-prune true worlds. 0 = off.
+            ///
+            /// PARKED AT 0 (June 2026): the first 0.45 probe measured below the
+            /// same-seed control (57% control → 52% treatment over 60 matches).
+            /// The hook is kept because the direction is strategically right, but
+            /// the likelihood shape needs tuning before this belongs on a
+            /// player-facing tier.
+            var playHistoryWeighting: Double = 0.0
+            /// A/B-gated ROLLOUT-policy improvement (algorithm work, not a knob):
+            /// when the declarer draws trump in a rollout, lead a commanding high
+            /// trump rather than the lowest. Sharper rollouts → better MCTS value
+            /// estimates → potentially better moves at every tier. Off by default
+            /// until a paired A/B confirms it; promote globally if it helps.
+            var rolloutCommandingPull: Bool = false
+            /// A/B-gated ROLLOUT-policy improvement: Bull endgame management.
+            /// With this on, rollout seats shed the Bull on worthless tricks late
+            /// in the hand, and when trapped with BER+BUL as the last two cards
+            /// they spend the BULL on the small pot and keep the BEAR for the big
+            /// one (a trapped Bear is harmless — a forced Bear lead cancels its
+            /// own trick).
+            ///
+            /// PARKED AT FALSE (June 2026): paired self-play at 60 matches /
+            /// baseSeed 1 measured control 63% → treatment 50% (challenger
+            /// set-rate 15%→19%) — negative-to-noise, so not promoted. The
+            /// UNGATED agent-side fixes (Bull-escape shortlist candidates +
+            /// specials rescue) are what cure the observed Bull endplays, and
+            /// they work BECAUSE rollouts stay pessimistic: the root candidate
+            /// "shed the Bull now" rolls out clean while "hold it" rolls out into
+            /// the forced final-trick double, giving MCTS the differential. This
+            /// rollout rule as written likely over-fires (any moneyless trick
+            /// late, for all four rollout seats), washing out futures where one
+            /// more trick lands the Bull on partner's money. Lever + golden tests
+            /// kept for a refined version.
+            var rolloutSpecialEscape: Bool = false
+            /// A/B-gated ROLLOUT-policy improvement (PolicyMiner, June 2026 —
+            /// the #2 mined pattern): with length (≥3 cards) behind a side-suit
+            /// boss, the rollout leader DUCKS the first round (lowest card of
+            /// the suit, ≤ $5k risk) and cashes the boss later, when opponents'
+            /// money is forced to follow. Singleton/doubleton bosses still cash
+            /// immediately (calibration: a singleton $40k cashes 100%).
+            ///
+            /// PARKED AT FALSE (June 2026): the blanket version (duck every time
+            /// rules 2/3 would cash with length) measured control 62% →
+            /// treatment 52% at paired 60/baseSeed 1 — repeated ducking donates
+            /// tempo while voids develop. Refined to VIRGIN suits only (one duck
+            /// per suit, the exemplars' actual shape) it recovered to 60% vs 62%
+            /// — neutral, and a soft rollout prior isn't promoted on a neutral
+            /// read. Mined per-position signal evidently doesn't survive as a
+            /// blanket rollout rule here (contrast rolloutTopPull, which did).
+            /// Lever + golden locks kept for a future, more conditional variant.
+            var rolloutEstablishDuck: Bool = false
+            /// A/B-gated ROLLOUT-policy improvement (PolicyMiner, June 2026 —
+            /// the top follow-side family in the post-topPull re-mine, and the
+            /// resurfaced "second-seat ruff/bank" candidate): when winning a
+            /// trick mid-round, bank the lowest-rank UNASSAILABLE money winner —
+            /// full information says no yet-to-play seat can legally beat it or
+            /// Bear the trick — instead of always winning cheap. Last-to-play
+            /// keeps the existing max-money bank (B2).
+            ///
+            /// PARKED AT FALSE (June 2026): paired 60/baseSeed 1 measured
+            /// control 62% → treatment 57% — below the paired control. The
+            /// deduction is sound but the TRADE is not: banking spends a future
+            /// round-winner for present certainty, while the cheap win keeps the
+            /// money card as a SECOND winner that competent rollout futures
+            /// realize anyway. The mined signal was inflated by the ε-teacher's
+            /// greedy bias (sloppy futures squander held winners) — this pattern
+            /// ALIGNED with the bias, unlike topPull (bias-neutral, promoted).
+            /// Weigh bias alignment before spending a cycle on a mined pattern.
+            var rolloutBankWin: Bool = false
+            /// ALGORITHM lever: replace the default depth-1 PIMC trick search with
+            /// single-observer IS-MCTS (`AI/ISMCTS.swift`). PIMC samples a world,
+            /// applies each ROOT candidate, then plays the rest greedily with full
+            /// knowledge of the hidden cards — strategy fusion (rollouts "peek")
+            /// and a weak imagined future-self, both untunable. IS-MCTS builds one
+            /// tree over the agent's information set, samples a fresh
+            /// determinization per iteration (a move is explored only where it is
+            /// legal in that world), and searches opponents'/partner's replies with
+            /// availability-count UCB, with PlayoutPolicy finishing the tail past
+            /// the frontier. Compute-matched to the PIMC budget so an A/B isolates
+            /// the estimator, not the rollout count.
+            ///
+            /// VALIDATED (June 12 2026). Compute-matched (×1 ≈ 80 iterations) is a
+            /// sparse 2-ply tree and reads −9pp — but the gain SCALES with
+            /// iterations as MCTS theory predicts. Paired vs the same-build PIMC
+            /// control: ×1 48% → ×2 52% → ×4 58% (control 57%, N=60), CONFIRMED at
+            /// N=100: ×4 58% vs a clean 50% control (set-rate: opponents 35% set vs
+            /// the agent's 27%) — +8pp, the first gain from a better ESTIMATOR
+            /// rather than better worlds/rollouts, and the structural fix the
+            /// double-dummy / inference-trap findings pointed to (it removes PIMC's
+            /// strategy fusion WITHOUT assuming an opponent-rationality model). Cost
+            /// is the catch: it needs ~300+ iterations, so it belongs on the
+            /// compute-tolerant tiers, not the snappy default. See
+            /// `ismctsBudgetMultiplier` and the A/B `testSelfPlayISMCTS*`.
+            ///
+            /// BUT it did NOT replicate on the EXTREME profile (June 12 2026):
+            /// extreme+IS-MCTS ×2 (528 iters) = 68% vs a 67% extreme-vs-extreme
+            /// control (N=60; the seat/seed confound inflates both) — neutral. The
+            /// Normal +8pp was won against a WEAK PIMC; Extreme's full-width search
+            /// + deepInference + exact-endgame already close much of the same gap,
+            /// so the fusion fix has little headroom left on top. The "wide root
+            /// under-budgeting" alternative was TESTED and REJECTED: gating the
+            /// IS-MCTS root to the narrow shortlist (`ismctsShortlistRoot`) to
+            /// concentrate 528 iters read 40% vs the 67% control — −27pp, because
+            /// narrowing reintroduces the shortlist-OMISSION failure class that
+            /// `searchAllLegalMoves` exists to kill (and handicaps the root vs a
+            /// full-width champion). So the full-legal root is load-bearing on
+            /// Extreme and can't be cheaply concentrated; the neutrality is genuine
+            /// REDUNDANCY with Extreme's stack, not budget. NET DISPOSITION: NOT
+            /// promoted to any player-facing tier — IS-MCTS is a validated research
+            /// result (estimator can beat the plateau where PIMC is weak) with no
+            /// clean production home (redundant on the strong tiers, too slow for
+            /// the snappy Normal default). Kept default-off and A/B-able.
+            var useISMCTS: Bool = false
+            /// IS-MCTS ONLY: iterations = (samples × max(4, trickCandidates)) × this.
+            /// MCTS needs far more iterations than PIMC's focused per-candidate
+            /// rollouts to fill its (deep) tree and overcome its higher per-estimate
+            /// variance, so the compute-matched (×1) read understates it. This knob
+            /// scales the search up to test whether removing strategy fusion
+            /// overtakes PIMC's plateau once the tree is adequately sampled.
+            var ismctsBudgetMultiplier: Int = 1
+            /// IS-MCTS only: gate the ROOT to the narrow heuristic shortlist even
+            /// when `searchAllLegalMoves` is on, so the iteration budget
+            /// concentrates onto ~trickCandidates root moves (the tree still
+            /// searches all legal replies deeper). Tests whether the Extreme-
+            /// neutral read was wide-root under-budgeting: a full-legal root (~13
+            /// early) spreads 528 iters thin, where the validated Normal regime had
+            /// a ≤4-move shortlist at ~80 visits/branch.
+            var ismctsShortlistRoot: Bool = false
+            /// EXACT ENDGAME — rollout tails (A/B lever): mid-hand rollouts
+            /// hand off to the same solver once the side to act holds ≤ N
+            /// cards, so root candidates at tricks 7–10 are graded by futures
+            /// whose endgames are played perfectly rather than greedily.
+            /// Strictly costlier than the root lever (every rollout pays a
+            /// solve), so it is measured separately. 0 = off.
+            ///
+            /// PARKED AT 0 (June 2026): paired 60 / baseSeed 1 at gate 2
+            /// measured control 62% → treatment 55% (challenger set-rate
+            /// 24%→28%) — below the paired control. The hoped-for upside (exact
+            /// tails keep TRUE forced-trap differentials while removing false
+            /// ones the greedy tail overstates) is outweighed by double-dummy
+            /// amplification, and unlike the root lever there is NO gate small
+            /// enough to escape it: the world error a tail solve amplifies is
+            /// the one sampled at the MID-HAND root decision (tricks 7–10,
+            /// maximal hidden information), regardless of how late the solve
+            /// itself fires. The root lever at gate 2 is neutral-and-promoted
+            /// precisely because its worlds are sampled late, when voids +
+            /// counting have pinned them. Lever + probe test kept; re-judge
+            /// only after world sampling itself gets sharper (play-consistency
+            /// filtering).
+            var rolloutExactTricks: Int = 0
+        }
 
         // ── Selectable strength tiers (Settings → Opponents) ───────────────
         // The strength ladder is driven, in order, by: `samples` (search

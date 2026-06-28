@@ -27,8 +27,8 @@ extension MonteCarloAgent {
         let exactRootActive = difficulty.exactEndgameTricks > 0
             && view.myHand.count <= difficulty.exactEndgameTricks
         let exactGate = exactRootActive
-            ? max(difficulty.rolloutExactTricks, view.myHand.count)
-            : difficulty.rolloutExactTricks
+            ? max(difficulty.research.rolloutExactTricks, view.myHand.count)
+            : difficulty.research.rolloutExactTricks
 
         // Table-read shared by both paths, built only when capturing. The
         // legal-vs-shortlist line is what makes an OMISSION visible — when the
@@ -74,10 +74,10 @@ extension MonteCarloAgent {
             var det = Determinizer(view: view, seed: seedBox.nextRaw(),
                                    bidLeanStrength: difficulty.bidLeanStrength,
                                    deduceWidowHoldings: difficulty.deduceWidowHoldings,
-                                   declarerTrumpBias: difficulty.declarerTrumpBias,
-                                   filterDominatedDonation: difficulty.filterDominatedDonation,
-                                   filterBearDecline: difficulty.filterBearDecline)
-            let world = difficulty.playConsistencyFilter
+                                   declarerTrumpBias: difficulty.research.declarerTrumpBias,
+                                   filterDominatedDonation: difficulty.research.filterDominatedDonation,
+                                   filterBearDecline: difficulty.research.filterBearDecline)
+            let world = difficulty.research.playConsistencyFilter
                 ? det.sampleConsistent()
                 : (det.sample() ?? det.sampleUnconstrained())
             guard let world else { return nil }
@@ -87,10 +87,10 @@ extension MonteCarloAgent {
         func sampleWeightedWorld() -> (state: GameState, weight: Double)? {
             guard let sample = sampledWorld() else { return nil }
             let world = sample.world
-            let weight = difficulty.playHistoryWeighting > 0
+            let weight = difficulty.research.playHistoryWeighting > 0
                 ? sample.determinizer.playHistoryWeight(
                     world,
-                    strength: difficulty.playHistoryWeighting)
+                    strength: difficulty.research.playHistoryWeighting)
                 : 1.0
             return (world.state, weight)
         }
@@ -99,7 +99,7 @@ extension MonteCarloAgent {
             sampledWorld()?.world.state
         }
 
-        if difficulty.useISMCTS {
+        if difficulty.research.useISMCTS {
             // SINGLE-OBSERVER IS-MCTS: one tree, a fresh determinization per
             // iteration, opponents/partner searched (not assumed greedy-
             // omniscient), PlayoutPolicy finishing past the frontier. Root
@@ -108,18 +108,18 @@ extension MonteCarloAgent {
             // Optionally narrow the ROOT to the heuristic shortlist (even under
             // full-width search) so iterations concentrate; the tree still
             // searches all legal replies at deeper nodes.
-            let ismctsRoot = difficulty.ismctsShortlistRoot
+            let ismctsRoot = difficulty.research.ismctsShortlistRoot
                 ? trickShortlist(view: view, legal: legal,
                                  inference: inference, forceNarrow: true)
                 : shortlist
             let stats = ISMCTS.search(
                 rootCandidates: ismctsRoot,
                 rootTeam: myTeam,
-                iterations: budget * max(1, difficulty.ismctsBudgetMultiplier),
+                iterations: budget * max(1, difficulty.research.ismctsBudgetMultiplier),
                 sampleWorld: sampleWorldState,
                 leafValue: { evaluateWorld($0, myTeam: myTeam,
                                            baseline: baseline,
-                                           exactGate: max(difficulty.rolloutExactTricks,
+                                           exactGate: max(difficulty.research.rolloutExactTricks,
                                                           difficulty.exactEndgameTricks)) },
                 policyMove: { policyMove(in: $0, seat: $0.toAct) },
                 nextRandom: { seedBox.nextRaw() })

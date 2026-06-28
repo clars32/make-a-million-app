@@ -3,7 +3,7 @@
 //  Make-a-MillionTests
 //
 //  Correctness locks for play-consistency world filtering
-//  (`Difficulty.playConsistencyFilter` → `Determinizer.isConsistentWithPlay`).
+//  (`Difficulty.research.playConsistencyFilter` → `Determinizer.isConsistentWithPlay`).
 //
 //  The filter replays the public trick history through the ENGINE in a sampled
 //  world and REJECTS the world if it forces a hidden seat to have made a
@@ -302,8 +302,8 @@ final class PlayConsistencyTests: XCTestCase {
     func testAgentWithFilterSettlesAHand() async throws {
         var d = MonteCarloAgent.Difficulty.normal
         d.blunderRate = 0
-        d.filterDominatedDonation = true
-        d.filterBearDecline = true
+        d.research.filterDominatedDonation = true
+        d.research.filterBearDecline = true
         let agents: [PlayerAgent] = (0..<4).map {
             MonteCarloAgent(name: "PC\($0)", difficulty: d,
                             seed: UInt64($0) &* 7919 &+ 1)
