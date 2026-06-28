@@ -125,6 +125,19 @@ struct MonteCarloAgent: PlayerAgent {
     /// in the loop.
     static func tiePreference(_ c: Card, trump: CardColor,
                               bankToOwnTeam: Bool) -> (Int, Int, Int, Int) {
+        let (special, money, isTrump) = tieKeyPrefix(c, trump: trump,
+                                                     bankToOwnTeam: bankToOwnTeam)
+        return (special, money, isTrump, PlayoutPolicy.rankOf(c))
+    }
+
+    /// The first three terms shared by `tiePreference` (Adaptive near-tie order)
+    /// and `principledKey` (Traditional structural tie key): specials are never
+    /// spent on a tie; CERTAIN money is banked (−) when our team safely takes the
+    /// trick, else committed least (+); trump is conserved over off-suit. The two
+    /// callers then diverge on the 4th term — `tiePreference` adds rank,
+    /// `principledKey` adds controller-ness (rank becomes its residual).
+    static func tieKeyPrefix(_ c: Card, trump: CardColor,
+                             bankToOwnTeam: Bool) -> (Int, Int, Int) {
         let specialClass: Int
         switch c {
         case .tiger:       specialClass = 2
@@ -133,7 +146,7 @@ struct MonteCarloAgent: PlayerAgent {
         }
         let moneyTerm = bankToOwnTeam ? -c.moneyValue : c.moneyValue
         let isTrump = (c.effectiveColor(trump: trump) == trump) ? 1 : 0
-        return (specialClass, moneyTerm, isTrump, PlayoutPolicy.rankOf(c))
+        return (specialClass, moneyTerm, isTrump)
     }
 
     func shouldBlunder() -> Bool {
