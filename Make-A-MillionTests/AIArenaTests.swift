@@ -851,6 +851,14 @@ final class AIArenaTests: XCTestCase {
     /// "the higher rung is not behind" (> 0.50) so the run flags only a genuine
     /// inversion/flatness, while the printed rates carry the calibration signal.
     /// Lives in AIArenaTests (arena mode) — it plays full matches and is slow.
+    ///
+    /// MEASURED (June 2026, 60 matches/baseSeed 1, seat-swapped): casual>novice
+    /// 57% (set 19/22%), skilled>casual 73% (set 22/34%), expert>skilled 63%
+    /// (set 26/38%) — every step clears the ~55% target, and the higher rung
+    /// goes set LESS in every pairing. The ladder is real and well-separated.
+    /// NOTE the destination matters: invoke as `scripts/xcode-test.sh all
+    /// -only-testing:…/testTraditionalLadderMonotonicity` — the `quick` mode's
+    /// `-skip-testing:AIArenaTests` would otherwise silently skip this test.
     func testTraditionalLadderMonotonicity() async {
         let steps: [(String, MonteCarloAgent.Difficulty, MonteCarloAgent.Difficulty)] = [
             ("casual > novice",  .casual,  .novice),
