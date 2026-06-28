@@ -75,7 +75,17 @@ final class GameSettings: ObservableObject {
     // ── Difficulty ──────────────────────────────────────────────────────
     /// How hard the AI opponents play. Read fresh at the start of each hand,
     /// so a change applies on the next deal.
-    @Published var aiDifficulty: MonteCarloAgent.Difficulty.Level { didSet { persist() } }
+    @Published var aiDifficulty: MonteCarloAgent.Difficulty.Level {
+        didSet {
+            // Remember the slider tier so toggling Adaptive off restores it
+            // (Adaptive is off the ladder — a separate toggle, not a rung).
+            if !aiDifficulty.isAdaptive { lastLadderTier = aiDifficulty }
+            persist()
+        }
+    }
+    /// The ladder rung to restore when the Adaptive toggle is switched off.
+    /// Adaptive is not on the slider, so the UI parks the last slider tier here.
+    private(set) var lastLadderTier: MonteCarloAgent.Difficulty.Level = .skilled
 
     // ── Optional rules ──────────────────────────────────────────────────
     /// Whether the low-money redeal rule is active.
@@ -156,10 +166,13 @@ final class GameSettings: ObservableObject {
         // legible default. `extreme` migrates to `.expert` (Traditional), NOT
         // `.adaptive`: nobody is silently moved into the experimental mode.
         let storedDifficulty = d.string(forKey: Key.aiDifficulty)
-        aiDifficulty = storedDifficulty
+        let decoded = storedDifficulty
                 .flatMap(MonteCarloAgent.Difficulty.Level.init(rawValue:))
             ?? storedDifficulty.flatMap(GameSettings.migrateLegacyDifficulty)
             ?? .skilled
+        aiDifficulty = decoded
+        // didSet doesn't fire during init, so seed the remembered rung directly.
+        lastLadderTier = decoded.isAdaptive ? .skilled : decoded
     }
 
     /// Map the pre-ladder difficulty keys onto the new ladder, 1:1 by strength.
@@ -437,21 +450,37 @@ struct SettingsView: View {
 
     // MARK: Difficulty (slider over the strength tiers)
 
+    /// The Traditional ladder rung the slider currently represents. When
+    /// Adaptive is on (off the ladder) the slider shows the remembered rung.
+    private var sliderTier: MonteCarloAgent.Difficulty.Level {
+        settings.aiDifficulty.isAdaptive ? settings.lastLadderTier
+                                         : settings.aiDifficulty
+    }
+
     private var difficultyBinding: Binding<Double> {
         Binding(
             get: {
-                let levels = MonteCarloAgent.Difficulty.Level.allCases
-                return Double(levels.firstIndex(of: settings.aiDifficulty) ?? 1)
+                let levels = MonteCarloAgent.Difficulty.Level.ladder
+                return Double(levels.firstIndex(of: sliderTier) ?? 2)   // skilled
             },
             set: {
-                let levels = MonteCarloAgent.Difficulty.Level.allCases
+                let levels = MonteCarloAgent.Difficulty.Level.ladder
                 let idx = min(max(Int($0.rounded()), 0), levels.count - 1)
                 settings.aiDifficulty = levels[idx]
             })
     }
 
+    private var adaptiveBinding: Binding<Bool> {
+        Binding(
+            get: { settings.aiDifficulty.isAdaptive },
+            set: { on in
+                settings.aiDifficulty = on ? .adaptive : settings.lastLadderTier
+            })
+    }
+
     private var difficultySection: some View {
-        let levels = MonteCarloAgent.Difficulty.Level.allCases
+        let levels = MonteCarloAgent.Difficulty.Level.ladder
+        let adaptiveOn = settings.aiDifficulty.isAdaptive
         return Section {
             VStack(spacing: 6) {
                 Slider(value: difficultyBinding,
@@ -460,12 +489,14 @@ struct SettingsView: View {
                     .accessibilityIdentifier("settings.aiDifficultySlider")
                     .accessibilityLabel("Opponent difficulty")
                     .accessibilityValue(settings.aiDifficulty.displayName)
+                    .disabled(adaptiveOn)
                 HStack {
                     ForEach(levels) { level in
+                        let active = !adaptiveOn && level == sliderTier
                         Text(level.displayName)
                             .font(.caption2)
-                            .fontWeight(level == settings.aiDifficulty ? .bold : .regular)
-                            .foregroundStyle(level == settings.aiDifficulty
+                            .fontWeight(active ? .bold : .regular)
+                            .foregroundStyle(active
                                              ? AnyShapeStyle(TableStyle.actionBlue)
                                              : AnyShapeStyle(.secondary))
                             .frame(maxWidth: .infinity,
@@ -473,6 +504,8 @@ struct SettingsView: View {
                     }
                 }
             }
+            Toggle("Adaptive (experimental)", isOn: adaptiveBinding)
+                .accessibilityIdentifier("settings.adaptiveToggle")
         } header: {
             Text("Difficulty")
         } footer: {
