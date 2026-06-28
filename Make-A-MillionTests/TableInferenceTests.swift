@@ -58,7 +58,7 @@ final class TableInferenceTests: XCTestCase {
     /// and NOT void in a suit that still has cards out.
     func testDeepInferenceMarksCountExhaustionVoids() {
         let view = exhaustedYellowView()
-        let inf = TableInference(view: view, deepInference: true)
+        let inf = TableInference(view: view, inference: .deep)
         for seat in [PlayerID(1), PlayerID(2), PlayerID(3)] {
             XCTAssertTrue(inf.isKnownVoid(seat, in: .yellow),
                           "seat \(seat.raw) must be void in exhausted yellow")
@@ -71,7 +71,7 @@ final class TableInferenceTests: XCTestCase {
     /// nobody failed to follow (all three tricks were pure yellow).
     func testWithoutDeepInferenceNoCountVoids() {
         let view = exhaustedYellowView()
-        let inf = TableInference(view: view, deepInference: false)
+        let inf = TableInference(view: view, inference: .counting)
         for seat in [PlayerID(1), PlayerID(2), PlayerID(3)] {
             XCTAssertFalse(inf.isKnownVoid(seat, in: .yellow),
                            "seat \(seat.raw) should not be flagged void without deep inference")

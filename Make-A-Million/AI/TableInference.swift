@@ -38,6 +38,17 @@ struct TableInference {
 
     // MARK: - Public projection
 
+    /// How deep this read is allowed to deduce. Gates the queries below so a
+    /// lower-tier (Novice/Casual) agent literally cannot "see" counting facts:
+    ///   • `.none`  — only the public trick state (currentWinner, partnerWinning,
+    ///     hasBeenLed, which specials have appeared). No voids, no counting.
+    ///   • `.voids` — + failed-follow void inference.
+    ///   • `.counting` — + stillOut / highestOut / iControlColor / trump counting
+    ///     / widow-lock / bear-&-Bull-threat reads.
+    ///   • `.deep` — + count-exhaustion voids (a suit run dry deduces a ruff).
+    typealias Level = MonteCarloAgent.Difficulty.InferenceLevel
+    let level: Level
+
     let me: PlayerID
     let myHand: [Card]
     let trump: CardColor?
@@ -82,7 +93,8 @@ struct TableInference {
 
     // MARK: - Build
 
-    init(view: PlayerView, deepInference: Bool = false) {
+    init(view: PlayerView, inference: Level = .counting) {
+        self.level = inference
         self.me = view.me
         self.myHand = view.myHand
         self.trump = view.trump
@@ -206,7 +218,10 @@ struct TableInference {
         //    in it. (Playing Bull/Bear is the engine's signal that the
         //    player COULDN'T follow — those imply a void too.)
         var voids: [PlayerID: Set<CardColor>] = [:]
-        if let t = view.trump {
+        // Void inference is a deduction; a `.none`-tier read does none of it
+        // (a Novice does not track who showed void). `.voids`+ scans failed
+        // follows; `.deep` additionally exhausts suits.
+        if let t = view.trump, inference >= .voids {
             func scan(_ leader: PlayerID, _ plays: [PlayedCard]) {
                 guard let led = pc_ledColor(plays, trump: t) else { return }
                 for pc in plays where pc.player != leader {
@@ -231,7 +246,7 @@ struct TableInference {
             // the announced dead count is provably buried in the discard, so
             // it can be subtracted; the discard's plain cards have unknown
             // colors, so the other suits stay conservative.)
-            if deepInference {
+            if inference >= .deep {
                 let deadTrump = view.discardAnnouncement?.trumpCount ?? 0
                 for color in CardColor.allCases {
                     let live = (bucket[color]?.count ?? 0)
@@ -263,6 +278,7 @@ struct TableInference {
     /// trump = Tiger (when color == trump), then $40k, $30k, $15k, 11,
     /// $10k, 9, 8, 7, $5k, 4, 3, 2, 1.
     func highestOutInColor(_ color: CardColor) -> Card? {
+        guard level >= .counting else { return nil }   // counting deduction
         let pool = stillOut[color] ?? []
         if pool.isEmpty { return nil }
         return pool.max { rankValueForColorWin($0, color: color)
@@ -273,6 +289,7 @@ struct TableInference {
     /// "Of its color" follows the trick-resolution rules — Tiger counts
     /// as trump, Bull/Bear can never win.
     func iControlColor(_ card: Card) -> Bool {
+        guard level >= .counting else { return false }   // counting deduction
         guard let t = trump else { return false }
         guard let ec = card.effectiveColor(trump: t) else { return false }
         guard let topOut = highestOutInColor(ec) else { return true }
@@ -287,6 +304,7 @@ struct TableInference {
     func canBeTrumpedByRemainingPlayers(led: CardColor,
                                         currentTrick: Trick?,
                                         pessimistic: Bool = false) -> Bool {
+        guard level >= .counting else { return false }   // trump counting
         guard let t = trump, t != led else { return false }
         guard trumpRemainingOut > 0 || tigerLoose else { return false }
         guard let trick = currentTrick else { return false }
@@ -309,6 +327,7 @@ struct TableInference {
     /// void in the led color (so the engine would let them play a special).
     /// Used to avoid dumping our money onto a trick about to be cancelled.
     func opponentCanBearTrick(led: CardColor?, currentTrick: Trick?) -> Bool {
+        guard level >= .counting else { return false }   // void+special read
         guard bearLoose, let led = led, let trick = currentTrick else { return false }
         let played = Set(trick.plays.map(\.player))
         for s in Seats.all where !played.contains(s) && s != me {
@@ -320,6 +339,7 @@ struct TableInference {
 
     /// Symmetric check for the loose Bull, which DOUBLES the captured money.
     func opponentCanBullTrick(led: CardColor?, currentTrick: Trick?) -> Bool {
+        guard level >= .counting else { return false }   // void+special read
         guard bullLoose, let led = led, let trick = currentTrick else { return false }
         let played = Set(trick.plays.map(\.player))
         for s in Seats.all where !played.contains(s) && s != me {
@@ -333,12 +353,15 @@ struct TableInference {
     /// (Tiger / Bull / Bear / money — the engine forbade discarding them).
     /// Principle 11. Empty if pre-trick-play or if all such cards have
     /// since been played.
-    func knownDeclarerHoldings() -> Set<Card> { knownWidowInDeclarer }
+    func knownDeclarerHoldings() -> Set<Card> {
+        level >= .counting ? knownWidowInDeclarer : []   // widow-lock = counting
+    }
 
     /// True if `card` is guaranteed to be in `seat`'s hand right now,
     /// based on widow-discard rules. Conservative: returns false unless
     /// we are sure.
     func isCardKnownIn(_ seat: PlayerID, card: Card) -> Bool {
+        guard level >= .counting else { return false }   // widow-lock = counting
         guard let d = declarer, seat == d else { return false }
         return knownWidowInDeclarer.contains(card)
     }
@@ -346,6 +369,7 @@ struct TableInference {
     /// How much trump is still out among the other three seats (counts the
     /// Tiger if it has not been played).
     var trumpStillOutInOpponentsAndPartner: Int {
+        guard level >= .counting else { return 0 }   // trump counting
         // stillOut[trump] already includes the Tiger (Tiger.effectiveColor
         // == trump). So trumpRemainingOut is correct, but minus any trump
         // I'm still holding. Easier: directly recompute from stillOut[trump]

@@ -14,7 +14,7 @@ extension MonteCarloAgent {
 
     func decideTrickPlay(_ view: PlayerView, legal: [Move]) -> Move {
         let inference = TableInference(view: view,
-                                       deepInference: difficulty.deepInference)
+                                       inference: difficulty.inferenceLevel)
         let shortlist = trickShortlist(view: view,
                                        legal: legal,
                                        inference: inference)
