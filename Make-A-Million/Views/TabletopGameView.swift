@@ -57,8 +57,8 @@ struct TabletopGameView: View {
 
             DealingAnimationOverlay(
                 trigger: dealAnimationToken(for: tableView),
-                cardWidth: 86,
-                cardHeight: 121,
+                cardWidth: 98,
+                cardHeight: 138,
                 spreadScale: 0.92)
             .padding(.top, 84)
             .padding(.bottom, 118)
@@ -207,7 +207,7 @@ struct TabletopGameView: View {
     // MARK: Seat markers
 
     private var tabletopSeatDistance: CGFloat {
-        318
+        330
     }
 
     private func tabletopSeatOffset(_ seat: PlayerID) -> CGSize {
@@ -297,9 +297,9 @@ struct TabletopGameView: View {
                 completedTricks: table.completedTricks,
                 seatName: seatName,
                 seatShort: seatShort,
-                miniCardWidth: 72,
-                miniCardHeight: 50,
-                maxHeight: 420,
+                miniCardWidth: 82,
+                miniCardHeight: 57,
+                maxHeight: 460,
                 onClose: dismissTrickHistory)
             .padding(.horizontal, 36)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
@@ -411,7 +411,7 @@ struct TabletopGameView: View {
                 HStack(spacing: 8) {
                     Text("Widow").font(TableTypography.display(.headline, weight: .bold)).foregroundStyle(.white.opacity(0.7))
                     ForEach(keyedHand(widow), id: \.key) { entry in
-                        CardFace(card: entry.card, width: 64, height: 90)
+                        CardFace(card: entry.card, width: 72, height: 101)
                     }
                     // Public discard announcement: trump count spoken, money
                     // shown face-up.
@@ -420,7 +420,7 @@ struct TabletopGameView: View {
                             .font(TableTypography.display(.subheadline))
                             .foregroundStyle(.white.opacity(0.7))
                         ForEach(keyedHand(ann.moneyCards), id: \.key) { entry in
-                            CardFace(card: entry.card, width: 50, height: 70)
+                            CardFace(card: entry.card, width: 58, height: 82)
                         }
                     }
                 }
@@ -435,7 +435,7 @@ struct TabletopGameView: View {
                         .font(TableTypography.display(.subheadline))
                         .foregroundStyle(.white.opacity(0.7))
                     ForEach(keyedHand(ann.moneyCards), id: \.key) { entry in
-                        CardFace(card: entry.card, width: 50, height: 70)
+                        CardFace(card: entry.card, width: 58, height: 82)
                     }
                 }
                 .padding(.horizontal, 14)
@@ -448,7 +448,7 @@ struct TabletopGameView: View {
                     Text("Last trick").font(TableTypography.display(.headline, weight: .bold)).foregroundStyle(.white.opacity(0.7))
                     ForEach(keyedPlays(last.plays), id: \.key) { entry in
                         CardFace(card: entry.play.card, faded: entry.play.player != last.winner,
-                                 width: 64, height: 90)
+                                 width: 72, height: 101)
                     }
                     Text("· \(seatShort(last.winner)) $\(last.value / 1000)k")
                         .font(TableTypography.money(.headline))
@@ -460,7 +460,7 @@ struct TabletopGameView: View {
             }
         }
         .frame(maxWidth: .infinity)
-        .frame(height: 108)
+        .frame(height: 124)
     }
 
     // MARK: - Chrome

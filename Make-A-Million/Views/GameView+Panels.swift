@@ -13,32 +13,37 @@ extension GameBody {
     /// Misdeal notice. Automatic rule: a brief "redealing" banner. Agreement
     /// rule: when it is this player's turn to vote, the banner carries the
     /// Redeal / Keep buttons; otherwise it shows who the table is waiting on.
-    func misdealBanner(_ view: PlayerView, decision: PlayerView,
-                               interactive: Bool) -> some View {
+    func misdealBanner(
+        _ view: PlayerView,
+        decision: PlayerView,
+        interactive: Bool,
+        layout: GameBodyLayout? = nil
+    ) -> some View {
+        let resolved = resolvedLayout(layout)
         let myMoney = view.myHand.reduce(0) { $0 + $1.moneyValue }
         let canVote = interactive
             && decision.phase == .misdealDecision
             && decision.legalMoves.contains(.declineMisdeal)
-        return VStack(spacing: 10) {
-            HStack(alignment: .top, spacing: isTabletLayout ? 14 : 10) {
+        return VStack(spacing: resolved.isPhoneLandscape ? 7 : 10) {
+            HStack(alignment: .top, spacing: resolved.isTablet ? 14 : (resolved.isPhoneLandscape ? 8 : 10)) {
                 ZStack {
                     Circle()
                         .fill(TableStyle.teamAmber.opacity(0.24))
                     Image(systemName: "exclamationmark.triangle.fill")
-                        .font(TableTypography.display(isTabletLayout ? .title3 : .headline, weight: .bold))
+                        .font(TableTypography.display(resolved.isTablet ? .title3 : (resolved.isPhoneLandscape ? .subheadline : .headline), weight: .bold))
                         .foregroundStyle(TableStyle.teamAmber)
                 }
-                .frame(width: isTabletLayout ? 42 : 34,
-                       height: isTabletLayout ? 42 : 34)
+                .frame(width: resolved.isTablet ? 42 : (resolved.isPhoneLandscape ? 28 : 34),
+                       height: resolved.isTablet ? 42 : (resolved.isPhoneLandscape ? 28 : 34))
 
                 VStack(alignment: .leading, spacing: 3) {
                     Text(canVote ? "Misdeal called — redeal?" : "Misdeal called")
-                        .font(TableTypography.display(isTabletLayout ? .headline : .subheadline, weight: .bold))
+                        .font(TableTypography.display(resolved.isTablet ? .headline : (resolved.isPhoneLandscape ? .caption : .subheadline), weight: .bold))
                         .foregroundStyle(.white)
                         .lineLimit(1)
                         .minimumScaleFactor(0.82)
                     Text("A player has too little money in hand. Your hand: $\(myMoney / 1000)k in money cards.")
-                        .font(TableTypography.display(isTabletLayout ? .callout : .caption))
+                        .font(TableTypography.display(resolved.isTablet ? .callout : (resolved.isPhoneLandscape ? .caption2 : .caption)))
                         .foregroundStyle(.white.opacity(0.78))
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -68,27 +73,27 @@ extension GameBody {
                                                       emphasis: .tinted,
                                                       compact: true))
                 }
-                .font(TableTypography.display(.subheadline, weight: .semibold))
+                .font(TableTypography.display(resolved.isPhoneLandscape ? .caption : .subheadline, weight: .semibold))
             }
         }
-        .padding(.horizontal, isTabletLayout ? 18 : 14)
-        .padding(.vertical, isTabletLayout ? 14 : 12)
-        .frame(maxWidth: isTabletLayout ? 620 : .infinity)
+        .padding(.horizontal, resolved.isTablet ? 18 : (resolved.isPhoneLandscape ? 10 : 14))
+        .padding(.vertical, resolved.isTablet ? 14 : (resolved.isPhoneLandscape ? 8 : 12))
+        .frame(maxWidth: resolved.isTablet ? 620 : .infinity)
         .background {
-            RoundedRectangle(cornerRadius: isTabletLayout ? 18 : 14, style: .continuous)
+            RoundedRectangle(cornerRadius: resolved.isTablet ? 18 : 14, style: .continuous)
                 .fill(.ultraThinMaterial)
                 .overlay {
-                    RoundedRectangle(cornerRadius: isTabletLayout ? 18 : 14, style: .continuous)
+                    RoundedRectangle(cornerRadius: resolved.isTablet ? 18 : 14, style: .continuous)
                         .fill(.black.opacity(0.24))
                 }
                 .overlay(alignment: .leading) {
                     Rectangle()
                         .fill(TableStyle.teamAmber)
-                        .frame(width: isTabletLayout ? 7 : 5)
+                        .frame(width: resolved.isTablet ? 7 : 5)
                 }
         }
         .overlay {
-            RoundedRectangle(cornerRadius: isTabletLayout ? 18 : 14, style: .continuous)
+            RoundedRectangle(cornerRadius: resolved.isTablet ? 18 : 14, style: .continuous)
                 .stroke(TableStyle.teamAmber.opacity(0.82), lineWidth: 1.5)
         }
         .shadow(color: TableStyle.teamAmber.opacity(0.20), radius: 16, y: 4)
@@ -103,23 +108,24 @@ extension GameBody {
         return table.phase == .bidding || settings.showBidHistoryDuringHand
     }
 
-    func bidHistoryStrip(_ table: PlayerView) -> some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: isTabletLayout ? 8 : 5) {
+    func bidHistoryStrip(_ table: PlayerView, layout: GameBodyLayout? = nil) -> some View {
+        let resolved = resolvedLayout(layout)
+        return ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: resolved.isTablet ? 8 : (resolved.isPhoneLandscape ? 4 : 5)) {
                 Text("Bids")
-                    .font(TableTypography.display(isTabletLayout ? .callout : .caption2))
+                    .font(TableTypography.display(resolved.isTablet ? .callout : .caption2))
                     .foregroundStyle(.white.opacity(0.6))
                 ForEach(Array(table.bidHistory.enumerated()), id: \.offset) { _, record in
                     HStack(spacing: 4) {
                         Text(seatShort(record.player))
-                            .font(TableTypography.display(isTabletLayout ? .callout : .caption2))
+                            .font(TableTypography.display(resolved.isTablet ? .callout : .caption2))
                             .foregroundStyle(.white.opacity(0.7))
                         Text(bidHistoryLabel(record.action))
-                            .font(TableTypography.money(isTabletLayout ? .callout : .caption2))
+                            .font(TableTypography.money(resolved.isTablet ? .callout : .caption2))
                             .foregroundStyle(.white)
                     }
-                    .padding(.horizontal, isTabletLayout ? 9 : 6)
-                    .padding(.vertical, isTabletLayout ? 5 : 3)
+                    .padding(.horizontal, resolved.isTablet ? 9 : (resolved.isPhoneLandscape ? 5 : 6))
+                    .padding(.vertical, resolved.isTablet ? 5 : 3)
                     .background(Capsule().fill(bidHistoryTint(record).opacity(0.16)))
                     .overlay(Capsule().stroke(bidHistoryTint(record).opacity(0.45), lineWidth: 1))
                 }
@@ -135,39 +141,43 @@ extension GameBody {
     /// Bidding uses `biddingActionPanel` instead so the bid context remains
     /// visible around the table.
     @ViewBuilder
-    func actionPanel(_ view: PlayerView) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
+    func actionPanel(_ view: PlayerView, layout: GameBodyLayout? = nil) -> some View {
+        let resolved = resolvedLayout(layout)
+        VStack(alignment: .leading, spacing: resolved.isPhoneLandscape ? 7 : 10) {
             switch view.phase {
-            case .widowDiscard: widowDiscardPanel(view)
-            case .namingTrump:  trumpNamingPanel(view)
+            case .widowDiscard: widowDiscardPanel(view, layout: resolved)
+            case .namingTrump:  trumpNamingPanel(view, layout: resolved)
             default:            EmptyView()
             }
         }
-        .frame(width: actionPanelContentWidth(for: view), alignment: .leading)
+        .frame(width: actionPanelContentWidth(for: view, layout: resolved), alignment: .leading)
         .fixedSize(horizontal: true, vertical: false)
-        .padding(14)
-        .tablePanel(cornerRadius: 18, shadowOpacity: 0.34)
+        .padding(resolved.isPhoneLandscape ? 10 : 14)
+        .tablePanel(cornerRadius: resolved.isPhoneLandscape ? 14 : 18, shadowOpacity: 0.34)
     }
 
-    func actionPanelContentWidth(for view: PlayerView) -> CGFloat? {
+    func actionPanelContentWidth(for view: PlayerView, layout: GameBodyLayout? = nil) -> CGFloat? {
+        let resolved = resolvedLayout(layout)
         switch view.phase {
         case .namingTrump:
-            return trumpPanelContentWidth
+            return trumpPanelContentWidth(layout: resolved)
         case .widowDiscard:
-            return discardPanelContentWidth
+            return discardPanelContentWidth(layout: resolved)
         default:
             return nil
         }
     }
 
-    func biddingActionPanel(_ view: PlayerView) -> some View {
-        biddingPanel(view)
-            .padding(.vertical, isTabletLayout ? 6 : 5)
-            .tablePanel(cornerRadius: 16, shadowOpacity: 0.26)
+    func biddingActionPanel(_ view: PlayerView, layout: GameBodyLayout? = nil) -> some View {
+        let resolved = resolvedLayout(layout)
+        return biddingPanel(view, layout: resolved)
+            .padding(.vertical, resolved.isTablet ? 6 : (resolved.isPhoneLandscape ? 4 : 5))
+            .tablePanel(cornerRadius: resolved.isPhoneLandscape ? 14 : 16, shadowOpacity: 0.26)
     }
 
     @ViewBuilder
-    func biddingPanel(_ view: PlayerView) -> some View {
+    func biddingPanel(_ view: PlayerView, layout: GameBodyLayout? = nil) -> some View {
+        let resolved = resolvedLayout(layout)
         let passMove = view.legalMoves.first { $0.isPass }
         let bidMoves = view.legalMoves.filter { $0.bidAmount != nil }
         let bidAmounts = bidMoves.compactMap(\.bidAmount)
@@ -177,28 +187,28 @@ extension GameBody {
             set: { selectedBidIndex = $0 }
         )
 
-        HStack(spacing: isTabletLayout ? 12 : 8) {
+        HStack(spacing: resolved.isTablet ? 12 : (resolved.isPhoneLandscape ? 6 : 8)) {
             if !bidMoves.isEmpty {
                 BidAmountWheel(
                     amounts: bidAmounts,
                     selection: bidSelection,
-                    width: isTabletLayout ? 112 : 82,
-                    height: isTabletLayout ? 76 : 62,
-                    rowHeight: isTabletLayout ? 24 : 20,
-                    textStyle: isTabletLayout ? .title3 : .callout)
+                    width: resolved.isTablet ? 112 : (resolved.isPhoneLandscape ? 72 : 82),
+                    height: resolved.isTablet ? 76 : (resolved.isPhoneLandscape ? 52 : 62),
+                    rowHeight: resolved.isTablet ? 24 : (resolved.isPhoneLandscape ? 17 : 20),
+                    textStyle: resolved.isTablet ? .title3 : (resolved.isPhoneLandscape ? .caption2 : .callout))
             }
 
-            HStack(spacing: isTabletLayout ? 10 : 8) {
+            HStack(spacing: resolved.isTablet ? 10 : (resolved.isPhoneLandscape ? 6 : 8)) {
                 Button {
                     guard !bidMoves.isEmpty else { return }
                     SoundEffectPlayer.shared.play(.buttonSelect)
                     submit(bidMoves[safeBidIndex])
                 } label: {
                     Text("Bid")
-                        .font(TableTypography.display(isTabletLayout ? .title3 : .subheadline, weight: .bold))
+                        .font(TableTypography.display(resolved.isTablet ? .title3 : (resolved.isPhoneLandscape ? .caption : .subheadline), weight: .bold))
                         .foregroundStyle(.white)
-                        .frame(width: isTabletLayout ? 112 : 78,
-                               height: isTabletLayout ? 44 : 36)
+                        .frame(width: resolved.isTablet ? 112 : (resolved.isPhoneLandscape ? 62 : 78),
+                               height: resolved.isTablet ? 44 : (resolved.isPhoneLandscape ? 32 : 36))
                         .background(Capsule(style: .continuous).fill(TableStyle.actionBlue))
                         .overlay(Capsule(style: .continuous).stroke(.white.opacity(0.20), lineWidth: 1))
                 }
@@ -212,10 +222,10 @@ extension GameBody {
                     submit(passMove)
                 } label: {
                     Text("Pass")
-                        .font(TableTypography.display(isTabletLayout ? .title3 : .subheadline, weight: .semibold))
+                        .font(TableTypography.display(resolved.isTablet ? .title3 : (resolved.isPhoneLandscape ? .caption : .subheadline), weight: .semibold))
                         .foregroundStyle(.white)
-                        .frame(width: isTabletLayout ? 112 : 78,
-                               height: isTabletLayout ? 44 : 36)
+                        .frame(width: resolved.isTablet ? 112 : (resolved.isPhoneLandscape ? 62 : 78),
+                               height: resolved.isTablet ? 44 : (resolved.isPhoneLandscape ? 32 : 36))
                         .background(Capsule(style: .continuous).fill(TableStyle.passGray.opacity(0.82)))
                         .overlay(Capsule(style: .continuous).stroke(.white.opacity(0.16), lineWidth: 1))
                 }
@@ -224,10 +234,11 @@ extension GameBody {
                 .opacity(passMove == nil ? 0.45 : 1)
             }
         }
-        .padding(.horizontal, isTabletLayout ? 12 : 10)
+        .padding(.horizontal, resolved.isTablet ? 12 : (resolved.isPhoneLandscape ? 8 : 10))
     }
 
-    func trumpNamingPanel(_ view: PlayerView) -> some View {
+    func trumpNamingPanel(_ view: PlayerView, layout: GameBodyLayout? = nil) -> some View {
+        let resolved = resolvedLayout(layout)
         // Build the four color buttons from CardColor directly, not from
         // move.label — the bid panel's label-munging produced "Bid Trump: Red",
         // which is what this panel is here to replace.
@@ -235,17 +246,17 @@ extension GameBody {
             if case .nameTrump(let c) = move { return (c, move) }
             return nil
         }
-        let buttonWidth = trumpButtonWidth
-        let buttonHeight: CGFloat = isTabletLayout ? 52 : 48
-        let gridSpacing = trumpGridSpacing
-        let contentWidth = trumpPanelContentWidth
+        let buttonWidth = trumpButtonWidth(layout: resolved)
+        let buttonHeight: CGFloat = resolved.isTablet ? 52 : (resolved.isPhoneLandscape ? 40 : 48)
+        let gridSpacing = trumpGridSpacing(layout: resolved)
+        let contentWidth = trumpPanelContentWidth(layout: resolved)
         let columns = [
             GridItem(.fixed(buttonWidth), spacing: gridSpacing),
             GridItem(.fixed(buttonWidth), spacing: gridSpacing)
         ]
-        return VStack(alignment: .leading, spacing: 10) {
+        return VStack(alignment: .leading, spacing: resolved.isPhoneLandscape ? 7 : 10) {
             Text("Choose trump. Discard comes next.")
-                .font(TableTypography.display(.caption))
+                .font(TableTypography.display(resolved.isPhoneLandscape ? .caption2 : .caption))
                 .foregroundStyle(.white.opacity(0.8))
                 .frame(width: contentWidth, alignment: .leading)
                 .fixedSize(horizontal: false, vertical: true)
@@ -260,15 +271,16 @@ extension GameBody {
                         SoundEffectPlayer.shared.play(.buttonSelect)
                         submit(move)
                     } label: {
-                        HStack(spacing: 10) {
+                        HStack(spacing: resolved.isPhoneLandscape ? 7 : 10) {
                             Circle().fill(solidSwatch)
-                                .frame(width: 22, height: 22)
+                                .frame(width: resolved.isPhoneLandscape ? 17 : 22,
+                                       height: resolved.isPhoneLandscape ? 17 : 22)
                                 .overlay(Circle().stroke(.white.opacity(0.8), lineWidth: 1.5))
                             Text(color.displayName)
-                                .font(TableTypography.display(.headline, weight: .bold))
+                                .font(TableTypography.display(resolved.isPhoneLandscape ? .caption : .headline, weight: .bold))
                                 .foregroundStyle(.white)
                         }
-                        .padding(.horizontal, 14)
+                        .padding(.horizontal, resolved.isPhoneLandscape ? 9 : 14)
                         .frame(width: buttonWidth, height: buttonHeight)
                         .background(
                             RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -286,28 +298,29 @@ extension GameBody {
         }
     }
 
-    func widowDiscardPanel(_ view: PlayerView) -> some View {
+    func widowDiscardPanel(_ view: PlayerView, layout: GameBodyLayout? = nil) -> some View {
+        let resolved = resolvedLayout(layout)
         let count = discardSelection.count
         let ready = count == 3
         let legalMove = ready ? matchingWidowDiscardMove(selection: discardSelection, in: view) : nil
-        let panelWidth = discardPanelContentWidth
+        let panelWidth = discardPanelContentWidth(layout: resolved)
 
-        return VStack(alignment: .leading, spacing: 8) {
+        return VStack(alignment: .leading, spacing: resolved.isPhoneLandscape ? 6 : 8) {
             Text(discardHelpText(for: view))
-                .font(TableTypography.display(.caption))
+                .font(TableTypography.display(resolved.isPhoneLandscape ? .caption2 : .caption))
                 .foregroundStyle(.white.opacity(0.8))
                 .frame(width: panelWidth, alignment: .leading)
                 .fixedSize(horizontal: false, vertical: true)
             if ready && legalMove == nil {
                 Text("That discard isn't legal — discard your other colors first, then trump, and money only when nothing else is left.")
-                    .font(TableTypography.display(.caption))
+                    .font(TableTypography.display(resolved.isPhoneLandscape ? .caption2 : .caption))
                     .foregroundStyle(TableStyle.teamAmber)
                     .frame(width: panelWidth, alignment: .leading)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            HStack(spacing: 8) {
+            HStack(spacing: resolved.isPhoneLandscape ? 6 : 8) {
                 Text("\(count) of 3 selected")
-                    .font(TableTypography.money(.callout, weight: .regular))
+                    .font(TableTypography.money(resolved.isPhoneLandscape ? .caption : .callout, weight: .regular))
                     .foregroundStyle(.white)
                 Spacer()
                 Button("Discard selected") {
@@ -328,19 +341,50 @@ extension GameBody {
     }
 
     var trumpButtonWidth: CGFloat {
-        isTabletLayout ? 142 : 126
+        trumpButtonWidth(layout: defaultLayout())
     }
 
     var trumpGridSpacing: CGFloat {
-        10
+        trumpGridSpacing(layout: defaultLayout())
     }
 
     var trumpPanelContentWidth: CGFloat {
-        trumpButtonWidth * 2 + trumpGridSpacing
+        trumpPanelContentWidth(layout: defaultLayout())
     }
 
     var discardPanelContentWidth: CGFloat {
-        isTabletLayout ? 330 : 286
+        discardPanelContentWidth(layout: defaultLayout())
+    }
+
+    func trumpButtonWidth(layout: GameBodyLayout) -> CGFloat {
+        switch layout.mode {
+        case .tablet:
+            return 142
+        case .phoneLandscape:
+            let available = max(228, layout.landscapeInfoColumnWidth - 36)
+            return min(116, (available - trumpGridSpacing(layout: layout)) / 2)
+        case .phonePortrait:
+            return 126
+        }
+    }
+
+    func trumpGridSpacing(layout: GameBodyLayout) -> CGFloat {
+        layout.isPhoneLandscape ? 8 : 10
+    }
+
+    func trumpPanelContentWidth(layout: GameBodyLayout) -> CGFloat {
+        trumpButtonWidth(layout: layout) * 2 + trumpGridSpacing(layout: layout)
+    }
+
+    func discardPanelContentWidth(layout: GameBodyLayout) -> CGFloat {
+        switch layout.mode {
+        case .tablet:
+            return 330
+        case .phoneLandscape:
+            return min(286, max(228, layout.landscapeInfoColumnWidth - 34))
+        case .phonePortrait:
+            return 286
+        }
     }
     
     func discardHelpText(for view: PlayerView) -> String {
@@ -462,11 +506,19 @@ extension GameBody {
         return token
     }
 
-    func cardChip(_ card: Card, faded: Bool, selected: Bool = false, highlighted: Bool = false, totalCards: Int = 1) -> some View {
-        CardFace(card: card, faded: faded, selected: selected,
-                 highlighted: highlighted,
-                 width: handCardWidth,
-                 height: handCardHeight,
-                 dense: totalCards > 12)
+    func cardChip(
+        _ card: Card,
+        faded: Bool,
+        selected: Bool = false,
+        highlighted: Bool = false,
+        totalCards: Int = 1,
+        layout: GameBodyLayout? = nil
+    ) -> some View {
+        let resolved = resolvedLayout(layout)
+        return CardFace(card: card, faded: faded, selected: selected,
+                        highlighted: highlighted,
+                        width: handCardWidth(layout: resolved),
+                        height: handCardHeight(layout: resolved),
+                        dense: totalCards > 12)
     }
 }

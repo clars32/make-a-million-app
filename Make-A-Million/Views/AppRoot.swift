@@ -91,7 +91,12 @@ struct AppRoot: View {
         }
         .onChange(of: mode) { _, mode in
             #if canImport(UIKit)
-            if mode != .hostingTabletop {
+            switch mode {
+            case .solo:
+                OrientationLock.shared.lock(.allButUpsideDown)
+            case .hostingTabletop:
+                break
+            default:
                 OrientationLock.shared.lock(.portrait)
             }
             #endif
@@ -483,7 +488,7 @@ private struct HomeHeroCards: View {
     var body: some View {
         ZStack {
             ForEach(Array(cards.enumerated()), id: \.offset) { index, card in
-                CardFace(card: card, width: 74 * scale, height: 104 * scale)
+                CardFace(card: card, width: 82 * scale, height: 116 * scale)
                     .rotationEffect(.degrees(rotation(for: index)))
                     .offset(x: xOffset(for: index) * scale, y: yOffset(for: index) * scale)
                     .zIndex(Double(index))

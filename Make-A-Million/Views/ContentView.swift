@@ -98,7 +98,7 @@ private struct SplashScreen: View {
     private func splashMark(size: CGFloat) -> some View {
         ZStack {
             ForEach(0..<5, id: \.self) { index in
-                CardBackFace(width: size * 0.36, height: size * 0.52)
+                CardBackFace(width: size * 0.39, height: size * 0.56)
                     .rotationEffect(.degrees(cardRotation(index)))
                     .offset(x: revealed || reduceMotion ? cardX(index, size: size) : 0,
                             y: revealed || reduceMotion ? cardY(index, size: size) : 8)

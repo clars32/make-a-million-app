@@ -60,7 +60,12 @@ struct GameView: View {
                 showingSettings = false
             }
         }
-        .onAppear { BackgroundMusicPlayer.shared.setGameActive(true) }
+        .onAppear {
+            #if canImport(UIKit)
+            OrientationLock.shared.lock(.allButUpsideDown)
+            #endif
+            BackgroundMusicPlayer.shared.setGameActive(true)
+        }
     }
 }
 
@@ -119,7 +124,8 @@ private struct SoloGameBody: View {
                     session.startNextHand()
                 }
             },
-            onCaptureLastView: { lastView = $0 })
+            onCaptureLastView: { lastView = $0 },
+            allowsPhoneLandscapeLayout: true)
         .onAppear {
             guard tableView == nil, session.finished == nil, !session.running else { return }
             session.startNewMatch(dealSeed: dealSeed)
@@ -133,6 +139,105 @@ struct BoardHeaderCenterHeightKey: PreferenceKey {
 
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
         value = max(value, nextValue())
+    }
+}
+
+struct GameBodyLayout: Equatable {
+    enum Mode: Equatable {
+        case phonePortrait
+        case phoneLandscape
+        case tablet
+    }
+
+    let mode: Mode
+    let viewport: CGSize
+
+    static func resolve(
+        size: CGSize,
+        horizontalSizeClass: UserInterfaceSizeClass?,
+        allowsPhoneLandscape: Bool
+    ) -> GameBodyLayout {
+        let hasUsableSize = size.width > 0 && size.height > 0
+        let isLandscapePhone = allowsPhoneLandscape
+            && hasUsableSize
+            && horizontalSizeClass != .regular
+            && size.width > size.height
+            && size.height <= 520
+
+        if isLandscapePhone {
+            return GameBodyLayout(mode: .phoneLandscape, viewport: size)
+        }
+        if horizontalSizeClass == .regular {
+            return GameBodyLayout(mode: .tablet, viewport: size)
+        }
+        return GameBodyLayout(mode: .phonePortrait, viewport: size)
+    }
+
+    var isTablet: Bool { mode == .tablet }
+    var isPhoneLandscape: Bool { mode == .phoneLandscape }
+
+    var compactTextStyle: Font.TextStyle {
+        isPhoneLandscape ? .caption2 : .caption
+    }
+
+    var contentHorizontalPadding: CGFloat {
+        switch mode {
+        case .tablet: return 24
+        case .phoneLandscape: return viewport.width < 700 ? 8 : 10
+        case .phonePortrait: return 12
+        }
+    }
+
+    var contentTopPadding: CGFloat {
+        switch mode {
+        case .tablet: return 94
+        case .phoneLandscape: return 8
+        case .phonePortrait: return 64
+        }
+    }
+
+    var contentBottomPadding: CGFloat {
+        switch mode {
+        case .tablet: return 10
+        case .phoneLandscape: return 6
+        case .phonePortrait: return 6
+        }
+    }
+
+    var contentHeight: CGFloat {
+        max(0, viewport.height - contentTopPadding - contentBottomPadding)
+    }
+
+    var stackSpacing: CGFloat {
+        switch mode {
+        case .tablet: return 8
+        case .phoneLandscape: return 5
+        case .phonePortrait: return 8
+        }
+    }
+
+    var landscapeColumnSpacing: CGFloat { viewport.width < 700 ? 8 : 10 }
+
+    var landscapeUsableWidth: CGFloat {
+        max(0, viewport.width - contentHorizontalPadding * 2 - landscapeColumnSpacing)
+    }
+
+    var landscapeBoardColumnWidth: CGFloat {
+        guard isPhoneLandscape else { return 0 }
+        let preferred = landscapeUsableWidth * (viewport.width < 700 ? 0.42 : 0.40)
+        let minimum: CGFloat = viewport.width < 620 ? 242 : (viewport.width < 700 ? 260 : 330)
+        let maximum = min(viewport.width < 700 ? 310 : 360, landscapeUsableWidth - 320)
+        return min(max(preferred, minimum), max(minimum, maximum))
+    }
+
+    var landscapeInfoColumnWidth: CGFloat {
+        guard isPhoneLandscape else { return 0 }
+        return max(260, landscapeUsableWidth - landscapeBoardColumnWidth)
+    }
+
+    var landscapeControlTopGap: CGFloat {
+        guard isPhoneLandscape else { return 0 }
+        return min(88, max(56, contentHeight * 0.18))
     }
 }
 
@@ -154,6 +259,7 @@ struct GameBody: View {
     let submit: (Move) -> Void
     let dealAnother: (() -> Void)?
     let onCaptureLastView: ((PlayerView) -> Void)?
+    var allowsPhoneLandscapeLayout: Bool = false
 
     @EnvironmentObject var settings: GameSettings
     @Environment(\.horizontalSizeClass) var horizontalSizeClass
@@ -177,55 +283,64 @@ struct GameBody: View {
     }
 
     var body: some View {
-        ZStack {
-            feltBackground
+        GeometryReader { proxy in
+            let layout = GameBodyLayout.resolve(
+                size: proxy.size,
+                horizontalSizeClass: horizontalSizeClass,
+                allowsPhoneLandscape: allowsPhoneLandscapeLayout)
 
-            Group {
-                if showingDealAnimation {
-                    if let table = tableView {
-                        dealAnimationTable(
+            ZStack {
+                feltBackground
+
+                Group {
+                    if showingDealAnimation {
+                        if let table = tableView {
+                            dealAnimationTable(
+                                table: table,
+                                decision: decisionView ?? table,
+                                interactive: isInteractive,
+                                layout: layout)
+                        } else {
+                            EmptyView()
+                        }
+                    } else if let snapshot = endOfHandSnapshot {
+                        handCompleteView(snapshot)
+                            .padding(layout.isPhoneLandscape ? 8 : 16)
+                    } else if let table = tableView {
+                        activeView(
                             table: table,
                             decision: decisionView ?? table,
-                            interactive: isInteractive)
+                            interactive: isInteractive,
+                            layout: layout)
                     } else {
-                        EmptyView()
+                        waitingView.padding()
                     }
-                } else if let snapshot = endOfHandSnapshot {
-                    handCompleteView(snapshot).padding()
-                } else if let table = tableView {
-                    activeView(
-                        table: table,
-                        decision: decisionView ?? table,
-                        interactive: isInteractive)
-                } else {
-                    waitingView.padding()
+                }
+                .onChange(of: pendingTick) { _, _ in
+                    guard let v = decisionView, isInteractive else { return }
+                    // Defer the captures off this frame: a burst of frames can
+                    // tick more than once per update, and writing @State inline
+                    // here cascades into SwiftUI's "multiple updates per frame".
+                    DispatchQueue.main.async {
+                        onCaptureLastView?(v)
+                        if v.phase != .widowDiscard { discardSelection = [] }
+                        if v.phase == .bidding { selectedBidIndex = 0 }
+                    }
+                }
+                .onChange(of: displayTick) { _, _ in
+                    guard let d = tableView else { return }
+                    DispatchQueue.main.async { onCaptureLastView?(d) }
+                }
+                .onChange(of: settings.showFullTrickHistory) { _, enabled in
+                    if !enabled { selectedTrickHistorySeat = nil }
+                }
+                .onChange(of: dealAnimationToken(for: tableView)) { _, token in
+                    startDealAnimationIfNeeded(token)
+                }
+                .onAppear {
+                    startDealAnimationIfNeeded(dealAnimationToken(for: tableView))
                 }
             }
-            .onChange(of: pendingTick) { _, _ in
-                guard let v = decisionView, isInteractive else { return }
-                // Defer the captures off this frame: a burst of frames can
-                // tick more than once per update, and writing @State inline
-                // here cascades into SwiftUI's "multiple updates per frame".
-                DispatchQueue.main.async {
-                    onCaptureLastView?(v)
-                    if v.phase != .widowDiscard { discardSelection = [] }
-                    if v.phase == .bidding { selectedBidIndex = 0 }
-                }
-            }
-            .onChange(of: displayTick) { _, _ in
-                guard let d = tableView else { return }
-                DispatchQueue.main.async { onCaptureLastView?(d) }
-            }
-            .onChange(of: settings.showFullTrickHistory) { _, enabled in
-                if !enabled { selectedTrickHistorySeat = nil }
-            }
-            .onChange(of: dealAnimationToken(for: tableView)) { _, token in
-                startDealAnimationIfNeeded(token)
-            }
-            .onAppear {
-                startDealAnimationIfNeeded(dealAnimationToken(for: tableView))
-            }
-
         }
     }
 
@@ -245,74 +360,220 @@ struct GameBody: View {
     /// fanned hand below. Bidding controls sit just above the hand so the
     /// seat chips still show the other bids; trump/discard still float over
     /// the empty center.
-    func activeView(table: PlayerView, decision: PlayerView, interactive: Bool) -> some View {
+    func activeView(
+        table: PlayerView,
+        decision: PlayerView,
+        interactive: Bool,
+        layout: GameBodyLayout
+    ) -> some View {
         let actionActive = interactive && isActionPhase(decision.phase)
         let biddingActive = interactive && decision.phase == .bidding
         let centerActionActive = actionActive && !biddingActive
         return ZStack {
-            VStack(spacing: 8) {
-                boardHeader(table, decision: decision, interactive: interactive)
+            if layout.isPhoneLandscape {
+                landscapeActiveView(
+                    table: table,
+                    decision: decision,
+                    interactive: interactive,
+                    actionActive: actionActive,
+                    biddingActive: biddingActive,
+                    centerActionActive: centerActionActive,
+                    layout: layout)
+            } else {
+                portraitActiveView(
+                    table: table,
+                    decision: decision,
+                    interactive: interactive,
+                    actionActive: actionActive,
+                    biddingActive: biddingActive,
+                    centerActionActive: centerActionActive,
+                    layout: layout)
+            }
+
+            trickHistoryOverlay(table, layout: layout)
+        }
+        .animation(.spring(response: 0.36, dampingFraction: 0.85), value: actionActive)
+        .animation(.spring(response: 0.32, dampingFraction: 0.86), value: selectedTrickHistorySeat)
+    }
+
+    func portraitActiveView(
+        table: PlayerView,
+        decision: PlayerView,
+        interactive: Bool,
+        actionActive: Bool,
+        biddingActive: Bool,
+        centerActionActive: Bool,
+        layout: GameBodyLayout
+    ) -> some View {
+        ZStack {
+            VStack(spacing: layout.stackSpacing) {
+                boardHeader(table, decision: decision, interactive: interactive, layout: layout)
 
                 if showsBidHistoryStrip(table) {
-                    bidHistoryStrip(table)
+                    bidHistoryStrip(table, layout: layout)
                 }
 
                 if table.phase == .misdealDecision {
-                    misdealBanner(table, decision: decision, interactive: interactive)
+                    misdealBanner(table, decision: decision, interactive: interactive, layout: layout)
                 }
 
                 Spacer(minLength: 0)
 
-                boardArea(table)
+                boardArea(table, layout: layout)
                     .scaleEffect(centerActionActive ? 0.92 : 1.0, anchor: .top)
 
                 Spacer(minLength: 0)
 
-                footerStrip(table)
+                footerStrip(table, layout: layout)
 
-                if biddingActive {
-                    biddingActionPanel(decision)
-                        .padding(.horizontal, 4)
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
-                } else if !actionActive {
-                    if interactive && decision.phase == .trickPlay {
-                        hintText("Highlighted cards are legal.")
-                    } else if !interactive {
-                        hintText(caughtUp ? "Waiting for other players…" : "Watching play…")
-                    }
-                }
+                actionPrompt(
+                    table: table,
+                    decision: decision,
+                    interactive: interactive,
+                    actionActive: actionActive,
+                    biddingActive: biddingActive,
+                    layout: layout)
 
-                handSection(table: table, decision: decision, interactive: interactive)
+                handSection(table: table, decision: decision, interactive: interactive, layout: layout)
             }
-            .padding(.horizontal, isTabletLayout ? 24 : 12)
-            .padding(.top, isTabletLayout ? 94 : 64)   // clear the floating gear / Back buttons
-            .padding(.bottom, isTabletLayout ? 10 : 6)
+            .padding(.horizontal, layout.contentHorizontalPadding)
+            .padding(.top, layout.contentTopPadding)
+            .padding(.bottom, layout.contentBottomPadding)
 
             if centerActionActive {
-                actionPanel(decision)
+                actionPanel(decision, layout: layout)
                     .padding(.horizontal, 16)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
                     .padding(.bottom, 70)   // bias up, clear of the hand
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                     .zIndex(1)
             }
-
-            trickHistoryOverlay(table)
         }
-        .animation(.spring(response: 0.36, dampingFraction: 0.85), value: actionActive)
-        .animation(.spring(response: 0.32, dampingFraction: 0.86), value: selectedTrickHistorySeat)
     }
 
-    func dealAnimationTable(table: PlayerView, decision: PlayerView, interactive: Bool) -> some View {
+    func landscapeActiveView(
+        table: PlayerView,
+        decision: PlayerView,
+        interactive: Bool,
+        actionActive: Bool,
+        biddingActive: Bool,
+        centerActionActive: Bool,
+        layout: GameBodyLayout
+    ) -> some View {
+        HStack(alignment: .top, spacing: layout.landscapeColumnSpacing) {
+            VStack(spacing: layout.stackSpacing) {
+                boardHeader(table, decision: decision, interactive: interactive, layout: layout)
+                Spacer(minLength: 0)
+                boardArea(table, layout: layout)
+                Spacer(minLength: 0)
+            }
+            .frame(width: layout.landscapeBoardColumnWidth, height: layout.contentHeight, alignment: .top)
+
+            VStack(spacing: layout.stackSpacing) {
+                Color.clear.frame(height: layout.landscapeControlTopGap)
+
+                if showsBidHistoryStrip(table) {
+                    bidHistoryStrip(table, layout: layout)
+                }
+
+                if table.phase == .misdealDecision {
+                    misdealBanner(table, decision: decision, interactive: interactive, layout: layout)
+                        .transition(.opacity.combined(with: .move(edge: .top)))
+                }
+
+                footerStrip(table, layout: layout)
+
+                actionPrompt(
+                    table: table,
+                    decision: decision,
+                    interactive: interactive,
+                    actionActive: actionActive,
+                    biddingActive: biddingActive,
+                    layout: layout)
+
+                if centerActionActive {
+                    actionPanel(decision, layout: layout)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+
+                Spacer(minLength: 0)
+
+                handSection(table: table, decision: decision, interactive: interactive, layout: layout)
+            }
+            .frame(width: layout.landscapeInfoColumnWidth, height: layout.contentHeight, alignment: .top)
+        }
+        .padding(.horizontal, layout.contentHorizontalPadding)
+        .padding(.top, layout.contentTopPadding)
+        .padding(.bottom, layout.contentBottomPadding)
+    }
+
+    @ViewBuilder
+    func actionPrompt(
+        table: PlayerView,
+        decision: PlayerView,
+        interactive: Bool,
+        actionActive: Bool,
+        biddingActive: Bool,
+        layout: GameBodyLayout
+    ) -> some View {
+        if biddingActive {
+            biddingActionPanel(decision, layout: layout)
+                .padding(.horizontal, 4)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+        } else if !actionActive {
+            if interactive && decision.phase == .trickPlay {
+                hintText("Highlighted cards are legal.", layout: layout)
+            } else if !interactive {
+                hintText(caughtUp ? "Waiting for other players…" : "Watching play…", layout: layout)
+            }
+        }
+    }
+
+    func dealAnimationTable(
+        table: PlayerView,
+        decision: PlayerView,
+        interactive: Bool,
+        layout: GameBodyLayout
+    ) -> some View {
         let actionActive = interactive && isActionPhase(decision.phase)
         let biddingActive = interactive && decision.phase == .bidding
         let centerActionActive = actionActive && !biddingActive
+        if layout.isPhoneLandscape {
+            return AnyView(
+                landscapeDealAnimationTable(
+                    table: table,
+                    decision: decision,
+                    interactive: interactive,
+                    actionActive: actionActive,
+                    biddingActive: biddingActive,
+                    centerActionActive: centerActionActive,
+                    layout: layout))
+        }
+        return AnyView(portraitDealAnimationTable(
+            table: table,
+            decision: decision,
+            interactive: interactive,
+            actionActive: actionActive,
+            biddingActive: biddingActive,
+            centerActionActive: centerActionActive,
+            layout: layout))
+    }
+
+    func portraitDealAnimationTable(
+        table: PlayerView,
+        decision: PlayerView,
+        interactive: Bool,
+        actionActive: Bool,
+        biddingActive: Bool,
+        centerActionActive: Bool,
+        layout: GameBodyLayout
+    ) -> some View {
         return VStack(spacing: 8) {
-            boardHeader(table, decision: decision, interactive: false)
+            boardHeader(table, decision: decision, interactive: false, layout: layout)
                 .hidden()
 
             if table.phase == .misdealDecision {
-                misdealBanner(table, decision: decision, interactive: false)
+                misdealBanner(table, decision: decision, interactive: false, layout: layout)
                     .hidden()
             }
 
@@ -321,34 +582,102 @@ struct GameBody: View {
             boardArea(table,
                       showLiveCards: false,
                       showsIdleText: false,
-                      dealAnimationTrigger: dealAnimationTrigger)
+                      dealAnimationTrigger: dealAnimationTrigger,
+                      layout: layout)
                 .scaleEffect(centerActionActive ? 0.92 : 1.0, anchor: .top)
 
             Spacer(minLength: 0)
 
-            footerStrip(table)
+            footerStrip(table, layout: layout)
                 .hidden()
 
             if biddingActive {
-                biddingActionPanel(decision)
+                biddingActionPanel(decision, layout: layout)
                     .padding(.horizontal, 4)
                     .hidden()
             } else if !actionActive {
                 if interactive && decision.phase == .trickPlay {
-                    hintText("Highlighted cards are legal.")
+                    hintText("Highlighted cards are legal.", layout: layout)
                         .hidden()
                 } else if !interactive {
-                    hintText(caughtUp ? "Waiting for other players…" : "Watching play…")
+                    hintText(caughtUp ? "Waiting for other players…" : "Watching play…", layout: layout)
                         .hidden()
                 }
             }
 
-            handSection(table: table, decision: decision, interactive: interactive)
+            handSection(table: table, decision: decision, interactive: interactive, layout: layout)
                 .hidden()
         }
-        .padding(.horizontal, isTabletLayout ? 24 : 12)
-        .padding(.top, isTabletLayout ? 94 : 64)
-        .padding(.bottom, isTabletLayout ? 10 : 6)
+        .padding(.horizontal, layout.contentHorizontalPadding)
+        .padding(.top, layout.contentTopPadding)
+        .padding(.bottom, layout.contentBottomPadding)
+        .allowsHitTesting(false)
+    }
+
+    func landscapeDealAnimationTable(
+        table: PlayerView,
+        decision: PlayerView,
+        interactive: Bool,
+        actionActive: Bool,
+        biddingActive: Bool,
+        centerActionActive: Bool,
+        layout: GameBodyLayout
+    ) -> some View {
+        HStack(alignment: .top, spacing: layout.landscapeColumnSpacing) {
+            VStack(spacing: layout.stackSpacing) {
+                boardHeader(table, decision: decision, interactive: false, layout: layout)
+                    .hidden()
+                Spacer(minLength: 0)
+                boardArea(table,
+                          showLiveCards: false,
+                          showsIdleText: false,
+                          dealAnimationTrigger: dealAnimationTrigger,
+                          layout: layout)
+                    .scaleEffect(centerActionActive ? 0.92 : 1.0, anchor: .top)
+                Spacer(minLength: 0)
+            }
+            .frame(width: layout.landscapeBoardColumnWidth, height: layout.contentHeight, alignment: .top)
+
+            VStack(spacing: layout.stackSpacing) {
+                Color.clear.frame(height: layout.landscapeControlTopGap)
+
+                if showsBidHistoryStrip(table) {
+                    bidHistoryStrip(table, layout: layout)
+                        .hidden()
+                }
+
+                if table.phase == .misdealDecision {
+                    misdealBanner(table, decision: decision, interactive: false, layout: layout)
+                        .hidden()
+                }
+
+                footerStrip(table, layout: layout)
+                    .hidden()
+
+                actionPrompt(
+                    table: table,
+                    decision: decision,
+                    interactive: interactive,
+                    actionActive: actionActive,
+                    biddingActive: biddingActive,
+                    layout: layout)
+                .hidden()
+
+                if centerActionActive {
+                    actionPanel(decision, layout: layout)
+                        .hidden()
+                }
+
+                Spacer(minLength: 0)
+
+                handSection(table: table, decision: decision, interactive: interactive, layout: layout)
+                    .hidden()
+            }
+            .frame(width: layout.landscapeInfoColumnWidth, height: layout.contentHeight, alignment: .top)
+        }
+        .padding(.horizontal, layout.contentHorizontalPadding)
+        .padding(.top, layout.contentTopPadding)
+        .padding(.bottom, layout.contentBottomPadding)
         .allowsHitTesting(false)
     }
 

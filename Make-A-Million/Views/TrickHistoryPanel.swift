@@ -52,7 +52,7 @@ struct TrickHistoryPanel: View {
             }
         }
         .padding(14)
-        .frame(maxWidth: 430)
+        .frame(maxWidth: 480)
         .tablePanel(cornerRadius: 18, shadowOpacity: 0.32)
     }
 
@@ -91,7 +91,7 @@ struct TrickHistoryPanel: View {
                     .font(TableTypography.money(.caption2))
                     .foregroundStyle(TableStyle.tableGold)
             }
-            .frame(width: 42, alignment: .leading)
+            .frame(width: 46, alignment: .leading)
 
             HStack(spacing: 5) {
                 ForEach(keyedPlays(trick.plays), id: \.key) { entry in

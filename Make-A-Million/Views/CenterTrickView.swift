@@ -35,16 +35,16 @@ struct CenterTrickView: View {
         var idleFont: Font
 
         static let tabletop = Metrics(
-            cardW: 150, cardH: 211, spread: 170, circle: 500, frame: 640,
-            ledDot: 26, idleFont: TableTypography.display(.title2, weight: .bold))
+            cardW: 158, cardH: 222, spread: 176, circle: 520, frame: 650,
+            ledDot: 28, idleFont: TableTypography.display(.title2, weight: .bold))
 
         static let phone = Metrics(
-            cardW: 64, cardH: 90, spread: 68, circle: 200, frame: 244,
-            ledDot: 16, idleFont: TableTypography.display(.subheadline, weight: .bold))
+            cardW: 68, cardH: 96, spread: 72, circle: 210, frame: 254,
+            ledDot: 17, idleFont: TableTypography.display(.subheadline, weight: .bold))
 
         static let tablet = Metrics(
-            cardW: 136, cardH: 191, spread: 146, circle: 410, frame: 520,
-            ledDot: 22, idleFont: TableTypography.display(.title3, weight: .bold))
+            cardW: 146, cardH: 205, spread: 156, circle: 438, frame: 552,
+            ledDot: 24, idleFont: TableTypography.display(.title3, weight: .bold))
     }
 
     let currentTrick: Trick?

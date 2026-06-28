@@ -27,9 +27,34 @@ struct ClientGameView: View {
     @State private var showingSettings = false
     @Namespace private var cardNS
 
-    // Card sizing for a phone held in landscape.
-    private let cardW: CGFloat = 110
-    private let cardH: CGFloat = 156
+    // Card sizing for a phone held in landscape. The fan is width-limited on
+    // modern phones and height-limited on shorter devices.
+    private struct ClientHandMetrics {
+        let cardW: CGFloat
+        let cardH: CGFloat
+        let rotationPad: CGFloat
+        let preferredOverlap: CGFloat
+        let outerDip: CGFloat
+        let frameHeight: CGFloat
+        let dealCardW: CGFloat
+        let dealCardH: CGFloat
+    }
+
+    private func clientHandMetrics(for size: CGSize) -> ClientHandMetrics {
+        let widthLimited = max(82, (size.width - 40) / 7.05)
+        let heightLimited = max(82, min(132, size.height * 0.335))
+        let cardW = min(widthLimited, heightLimited, 132)
+        let cardH = cardW * 1.42
+        return ClientHandMetrics(
+            cardW: cardW,
+            cardH: cardH,
+            rotationPad: max(92, cardW * 1.04),
+            preferredOverlap: cardW * 0.55,
+            outerDip: max(14, cardW * 0.14),
+            frameHeight: cardH + cardW * 0.72,
+            dealCardW: cardW * 0.58,
+            dealCardH: cardH * 0.58)
+    }
 
     /// The view to render. `pending` (a decision frame) takes priority so legal
     /// moves are accurate on this player's turn; otherwise the paced frame.
@@ -106,37 +131,40 @@ struct ClientGameView: View {
 
     @ViewBuilder
     private var tabletopClientBody: some View {
-        ZStack {
-            feltBackground
+        GeometryReader { proxy in
+            let metrics = clientHandMetrics(for: proxy.size)
+            ZStack {
+                feltBackground
 
-            if let snapshot = endOfHandSnapshot {
-                HandCompleteScorecard(
-                    snapshot: snapshot,
-                    teamName: { teamName($0) },
-                    seatName: { seatName($0) },
-                    seatShort: { seatShort($0) },
-                    action: nil,
-                    showsDebugReveal: false)
-            } else if let view = handView {
-                VStack(spacing: 8) {
-                    Spacer(minLength: 0)
-                    if isMyTurn { actionBar(view) }   // only for bid/trump/discard
-                    handArea(view)
+                if let snapshot = endOfHandSnapshot {
+                    HandCompleteScorecard(
+                        snapshot: snapshot,
+                        teamName: { teamName($0) },
+                        seatName: { seatName($0) },
+                        seatShort: { seatShort($0) },
+                        action: nil,
+                        showsDebugReveal: false)
+                } else if let view = handView {
+                    VStack(spacing: 7) {
+                        Spacer(minLength: 0)
+                        if isMyTurn { actionBar(view) }   // only for bid/trump/discard
+                        handArea(view, metrics: metrics)
+                    }
+                    .padding(.bottom, 4)
+                } else {
+                    waitingView
                 }
-                .padding(.bottom, 6)
-            } else {
-                waitingView
-            }
 
-            if endOfHandSnapshot == nil {
-                DealingAnimationOverlay(
-                    trigger: dealAnimationToken(for: handView),
-                    cardWidth: 62,
-                    cardHeight: 88,
-                    spreadScale: 0.58)
-                .padding(.horizontal, 26)
-                .padding(.bottom, cardH * 0.35)
-                .zIndex(2)
+                if endOfHandSnapshot == nil {
+                    DealingAnimationOverlay(
+                        trigger: dealAnimationToken(for: handView),
+                        cardWidth: metrics.dealCardW,
+                        cardHeight: metrics.dealCardH,
+                        spreadScale: 0.58)
+                    .padding(.horizontal, 26)
+                    .padding(.bottom, metrics.cardH * 0.30)
+                    .zIndex(2)
+                }
             }
         }
         .onAppear { setOrientation(.landscape) }
@@ -188,21 +216,21 @@ struct ClientGameView: View {
 
     // MARK: - Hand
 
-    private func handArea(_ view: PlayerView) -> some View {
+    private func handArea(_ view: PlayerView, metrics: ClientHandMetrics) -> some View {
         FannedHand(cards: view.myHand,
-                   cardWidth: cardW,
-                   rotationPad: 136,
-                   preferredOverlap: cardW * 0.54,
-                   outerDip: 16,
+                   cardWidth: metrics.cardW,
+                   rotationPad: metrics.rotationPad,
+                   preferredOverlap: metrics.preferredOverlap,
+                   outerDip: metrics.outerDip,
                    liftedCards: discardSelection) { card, total in
-            handCard(card, view: view, total: total)
+            handCard(card, view: view, total: total, metrics: metrics)
         }
-        .frame(height: cardH + 74)
+        .frame(height: metrics.frameHeight)
         .frame(maxWidth: .infinity)
     }
 
     @ViewBuilder
-    private func handCard(_ card: Card, view: PlayerView, total: Int) -> some View {
+    private func handCard(_ card: Card, view: PlayerView, total: Int, metrics: ClientHandMetrics) -> some View {
         let playable = isMyTurn && view.phase == .trickPlay && isLegalPlay(card, in: view)
         let selectable = isMyTurn && view.phase == .widowDiscard && isDiscardSelectable(card, in: view)
         let selected = discardSelection.contains(card)
@@ -211,7 +239,7 @@ struct ClientGameView: View {
             if playable {
                 Button { session.submit(.play(card)) } label: {
                     CardFace(card: card, highlighted: true,
-                             width: cardW, height: cardH, dense: total > 12)
+                             width: metrics.cardW, height: metrics.cardH, dense: total > 12)
                 }
                 .buttonStyle(.plain)
             } else if selectable {
@@ -220,12 +248,12 @@ struct ClientGameView: View {
                     toggleDiscard(card)
                 } label: {
                     CardFace(card: card, selected: selected, highlighted: true,
-                             width: cardW, height: cardH, dense: total > 12)
+                             width: metrics.cardW, height: metrics.cardH, dense: total > 12)
                 }
                 .buttonStyle(.plain)
             } else {
                 CardFace(card: card, selected: selected,
-                         width: cardW, height: cardH, dense: total > 12)
+                         width: metrics.cardW, height: metrics.cardH, dense: total > 12)
             }
         }
         .matchedGeometryEffect(id: cardKey(card), in: cardNS)
