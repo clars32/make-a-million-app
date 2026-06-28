@@ -90,12 +90,21 @@ struct MonteCarloAgent: PlayerAgent {
                      "MonteCarloAgent asked to move with no legal moves")
         if legal.count == 1 { return legal[0] }
 
+        // Two decision stacks, chosen by the profile's style. `.traditional`
+        // runs the legible principle ladder; `.adaptive` runs the MCTS/search
+        // stack. Bidding and trick play fork by style; the remaining phases
+        // (discard, trump, misdeal) are already heuristic and legible, so both
+        // styles share them (Adaptive only differs in evaluator tables / rollout
+        // bid eval, which those helpers read off `difficulty`).
+        let traditional = (difficulty.style == .traditional)
         switch view.phase {
-        case .bidding:         return decideBid(view, legal: legal)
+        case .bidding:         return traditional ? decideBidTraditional(view, legal: legal)
+                                                  : decideBid(view, legal: legal)
         case .misdealDecision: return decideMisdeal(view, legal: legal)
         case .widowDiscard:    return decideDiscard(view, legal: legal)
         case .namingTrump:     return decideTrump(view, legal: legal)
-        case .trickPlay:       return decideTrickPlay(view, legal: legal)
+        case .trickPlay:       return traditional ? decideTrickPlayTraditional(view, legal: legal)
+                                                  : decideTrickPlay(view, legal: legal)
         case .handComplete:    return legal[0]
         }
     }
