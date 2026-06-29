@@ -36,6 +36,123 @@ final class AIArenaTests: XCTestCase {
         await AIArena.traceOneHand(difficulty: .normal, dealSeed: 1)
     }
 
+    /// DIAGNOSIS (June 28 2026): quantify the "leads a low card of a random
+    /// color" pitfall. Plays skilled Traditional self-play with the decision
+    /// trace on, then for every completed trick checks whether the LEAD resolved
+    /// to the money-blind fallback (`lowSafeLead`/`lastResort`) and, if so,
+    /// whether that trick was won by the OPPONENTS — i.e. control yielded — and
+    /// whether it carried money the opponents then banked. Dumps a few full
+    /// traced handlogs for eyeballing concrete exemplars. Not an assertion test;
+    /// it's the trace-first step before adding `.safeExit`/`.forceRuff`.
+    func testDiagnoseSkilledLeads() async {
+        let difficulty = MonteCarloAgent.Difficulty.skilled
+        let labels = ["South (AI)", "West (AI)", "North (AI)", "East (AI)"]
+        let n = 40
+        let handsToRender = 6
+
+        var totalLeads = 0, fallbackLeads = 0
+        var controlYielded = 0, giftedMoney = 0, giftedTotal = 0
+        // Upstream investigation: was the gifting junk lead a FORCED singleton
+        // (no exit-color choice) or CHOOSABLE (≥2 exit colors — a real mistake
+        // or selection noise)? And WHEN does it bleed — early (a weak hand) vs
+        // late (natural endgame surrender)?
+        var giftedForced = 0, giftedChoosable = 0
+        var giftedByPhase = [0, 0, 0]    // early 1-4, mid 5-9, late 10-13
+        var keepLeadLeads = 0, forceRuffLeads = 0   // new surrender alternatives firing
+        var logs: [String] = []
+
+        for i in 0..<n {
+            let base = 100 + UInt64(i) * 7
+            let agents: [PlayerAgent] = [
+                MonteCarloAgent(name: "S", difficulty: difficulty, seed: base + 1),
+                MonteCarloAgent(name: "W", difficulty: difficulty, seed: base + 2),
+                MonteCarloAgent(name: "N", difficulty: difficulty, seed: base + 3),
+                MonteCarloAgent(name: "E", difficulty: difficulty, seed: base + 4),
+            ]
+            let runner = GameRunner(agents: agents)
+            AIDecisionTrace.shared.beginHand(enabled: true)
+            guard let final = try? await runner.playHand(dealer: PlayerID(0),
+                                                         dealSeed: 1 + UInt64(i)),
+                  let trump = final.trump else { continue }
+            let dec = AIDecisionTrace.shared.snapshot()
+
+            func leadRole(seat: PlayerID, card: Card) -> String {
+                dec.plays.first { $0.seat == seat && $0.chosen == card }?
+                    .notes.first { $0.contains("→ ") } ?? ""
+            }
+            // Reconstruct a seat's full hand-as-played: the declarer's is the 13
+            // cards they actually played (dealt 13 + widow 3 − discard 3); every
+            // other seat's is their dealt 13.
+            func startingHand(_ seat: PlayerID) -> [Card] {
+                if seat == final.highBidder {
+                    return final.completedTricks.flatMap { $0.plays }
+                        .filter { $0.player == seat }.map { $0.card }
+                }
+                return final.dealtHands[seat] ?? []
+            }
+            // Distinct non-trump exit colors the leader still held when leading
+            // trick k (0-based): the choices safeExit had to pick from.
+            func exitColorCount(_ seat: PlayerID, beforeTrick k: Int) -> Int {
+                var hand = startingHand(seat)
+                for t in final.completedTricks.prefix(k) {
+                    for p in t.plays where p.player == seat {
+                        if let idx = hand.firstIndex(of: p.card) { hand.remove(at: idx) }
+                    }
+                }
+                let colors = hand.filter {
+                    !$0.isMoney && !$0.isSpecial && $0.effectiveColor(trump: trump) != trump
+                }.compactMap { $0.effectiveColor(trump: trump) }
+                return Set(colors).count
+            }
+
+            for (k, trick) in final.completedTricks.enumerated() {
+                guard let lead = trick.plays.first else { continue }
+                totalLeads += 1
+                let note = leadRole(seat: lead.player, card: lead.card)
+                if note.contains("→ keepLeadTrump") { keepLeadLeads += 1 }
+                if note.contains("→ forceRuff") { forceRuffLeads += 1 }
+                guard note.contains("→ lowSafeLead") || note.contains("→ safeExit")
+                        || note.contains("→ lastResort")
+                else { continue }
+                fallbackLeads += 1
+                let winner = GameState.trickWinner(trick, trump: trump)
+                guard Seats.team(of: winner) != Seats.team(of: lead.player) else { continue }
+                controlYielded += 1
+                let v = GameState.trickValue(trick)
+                guard v > 0 else { continue }
+                giftedMoney += 1; giftedTotal += v
+                if exitColorCount(lead.player, beforeTrick: k) >= 2 { giftedChoosable += 1 }
+                else { giftedForced += 1 }
+                giftedByPhase[k < 4 ? 0 : (k < 9 ? 1 : 2)] += 1
+            }
+            if i < handsToRender {
+                logs.append(HandLog.render(final, handIndex: i,
+                                           seatLabels: labels, decisions: dec))
+            }
+        }
+        AIDecisionTrace.shared.beginHand(enabled: false)
+
+        func pct(_ a: Int, _ b: Int) -> String {
+            b > 0 ? String(format: "%.0f%%", Double(a) / Double(b) * 100) : "—"
+        }
+        print("""
+        LEAD DIAGNOSIS — skilled Traditional self-play, \(n) hands
+          total leads                 : \(totalLeads)
+          low-safe / lastResort leads : \(fallbackLeads)  (\(pct(fallbackLeads, totalLeads)) of leads)
+          ⮑ won by OPPONENTS (control yielded): \(controlYielded)  (\(pct(controlYielded, fallbackLeads)) of fallback)
+          ⮑ that banked money for them        : \(giftedMoney)  (\(pct(giftedMoney, fallbackLeads)) of fallback), $\(giftedTotal / 1000)k total
+        UPSTREAM READ (of the \(giftedMoney) money-gifting junk leads)
+          FORCED (≤1 exit color, no choice)   : \(giftedForced)  (\(pct(giftedForced, giftedMoney)))
+          CHOOSABLE (≥2 exit colors)          : \(giftedChoosable)  (\(pct(giftedChoosable, giftedMoney)))
+          by phase  early(t1-4) / mid(t5-9) / late(t10-13): \(giftedByPhase[0]) / \(giftedByPhase[1]) / \(giftedByPhase[2])
+        NEW SURRENDER ALTERNATIVES firing
+          keepLeadTrump leads : \(keepLeadLeads)
+          forceRuff leads     : \(forceRuffLeads)
+        """)
+        print("==== SAMPLE TRACED HANDLOGS (\(logs.count)) ====")
+        print(logs.joined(separator: "\n\n"))
+    }
+
     /// Step 2. Small and quick — confirms the arena loop itself works and
     /// gives an early read before committing to the long run.
     func testArenaSmall() async {
@@ -789,6 +906,40 @@ final class AIArenaTests: XCTestCase {
         let r = await AIArena.runSelfPlay(matches: 100, challenger: dropped,
                                           champion: withMult, baseSeed: 1)
         print("TREATMENT (aggression dropped vs 1.05 applied):\n" + r.summary)
+    }
+
+    /// A/B + flip-rate for the STAYING-POWER gate (`bidEntryMargin`): don't make
+    /// a lead bid the team's still-live partner will read as strength when we'd
+    /// fold it at the opponents' next raise. The fix targets the HUMAN-partner
+    /// pitfall (partner defers to our bid, a pass is permanent, then we concede),
+    /// which symmetric self-play CANNOT reward — a bot partner doesn't defer to a
+    /// signal — so the win-rate read is EXPECTED neutral. The numbers that matter:
+    ///   • flip-rate (`BidGateStats`): how often the gate turns a lead bid into a
+    ///     pass. Too high ⇒ the margin/window is too wide ("too eager to pass").
+    ///   • challenger set-rate ≤ champion (passing thin lead bids ⇒ fewer thin
+    ///     contracts ⇒ fewer sets) with bid-share only a touch lower (it should
+    ///     DELEGATE thin leads to the partner, not abandon the auction).
+    /// Control is gate-off both sides; treatment is gate-on vs gate-off so the
+    /// flip-rate reflects only the gate-on profile (the gate, hence the counter,
+    /// is inert when `bidEntryMargin == 0`).
+    func testSelfPlayBidEntryMargin() async {
+        var off = MonteCarloAgent.Difficulty.normal
+        off.bidEntryMargin = 0
+        let control = await AIArena.runSelfPlay(matches: 60, challenger: off,
+                                                champion: off, baseSeed: 1)
+        print("CONTROL (gate-off vs gate-off):\n" + control.summary)
+
+        var on = MonteCarloAgent.Difficulty.normal
+        on.bidEntryMargin = Bidding.raiseIncrement     // survive one opponent raise
+        BidGateStats.shared.begin(enabled: true)
+        let r = await AIArena.runSelfPlay(matches: 60, challenger: on,
+                                          champion: off, baseSeed: 1)
+        let s = BidGateStats.shared.snapshot()
+        BidGateStats.shared.begin(enabled: false)
+        print("TREATMENT (gate-on vs gate-off):\n" + r.summary)
+        print(String(format:
+            "  Gate flip-rate (challenger): %d/%d = %.0f%% of in-window lead bids passed",
+            s.flips, s.opportunities, s.rate * 100))
     }
 
     /// `bidMakeProbability` sweep (treatment-only; the PIMC control is

@@ -124,6 +124,33 @@ extension MonteCarloAgent {
             // that fits the ceiling, otherwise pass. Strong players don't bid
             // themselves up.
             if Double(cheapestAmt) <= ceiling {
+                // Staying-power gate (`bidEntryMargin`): we're about to make the
+                // LEAD/contesting bid for our team. If our partner is still live
+                // to act they'll read this bid as strength and defer (a pass is
+                // permanent), so a bid we'd fold at the opponents' next raise just
+                // shuts the partner out before we concede the contract anyway.
+                // Only fires while BOTH a partner and an opponent are still live;
+                // otherwise the signal can't mislead anyone and we bid as before.
+                let myTeam = Seats.team(of: view.me)
+                let partnerLive = Seats.all.contains {
+                    $0 != view.me && Seats.team(of: $0) == myTeam
+                        && !view.passed.contains($0)
+                }
+                let opponentLive = Seats.all.contains {
+                    Seats.team(of: $0) != myTeam && !view.passed.contains($0)
+                }
+                if difficulty.bidEntryMargin > 0 && partnerLive && opponentLive {
+                    // Would the opponents' minimum next raise blow past my ceiling?
+                    let wouldFold = ceiling < Double(cheapestAmt + difficulty.bidEntryMargin)
+                    BidGateStats.shared.recordOpportunity(flipped: wouldFold)
+                    if wouldFold {
+                        notes.append("staying-power: ceiling $\(Int(ceiling) / 1000)k "
+                                     + "won't survive a raise to "
+                                     + "$\((cheapestAmt + difficulty.bidEntryMargin) / 1000)k — "
+                                     + "partner still live, passing to let them lead")
+                        return passMove!
+                    }
+                }
                 // Optional jump-bid on monster hands: if my estimate is FAR
                 // above the cheapest legal bid (≥ 1.5× the cheapest), and
                 // aggression is high, step up one tier to telegraph strength

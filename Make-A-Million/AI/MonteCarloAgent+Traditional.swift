@@ -35,7 +35,8 @@ extension MonteCarloAgent {
     nonisolated enum PlayRole: String, Sendable {
         // leads
         case pullTrumpLow, pullTrumpCommanding, leadVirgin40k, sureLeadNonTrump,
-             establishDuck, cashHighTrump, lowSafeLead, lastResort
+             establishDuck, cashHighTrump, keepLeadTrump, forceRuff, safeExit,
+             lowSafeLead, lastResort
         // follows
         case dumpToPartner, bullDoublePartner, partnerHedge,
              bankMoney, cheapWin, bigWin, bullEscape,
@@ -217,10 +218,39 @@ extension MonteCarloAgent {
             }
         }
 
-        // CORE — low safe lead (prefers the shortest non-trump suit). The base
-        // skill every tier has.
-        if let lo = lowSafeLead(plays: plays, hand: view.myHand, trump: trump) {
-            out.append(.init(card: lo, role: .lowSafeLead))
+        // EXIT (last resort) — a junk surrender, offered ONLY when nothing
+        // productive exists. It must never compete with a real lead (cashing a
+        // controlled winner, the virgin $40k, a trump pull): at plansAhead tiers
+        // EVERY fork goes to the 12-world `resolveForkBySearch`, whose noisy
+        // greedy tail systematically undervalues keeping the lead and so rejects
+        // a guaranteed cash for junk (measured: ~17% of junk leads passed up an
+        // available cash, incl. the virgin $40k). Gating on `out.isEmpty` removes
+        // that whole fork class — you only surrender when you have nothing better
+        // to lead. Money-aware exit at table-reading tiers; naive lowSafeLead
+        // floor for novice/casual.
+        if out.isEmpty {
+            if cap >= .positional {
+                // KEEP THE LEAD — cash a commanding trump rather than surrender
+                // into a ruff (Hand-1-t7: held the Tiger, donated a $70k ruff).
+                if let keep = keepLeadTrumpLead(plays: plays, trump: trump,
+                                                inference: inference) {
+                    out.append(.init(card: keep, role: .keepLeadTrump))
+                }
+                // FORCE A RUFF — a defender's low card into a low-money opponent
+                // void: they burn a trump (or it runs to my partner). Principle 3.
+                if !amDeclarer,
+                   let force = forceRuffLead(plays: plays, trump: trump,
+                                             inference: inference) {
+                    out.append(.init(card: force, role: .forceRuff))
+                }
+                // EXIT — money/ruff-aware safe surrender.
+                if let exit = safeExitLead(plays: plays, hand: view.myHand,
+                                           trump: trump, inference: inference) {
+                    out.append(.init(card: exit, role: .safeExit))
+                }
+            } else if let lo = lowSafeLead(plays: plays, hand: view.myHand, trump: trump) {
+                out.append(.init(card: lo, role: .lowSafeLead))
+            }
         }
 
         // CORE — last resort: the cheapest legal card.

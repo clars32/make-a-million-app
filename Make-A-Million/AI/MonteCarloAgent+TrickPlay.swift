@@ -419,8 +419,30 @@ extension MonteCarloAgent {
             }
         }
 
-        // 5. Low non-money, non-special — preferring shortest non-trump suit.
-        if let lo = lowSafeLead(plays: plays, hand: view.myHand, trump: trump) {
+        // 4b. Forced-surrender alternatives (only when no productive lead exists):
+        // keep the lead by cashing a commanding trump, or a defender force-ruff
+        // into a low-money opponent void — so MCTS weighs them against the junk
+        // exit instead of only surrendering (Hand-1-t7).
+        if picks.isEmpty {
+            if let keep = keepLeadTrumpLead(plays: plays, trump: trump,
+                                            inference: inference) {
+                picks.append(keep)
+            }
+            if !amDeclarer,
+               let force = forceRuffLead(plays: plays, trump: trump,
+                                         inference: inference) {
+                picks.append(force)
+            }
+        }
+
+        // 5. Junk exit. Money-aware (avoid ruffable / live-money colors) when
+        // the inference can read it; the naive shortest-suit lowSafeLead is the
+        // fallback. (Full-width tiers grade every legal lead anyway; this sharpens
+        // the curated shortlist for the rest.)
+        if let exit = safeExitLead(plays: plays, hand: view.myHand,
+                                   trump: trump, inference: inference) {
+            picks.append(exit)
+        } else if let lo = lowSafeLead(plays: plays, hand: view.myHand, trump: trump) {
             picks.append(lo)
         }
 
@@ -471,6 +493,103 @@ extension MonteCarloAgent {
             return rankOf(a) < rankOf(b)
         }
     }
+
+    /// Money-aware safe exit — the smarter junk lead for table-reading tiers.
+    /// Same candidate pool as `lowSafeLead` (low, non-money, non-special,
+    /// non-trump) but it chooses the exit COLOR to bleed the least to the
+    /// opponents instead of merely taking the shortest suit. Ordering, safest
+    /// first: (1) avoid a color an opponent can RUFF (known void + trump still
+    /// out) — leading there hands them a ruff and any money that falls; (2) the
+    /// least live bankable money in the color (a money-DEAD color can't gift
+    /// anything); only THEN (3) the shortest suit (toward a void, as before) and
+    /// (4) the lowest rank. Needs counting inference for the money/void reads;
+    /// the lower tiers keep the naive `lowSafeLead`.
+    func safeExitLead(plays: [Card], hand: [Card], trump: CardColor,
+                      inference: TableInference) -> Card? {
+        let cands = plays.filter { !$0.isMoney && !$0.isSpecial
+                                && $0.effectiveColor(trump: trump) != trump }
+        guard !cands.isEmpty else { return nil }
+        var bySuit: [CardColor: Int] = [:]
+        for c in hand {
+            if case .colored(let col, _) = c, col != trump { bySuit[col, default: 0] += 1 }
+        }
+        let myTeam = Seats.team(of: inference.me)
+        var riskCache: [CardColor: (ruff: Int, money: Int)] = [:]
+        func risk(_ color: CardColor) -> (ruff: Int, money: Int) {
+            if let r = riskCache[color] { return r }
+            let ruff = Seats.all.contains {
+                $0 != inference.me && Seats.team(of: $0) != myTeam
+                    && inference.isKnownVoid($0, in: color)
+            } ? 1 : 0
+            let r = (ruff: ruff, money: inference.outstandingMoney(in: color))
+            riskCache[color] = r
+            return r
+        }
+        return cands.min { a, b in
+            let ca = a.suitColorOrNil ?? trump
+            let cb = b.suitColorOrNil ?? trump
+            let ra = risk(ca), rb = risk(cb)
+            if ra.ruff != rb.ruff { return ra.ruff < rb.ruff }     // avoid ruffable colors
+            if ra.money != rb.money { return ra.money < rb.money }  // less live money
+            let la = bySuit[ca] ?? 99, lb = bySuit[cb] ?? 99
+            if la != lb { return la < lb }                          // shorter suit (toward void)
+            return rankOf(a) < rankOf(b)                            // lowest rank
+        }
+    }
+
+    /// When forced to surrender the lead, a trump I hold that COMMANDS the trick
+    /// right now (the Tiger, or a boss trump no loose trump beats) — leading it
+    /// wins a guaranteed trick and KEEPS the lead instead of feeding an
+    /// opponent's ruff (Hand-1-t7: holding the Tiger but donating a low card into
+    /// a $70k ruff). Prefers the lowest non-special commander so the Tiger stays
+    /// in reserve; only the Tiger if it's the sole commander. nil when no trump
+    /// of mine commands. Safe even for a defender: leading trump normally helps
+    /// the declarer, but here I hold the controlling trump, so I win the round.
+    func keepLeadTrumpLead(plays: [Card], trump: CardColor,
+                           inference: TableInference) -> Card? {
+        let commanders = plays.filter {
+            $0.effectiveColor(trump: trump) == trump && inference.iControlColor($0)
+        }
+        guard !commanders.isEmpty else { return nil }
+        if let lowBoss = commanders.filter({ !$0.isSpecial })
+            .min(by: { rankOf($0) < rankOf($1) }) {
+            return lowBoss
+        }
+        return commanders.min(by: { rankOf($0) < rankOf($1) })   // the Tiger alone
+    }
+
+    /// Defender's forcing surrender (principle 3): a worthless low card in a
+    /// side color a NON-partner seat is known void in, so they must ruff (burn a
+    /// trump) or let it run to my partner. Gated to LOW outstanding money in the
+    /// color (`forceRuffMoneyCap`) so the forced ruff costs them a trump, not us
+    /// a bank — the opposite of Hand-1-t7, where leading a void color full of
+    /// money let the ruffer bank $70k. nil when no such low-money void exists.
+    func forceRuffLead(plays: [Card], trump: CardColor,
+                       inference: TableInference) -> Card? {
+        let myTeam = Seats.team(of: inference.me)
+        func oppVoid(_ color: CardColor) -> Bool {
+            Seats.all.contains {
+                $0 != inference.me && Seats.team(of: $0) != myTeam
+                    && inference.isKnownVoid($0, in: color)
+            }
+        }
+        let targets = plays.filter { c in
+            guard !c.isMoney, !c.isSpecial,
+                  let color = c.effectiveColor(trump: trump), color != trump
+            else { return false }
+            return oppVoid(color) && inference.outstandingMoney(in: color) <= forceRuffMoneyCap
+        }
+        return targets.min { a, b in
+            let ma = inference.outstandingMoney(in: a.effectiveColor(trump: trump) ?? trump)
+            let mb = inference.outstandingMoney(in: b.effectiveColor(trump: trump) ?? trump)
+            if ma != mb { return ma < mb }
+            return rankOf(a) < rankOf(b)
+        }
+    }
+
+    /// Cap on a color's live money for `forceRuffLead`: above this, forcing the
+    /// ruff would hand the ruffer a bank, so we don't.
+    var forceRuffMoneyCap: Int { 10_000 }
 
     // ---- Follow shortlist
 

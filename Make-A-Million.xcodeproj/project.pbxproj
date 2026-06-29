@@ -421,7 +421,6 @@
 				CURRENT_PROJECT_VERSION = 52;
 				DEVELOPMENT_TEAM = 5WMPJUQY8F;
 				ENABLE_PREVIEWS = YES;
-				VERSIONING_SYSTEM = "apple-generic";
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "Make-A-Million/Info.plist";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Make-A-Million uses your local network to find nearby players.";
@@ -435,7 +434,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.10.0;
+				MARKETING_VERSION = 0.11.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "com.truebluedev.Make-A-Million";
 				PRODUCT_NAME = "Make-A-Million Mobile";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -445,6 +444,7 @@
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
+				VERSIONING_SYSTEM = "apple-generic";
 			};
 			name = Debug;
 		};
@@ -458,7 +458,6 @@
 				CURRENT_PROJECT_VERSION = 52;
 				DEVELOPMENT_TEAM = 5WMPJUQY8F;
 				ENABLE_PREVIEWS = YES;
-				VERSIONING_SYSTEM = "apple-generic";
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "Make-A-Million/Info.plist";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Make-A-Million uses your local network to find nearby players.";
@@ -472,7 +471,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.10.0;
+				MARKETING_VERSION = 0.11.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "com.truebluedev.Make-A-Million";
 				PRODUCT_NAME = "Make-A-Million Mobile";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -482,6 +481,7 @@
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
+				VERSIONING_SYSTEM = "apple-generic";
 			};
 			name = Release;
 		};

@@ -305,6 +305,38 @@ extension MonteCarloAgent {
         /// `testSelfPlayBidAggressionDrop`.
         var bidRolloutDropAggression: Bool = true
 
+        /// Staying-power discipline for LEAD bids. When our team does NOT hold the
+        /// high bid and BOTH our partner and an opponent are still live to act, a
+        /// marginal bid we'd abandon at the opponents' very next raise only
+        /// misleads the partner into deferring — and a pass is PERMANENT
+        /// (`GameEngine.applyBid` / `advanceBidder` skip passed seats forever) —
+        /// before we fold and hand the opponents a cheap contract. In that window,
+        /// require the bidding ceiling to clear the cheapest legal bid by
+        /// `bidEntryMargin` (i.e. survive one opponent raise); otherwise pass and
+        /// let the live partner lead instead. OUTSIDE that window — partner already
+        /// passed (no one left to mislead), or all opponents out (our bid WINS) —
+        /// we bid the full ceiling unchanged: this is NOT global passivity, it is
+        /// "don't open the team's bidding on a hand you can't carry while your
+        /// partner can still take it." `Bidding.raiseIncrement` = survive exactly
+        /// one minimum raise; 0 disables. Targets the human-partner false-signal
+        /// pitfall, which is INVISIBLE to symmetric self-play (a bot partner does
+        /// not defer to a signal) — so read its flip-rate (`BidGateStats`), not
+        /// win-rate, when tuning. A/B `testSelfPlayBidEntryMargin`.
+        ///
+        /// MEASURED + KEPT ON (June 28 2026, all tiers, margin = raiseIncrement).
+        /// Paired 60 / baseSeed 1, Normal: control (gate-off both) challenger 57%
+        /// (= seat noise, identical profiles) set 24/29 → treatment (gate-on vs
+        /// gate-off) 48%, bid-share 52%→51%, set-rate 24% vs 23%. Flip-rate
+        /// 60/530 = 11% of in-window lead bids passed. The win-rate dip is
+        /// noise-band (−9pp ≈ 1.4σ at N=60) AND the expected signature: a
+        /// partner-deference fix has NO upside in symmetric self-play and a tiny
+        /// concession cost, so neutral-to-slightly-negative is the PASS read. The
+        /// reads that matter are healthy: flip-rate low (not over-passing),
+        /// bid-share −1pp (it DELEGATES thin leads to the partner, doesn't abandon
+        /// auctions), set-rate flat (no bidding-quality harm). Real validation is
+        /// the handlog / human-partner loop, not the arena.
+        var bidEntryMargin: Int = Bidding.raiseIncrement
+
         /// A/B-gated research levers — default-off experiments that no shipped
         /// tier sets. Walled off here so the production fields above are exactly
         /// the knobs the strength ladder tunes. Access as

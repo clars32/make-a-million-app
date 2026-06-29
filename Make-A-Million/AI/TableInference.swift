@@ -285,6 +285,14 @@ struct TableInference {
                         < rankValueForColorWin($1, color: color) }
     }
 
+    /// Total money still out in a color: the moneyValue of every card of that
+    /// color not in my hand and not yet played/discarded (i.e. in another hand
+    /// or the widow). The bankable swing if this color is led — used by the
+    /// money-aware safe exit to avoid bleeding a low lead into live money.
+    func outstandingMoney(in color: CardColor) -> Int {
+        (stillOut[color] ?? []).reduce(0) { $0 + $1.moneyValue }
+    }
+
     /// True if my card is the highest of its color anyone might still play.
     /// "Of its color" follows the trick-resolution rules — Tiger counts
     /// as trump, Bull/Bear can never win.
