@@ -61,6 +61,11 @@ enum Changelog {
     /// history to user-facing changes.
     static let releases: [ReleaseNote] = [
         ReleaseNote(
+            seq: 13, version: "0.11.1",
+            date: "Jun 29, 2026",
+            title: "Sharper AI bidding",
+            summary: "Skilled and Expert opponents now weigh the risk before stretching a bid — they stop over-valuing big hands and bidding into contracts they can't make, so they go set far less often."),
+        ReleaseNote(
             seq: 12, version: "0.11.0",
             date: "Jun 28, 2026",
             title: "Smarter AI opponents & partners",

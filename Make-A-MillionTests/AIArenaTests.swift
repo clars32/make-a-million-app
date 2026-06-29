@@ -153,6 +153,98 @@ final class AIArenaTests: XCTestCase {
         print(logs.joined(separator: "\n\n"))
     }
 
+    /// DIAGNOSIS (Item 2, June 29 2026): how much money does the expert lose to
+    /// an opponent's Bear, and how much is AVOIDABLE? For every completed trick,
+    /// detects a Bear played BY THE OPPOSING team against the would-be winner
+    /// (the seat that wins absent the Bear) and buckets the destroyed money:
+    ///   • forced  — the last trick (the Bear is squeezed out onto leftovers);
+    ///   • avoidable — a non-final trick where the victim committed money BEFORE
+    ///     the Bear dropped (split by whether they LED the money or follow-won);
+    ///   • exposed — Bear dropped before the victim's money.
+    ///
+    /// FINDING (June 29 2026): the candidate `.bearGuard` heuristics (follow:
+    /// win with junk under a live Bear; lead: skip money into a known void / bait
+    /// the Bear out of a cashed money trump) were implemented and A/B'd here with
+    /// the opponents held fixed (only the test team toggled). Result: NEUTRAL on
+    /// the provable-void trigger ($11.0k → $11.1k Beared against the test team),
+    /// and WORSE when broadened to "Bear loose + opponent behind" ($11.0k →
+    /// $13.4k, forced +$2.2k) — deferring/hoarding money to dodge a live Bear
+    /// just RELOCATES the loss to the forced endgame, where the single Bear
+    /// catches it anyway. The avoidable losses need the Bear-holder's void to be
+    /// PROVABLE at decision time (it isn't — the opponent reveals it by Bearing);
+    /// a probabilistic threat model over-fires. The structural endgame lever
+    /// (candidate fix 3, EndgameSolver gate) is an ADAPTIVE-stack feature and not
+    /// reachable from the Traditional ladder. PARKED — the heuristic approach
+    /// doesn't beat its metric. This instrument stays as the yardstick.
+    func testDiagnoseBearAgainstUs() async {
+        let difficulty = MonteCarloAgent.Difficulty.expert
+        let n = 120
+        var hands = 0
+        var totalBeared = 0, forced = 0, avoidable = 0, exposed = 0
+        var forcedN = 0, avoidableN = 0, exposedN = 0
+        var avoidLed = 0, avoidLedMoney = 0, avoidFollow = 0
+
+        for i in 0..<n {
+            let base = 500 + UInt64(i) * 9
+            let agents: [PlayerAgent] = (0..<4).map { s in
+                MonteCarloAgent(name: "P\(s)", difficulty: difficulty,
+                                seed: base + UInt64(s) + 1)
+            }
+            let runner = GameRunner(agents: agents)
+            guard let final = try? await runner.playHand(dealer: PlayerID(0),
+                                                         dealSeed: 1 + UInt64(i)),
+                  let trump = final.trump else { continue }
+            hands += 1
+            let lastIdx = final.completedTricks.count - 1
+
+            for (k, trick) in final.completedTricks.enumerated() {
+                guard let bear = trick.plays.first(where: { $0.card.isBear }) else { continue }
+                let raw = trick.plays.reduce(0) { $0 + $1.card.moneyValue }
+                guard raw > 0 else { continue }
+                let withoutBear = Trick(leader: trick.leader,
+                                        plays: trick.plays.filter { !$0.card.isBear })
+                guard let wouldWin = withoutBear.plays.isEmpty
+                        ? nil : GameState.trickWinner(withoutBear, trump: trump)
+                else { continue }
+                // A Bear played by the OTHER team against the would-be winner.
+                guard Seats.team(of: bear.player) != Seats.team(of: wouldWin) else { continue }
+                totalBeared += raw
+                let bearIdx = trick.plays.firstIndex { $0.card.isBear }!
+                let victimMoneyIdx = trick.plays.enumerated().first {
+                    $0.element.card.moneyValue > 0
+                        && Seats.team(of: $0.element.player) == Seats.team(of: wouldWin)
+                }?.offset
+                if k == lastIdx {
+                    forced += raw; forcedN += 1
+                } else if let vmi = victimMoneyIdx, bearIdx > vmi {
+                    avoidable += raw; avoidableN += 1
+                    let leader = trick.plays.first!
+                    if leader.player == wouldWin {
+                        avoidLed += raw
+                        if leader.card.moneyValue > 0 { avoidLedMoney += raw }
+                    } else {
+                        avoidFollow += raw
+                    }
+                } else {
+                    exposed += raw; exposedN += 1
+                }
+            }
+        }
+
+        func perHand(_ v: Int) -> String {
+            hands > 0 ? String(format: "$%.1fk", Double(v) / Double(hands) / 1000) : "—"
+        }
+        print("""
+        BEAR-AGAINST-US — expert self-play, \(hands) hands
+          total Beared against the winner : \(totalBeared / 1000)k  (\(perHand(totalBeared))/hand)
+          ⮑ FORCED  (last trick)          : \(forcedN) tricks, \(perHand(forced))/hand
+          ⮑ AVOIDABLE (money before Bear) : \(avoidableN) tricks, \(perHand(avoidable))/hand
+             ↳ victim LED the money       : \(perHand(avoidLed))/hand (money-lead \(perHand(avoidLedMoney))/hand)
+             ↳ victim FOLLOW-won w/ money  : \(perHand(avoidFollow))/hand
+          ⮑ EXPOSED (Bear before money)   : \(exposedN) tricks, \(perHand(exposed))/hand
+        """)
+    }
+
     /// Step 2. Small and quick — confirms the arena loop itself works and
     /// gives an early read before committing to the long run.
     func testArenaSmall() async {
@@ -459,6 +551,47 @@ final class AIArenaTests: XCTestCase {
         let r = await AIArena.runBidCalibration(deals: 60, difficulty: profile,
                                                 baseSeed: 11)
         print(r.summary)
+    }
+
+    /// DIAGNOSIS (Item 1, June 29 2026): the Traditional bidder over-values and
+    /// walks into sets (handlog 7 Hand 3: valued $344k, captured $195k, set).
+    /// This runs the opponent-free calibration on the SKILLED and EXPERT
+    /// Traditional profiles (scalar `expectedGross`, calibrated tables) and reads
+    /// the new "Make-at-estimate" line — the share of biddable hands that capture
+    /// their own valuation. <~85% confirms over-valuation. The defense here is MC
+    /// (weaker than the handlog's strong human), so a hot read here is a LOWER
+    /// bound on the real over-bidding.
+    func testBidCalibrationTraditionalExpert() async {
+        for (label, profile) in [("skilled", MonteCarloAgent.Difficulty.skilled),
+                                 ("expert", MonteCarloAgent.Difficulty.expert)] {
+            let r = await AIArena.runBidCalibration(deals: 80, difficulty: profile,
+                                                    baseSeed: 7)
+            print("=== \(label) ===\n" + r.summary)
+        }
+    }
+
+    /// Item-1 confirmation A/B: the set-risk haircut (challenger = expert with
+    /// the shipped 0.35 haircut) vs the same profile with the haircut OFF. Bid
+    /// aggression is win-rate-neutral (documented), so the read is the SET-RATE:
+    /// the challenger should go set LESS often without losing matches. ≥100
+    /// matches per the roadmap. Symmetric trick play (only the bid figure
+    /// differs), so this is a clean isolation of the lever.
+    func testSelfPlaySetRiskHaircut() async {
+        var noHaircut = MonteCarloAgent.Difficulty.expert
+        noHaircut.bidSetRiskHaircut = 0.0
+        let r = await AIArena.runSelfPlay(matches: 100, challenger: .expert,
+                                          champion: noHaircut, baseSeed: 1)
+        print("SET-RISK HAIRCUT (expert 0.35 vs 0.0):\n" + r.summary)
+    }
+
+    /// Item-1 coefficient picker: sweep set-risk haircut proxies × coefficients
+    /// over the expert forced-declarer population and print make-rate by band.
+    /// Choose the proxy/coefficient that lifts the high band toward ~85% with a
+    /// modest haircut on the (under-valued) low band.
+    func testBidHaircutSweep() async {
+        let s = await AIArena.runBidHaircutSweep(deals: 100,
+                                                 difficulty: .expert, baseSeed: 7)
+        print(s)
     }
 
     /// Distillation instrument: mines positions where PlayoutPolicy's move

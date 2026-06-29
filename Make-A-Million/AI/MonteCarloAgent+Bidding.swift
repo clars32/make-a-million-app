@@ -47,9 +47,21 @@ extension MonteCarloAgent {
         // make-probability quantile of rolled-out captured gross — "the contract
         // I make at least p of the time" — instead of the mean `expectedGross`,
         // so set risk is priced directly.
+        //
+        // The SCALAR bidder (no rollout) instead prices set risk with the
+        // legible set-risk haircut: shave `bidSetRiskHaircut` of the valuation's
+        // excess over the opening floor (the speculative projection a strong
+        // defender beats). The cut is always < the excess, so a biddable hand
+        // stays biddable — it only lowers how far above the floor we'll go.
+        let scalarGross: Int = {
+            let mean = valuation.expectedGross
+            guard difficulty.bidSetRiskHaircut > 0 else { return mean }
+            let excess = max(0, mean - Bidding.openingMinimum)
+            return mean - Int(difficulty.bidSetRiskHaircut * Double(excess))
+        }()
         let decisionGross = difficulty.rolloutBidEval
             ? safeContractEstimate(view: view, fallback: valuation.expectedGross)
-            : valuation.expectedGross
+            : scalarGross
         let rawGross = Double(decisionGross)
 
         // The aggression multiplier is a heuristic stretch over the MEAN
@@ -180,6 +192,9 @@ extension MonteCarloAgent {
                 notes.append("rollout bid: P(make)=\(Int(difficulty.bidMakeProbability * 100))% "
                              + "contract $\(decisionGross / 1000)k "
                              + "(mean valuation $\(valuation.expectedGross / 1000)k)")
+            } else if difficulty.bidSetRiskHaircut > 0 {
+                notes.append("set-risk haircut \(Int(difficulty.bidSetRiskHaircut * 100))% of excess: "
+                             + "$\(valuation.expectedGross / 1000)k → $\(decisionGross / 1000)k")
             }
             AIDecisionTrace.shared.record(.init(
                 seat: view.me, chosen: chosenText,

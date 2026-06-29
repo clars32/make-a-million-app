@@ -270,6 +270,16 @@ enum AIArena {
         // Among hands the evaluator scored BELOW the floor (would have passed):
         let belowFloorCount: Int
         let belowFloorMadeFloor: Int   // …of those, how many actually made it
+        // SET-RISK read (Item 1): among hands the evaluator WOULD bid (est ≥
+        // floor — its biddable population), how often does the realized gross
+        // reach the evaluator's OWN estimate? That is the make-rate the AI
+        // implicitly promises itself when it commits to its valuation; below
+        // ~85% means the scalar over-values and walks into sets. The contract
+        // level doesn't change play, so this reuses the same playout — no extra
+        // cost. Rounded down to the nearest legal bid increment so it mirrors a
+        // real declared contract.
+        let biddableCount: Int         // est ≥ floor
+        let biddableMadeEstimate: Int  // …of those, realized ≥ est
 
         // 3-bucket calibration curve, keyed by estimate band.
         let buckets: [(label: String, n: Int, est: Double, real: Double, madeRate: Double)]
@@ -280,6 +290,7 @@ enum AIArena {
               Avg estimate / realized : \(money(avgEstimate)) / \(money(avgRealized))
               Realized − estimate     : \(signedMoney(realizedMinusEstimate))  (\(bias))
               Floor make-rate (all)   : \(pct(rate(madeFloor, hands)))
+              Make-at-estimate (Item 1): \(makeAtEstimateText)
               Passed-but-makeable     : \(belowFloorMadeFloor)/\(belowFloorCount) hands the evaluator
                                         scored below \(money(Double(Bidding.openingMinimum))) still made the floor (\(pct(rate(belowFloorMadeFloor, belowFloorCount))))
             CALIBRATION CURVE (estimate band → realized):
@@ -290,6 +301,12 @@ enum AIArena {
             }
             t += "\nVERDICT: \(verdict)"
             return t
+        }
+        /// "X/Y (Z%) of biddable hands made their own valuation" — the Item-1
+        /// set-risk read. Target ~85%; lower = the scalar over-values.
+        private var makeAtEstimateText: String {
+            "\(biddableMadeEstimate)/\(biddableCount) made their own valuation "
+                + "(\(pct(rate(biddableMadeEstimate, biddableCount))) — target ~85%)"
         }
         private var bias: String {
             switch realizedMinusEstimate {
@@ -329,6 +346,7 @@ enum AIArena {
         var sumEst = 0.0, sumReal = 0.0
         var madeFloor = 0
         var belowCount = 0, belowMade = 0
+        var biddable = 0, biddableMade = 0
         // Buckets: [<floor, floor..<225k, >=225k]
         var bN = [0, 0, 0], bEst = [0.0, 0.0, 0.0], bReal = [0.0, 0.0, 0.0], bMade = [0, 0, 0]
         let floor = Bidding.openingMinimum
@@ -362,6 +380,12 @@ enum AIArena {
                 if est < floor {
                     belowCount += 1
                     if made { belowMade += 1 }
+                } else {
+                    // Biddable hand: would it make its OWN valuation (rounded to
+                    // the nearest legal bid increment, mirroring a real contract)?
+                    biddable += 1
+                    let ownContract = (est / Bidding.bidIncrement) * Bidding.bidIncrement
+                    if realized >= ownContract { biddableMade += 1 }
                 }
                 let b = est < floor ? 0 : (est < 225_000 ? 1 : 2)
                 bN[b] += 1; bEst[b] += Double(est); bReal[b] += Double(realized)
@@ -385,7 +409,125 @@ enum AIArena {
             madeFloor: madeFloor,
             belowFloorCount: belowCount,
             belowFloorMadeFloor: belowMade,
+            biddableCount: biddable,
+            biddableMadeEstimate: biddableMade,
             buckets: buckets)
+    }
+
+    // MARK: - Set-risk haircut sweep (Item 1)
+    //
+    // `runBidCalibration` showed the scalar evaluator is MEAN-calibrated but
+    // makes its own valuation only ~52% of the time, with a REGRESSIVE bias:
+    // the high estimates over-predict (they walk into sets), the low estimates
+    // under-predict. A flat discount would worsen the low tail; the fix must
+    // bite the VARIANCE-EXPOSED gross (off-suit money that must win a contested
+    // trick + the single biggest Bear-able trick), which concentrates in the
+    // high estimates. This instrument records (estimate, exposure proxies,
+    // realized) from ONE forced-declarer playout pass, then ANALYTICALLY sweeps
+    // candidate haircut coefficients over the SAME data (the contract level
+    // doesn't change play, so no re-simulation is needed) — printing the
+    // resulting make-rate by estimate band so the coefficient can be chosen to
+    // land the high band near ~85% without crushing the (under-valued) low band.
+
+    nonisolated struct HaircutObs {
+        let est: Int
+        let offSuitMoney: Int     // contested non-trump money (breakdown)
+        let bearExposure: Int     // biggest single money trick a loose Bear could zero
+        let realized: Int
+    }
+
+    /// Returns one observation per biddable (est ≥ floor) forced-declarer hand.
+    static func collectHaircutObs(deals: Int,
+                                  difficulty: MonteCarloAgent.Difficulty,
+                                  baseSeed: UInt64) async -> [HaircutObs] {
+        var obs: [HaircutObs] = []
+        let floor = Bidding.openingMinimum
+        for d in 0..<deals {
+            let seed = baseSeed &+ UInt64(d) &* 2_654_435_761
+            let deal = GameState.newHand(dealer: PlayerID(0), seed: seed,
+                                         misdealRule: .disabled)
+            for seat in Seats.all {
+                let view = deal.view(for: seat)
+                let val = HandEvaluator.bestValuation(view: view, hand: view.myHand,
+                                                      tables: difficulty.evaluatorTables)
+                guard val.expectedGross >= floor else { continue }
+                let bd = HandEvaluator.breakdown(view: view, hand: view.myHand,
+                                                 trump: val.bestTrump,
+                                                 tables: difficulty.evaluatorTables)
+                // Bear exposure: if I don't hold the Bear, an opponent does, and
+                // my single biggest money card (above a $15k floor) is the trick
+                // it can zero — matches HandEvaluator.setRiskExposure.
+                let holdBear = view.myHand.contains { $0.isBear }
+                let biggestMoney = view.myHand.filter { $0.moneyValue > 0 }
+                    .map { $0.moneyValue }.max() ?? 0
+                let bearExposure = holdBear ? 0 : max(0, biggestMoney - 15_000)
+                let agents: [PlayerAgent] = Seats.all.map {
+                    MonteCarloAgent(name: "MC\($0.raw)", difficulty: difficulty,
+                                    seed: seed &+ UInt64($0.raw) &* 97 &+ 7)
+                }
+                guard let final = await playOutAsDeclarer(
+                    deal: deal, declarer: seat, contract: floor, agents: agents),
+                      let realized = final.debugReveal()?.bidTeamGross
+                else { continue }
+                obs.append(.init(est: val.expectedGross, offSuitMoney: bd.offSuitMoney,
+                                 bearExposure: bearExposure, realized: realized))
+            }
+        }
+        return obs
+    }
+
+    /// Print make-rate-by-band for a grid of haircut coefficients over three
+    /// candidate exposure proxies. Not pass/fail; the coefficient picker.
+    static func runBidHaircutSweep(deals: Int,
+                                   difficulty: MonteCarloAgent.Difficulty,
+                                   baseSeed: UInt64 = 7) async -> String {
+        let obs = await collectHaircutObs(deals: deals, difficulty: difficulty,
+                                          baseSeed: baseSeed)
+        guard !obs.isEmpty else { return "no biddable hands" }
+        let inc = Bidding.bidIncrement
+        func bandRate(_ sel: [HaircutObs], _ haircut: (HaircutObs) -> Int) -> (Double, Double) {
+            guard !sel.isEmpty else { return (0, 0) }
+            var made = 0; var sumCut = 0
+            for o in sel {
+                let cut = haircut(o)
+                let contract = ((o.est - cut) / inc) * inc
+                if o.realized >= contract { made += 1 }
+                sumCut += cut
+            }
+            return (Double(made) / Double(sel.count), Double(sumCut) / Double(sel.count))
+        }
+        let high = obs.filter { $0.est >= 225_000 }
+        let low  = obs.filter { $0.est < 225_000 }
+        func pct(_ d: Double) -> String { String(format: "%2.0f%%", d * 100) }
+        func k(_ d: Double) -> String { String(format: "$%3.0fk", d / 1000) }
+
+        var t = "HAIRCUT SWEEP — \(obs.count) biddable hands "
+              + "(\(high.count) high ≥225k, \(low.count) low)\n"
+        t += "baseline make-at-estimate: all "
+           + pct(bandRate(obs) { _ in 0 }.0)
+           + "  high " + pct(bandRate(high) { _ in 0 }.0)
+           + "  low " + pct(bandRate(low) { _ in 0 }.0) + "\n"
+
+        let proxies: [(String, (HaircutObs) -> Int)] = [
+            ("offSuit",          { $0.offSuitMoney }),
+            ("offSuit+bearExp",  { $0.offSuitMoney + $0.bearExposure }),
+            ("est−floor",        { max(0, $0.est - Bidding.openingMinimum) }),
+        ]
+        let coeffs = [0.15, 0.25, 0.35, 0.45, 0.55]
+        for (name, proxy) in proxies {
+            t += "\nproxy = \(name)\n"
+            t += "  coeff   all-make  high-make low-make  avgCut(high/low)\n"
+            for c in coeffs {
+                let h: (HaircutObs) -> Int = { Int(c * Double(proxy($0))) }
+                let all = bandRate(obs, h)
+                let hi = bandRate(high, h)
+                let lo = bandRate(low, h)
+                t += "  \(String(format: "%.2f", c))    "
+                   + " \(pct(all.0))      \(pct(hi.0))     \(pct(lo.0))    "
+                   + "\(k(hi.1)) / \(k(lo.1))\n"
+            }
+        }
+        return t
     }
 
     /// Build the post-bidding state with `declarer` holding the bid at

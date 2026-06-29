@@ -76,6 +76,22 @@ extension MonteCarloAgent {
         /// Multiplier on hand value when deciding how far to bid. <1 is
         /// cautious because a missed bid is set back in full.
         var bidAggression: Double
+        /// SET-RISK HAIRCUT (Item 1, June 29 2026) for the SCALAR bidder only.
+        /// The mean valuation is unbiased but REGRESSIVE — high estimates
+        /// over-predict and walk into sets (calibration: a hand makes its own
+        /// valuation only ~52% of the time, ~41% on the big ≥$225k hands). The
+        /// scalar bidder shaves this fraction of the valuation's EXCESS over the
+        /// opening floor — the part above a reliable opener is the speculative
+        /// projection (contested side money, length, voids) a strong defender
+        /// attacks. Two clean properties: it bites the over-valued high tail
+        /// hardest and, since the cut is always < the excess, it NEVER turns a
+        /// biddable hand into a pass (so it can't worsen the evaluator's known
+        /// conservatism on weak hands). 0 = off (novice/casual stay naive →
+        /// looser, more beatable; the Adaptive stack prices set-risk via
+        /// `rolloutBidEval` instead, so the haircut is suppressed there).
+        /// MEASURED (runBidHaircutSweep, expert, 348 hands): 0.35 lifts
+        /// make-at-estimate 41→65% on the high band, $9k cut on the low band.
+        var bidSetRiskHaircut: Double = 0.0
         /// How much the agent defers to a partner who already has the
         /// high bid. 1.0 = strongly defer (only override on monsters);
         /// 0.0 = ignore partner.
@@ -664,7 +680,9 @@ extension MonteCarloAgent {
                                                             plansAhead: true,
                                                             forkSamples: 12),
                                         samples: 16, blunderRate: 0.0,
-                                        bidAggression: 1.00, partnerRespect: 0.78,
+                                        bidAggression: 1.00,
+                                        bidSetRiskHaircut: 0.35,
+                                        partnerRespect: 0.78,
                                         matchAwareness: 1.0, trickCandidates: 5,
                                         bidLeanStrength: 1.0)
         /// `Expert` — the complete strong-human game: bear/Bull threats, void
@@ -676,7 +694,9 @@ extension MonteCarloAgent {
                                                             plansAhead: true,
                                                             forkSamples: 20),
                                         samples: 20, blunderRate: 0.0,
-                                        bidAggression: 1.05, partnerRespect: 0.68,
+                                        bidAggression: 1.05,
+                                        bidSetRiskHaircut: 0.35,
+                                        partnerRespect: 0.68,
                                         matchAwareness: 1.0, trickCandidates: 6,
                                         bidLeanStrength: 1.6)
 
