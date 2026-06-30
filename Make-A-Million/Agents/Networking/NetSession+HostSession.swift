@@ -98,6 +98,9 @@ extension NetSession {
     @MainActor
     func forwardHostHandFinished(_ final: GameState) {
         guard let gs = hostObservationToken?.session else { return }
+        // Feed the live multiplayer roster through so the hand log labels seats
+        // with real names/roles instead of the solo default.
+        gs.netSeatLabels = handLogSeatLabels()
         gs.finishHand(final)
     }
 }

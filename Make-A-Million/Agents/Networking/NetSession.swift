@@ -250,6 +250,10 @@ final class NetSession: ObservableObject, RemoteSeatDelegate {
         phase = .running
         // Clear the host board's end-of-hand state for the new deal.
         forwardHostHandStarting()
+        // Arm the AI decision trace for this hand, exactly as the solo flow does
+        // in GameSession.runHand. The engine lives here in multiplayer, so this
+        // is the only place the bots' reasoning gets captured for the hand log.
+        AIDecisionTrace.shared.beginHand(enabled: GameSettings.shared.logHandsToFile)
 
         let dealer = currentDealer
         let carry = carryScore
@@ -559,6 +563,25 @@ final class NetSession: ObservableObject, RemoteSeatDelegate {
 
     private func seatNamesArray() -> [String] {
         Seats.all.map { assignments[$0]?.name ?? defaultBotName(for: $0) }
+    }
+
+    /// Per-seat labels for the full-information hand log: the seat plus the
+    /// occupant's name and whether a human or a bot sat there. Built from the
+    /// live roster so a multiplayer log reads truthfully, instead of the solo
+    /// default ("West (AI)" etc.) which would mislabel remote players.
+    func handLogSeatLabels() -> [String] {
+        let seatNames = ["South", "West", "North", "East"]
+        return Seats.all.map { seat in
+            let a = assignments[seat]
+            let name = a?.name ?? defaultBotName(for: seat)
+            let role: String
+            switch a?.kind {
+            case .host:          role = "human · host"
+            case .remote:        role = "human"
+            case .bot, .none:    role = "AI"
+            }
+            return "\(seatNames[seat.raw]) — \(name) (\(role))"
+        }
     }
 
     private var isTabletopHost: Bool {

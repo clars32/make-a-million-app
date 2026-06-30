@@ -63,6 +63,7 @@ final class HumanAgent: ObservableObject, PlayerAgent {
     private func beginHumanTurn(with view: PlayerView) async {
         await coordinator?.drainBeforeHumanTurn()
         present(view)
+        Haptics.yourTurn()
         coordinator?.humanTurnDidBegin()
     }
 

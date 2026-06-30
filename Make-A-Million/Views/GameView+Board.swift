@@ -275,20 +275,8 @@ extension GameBody {
     }
 
     func bidBadge(bidder: PlayerID, amount: Int, layout: GameBodyLayout? = nil) -> some View {
-        let resolved = resolvedLayout(layout)
-        return HStack(spacing: resolved.isTablet ? 7 : 4) {
-            Image(systemName: "crown.fill")
-                .font(resolved.isTablet ? .subheadline : .caption2)
-                .foregroundStyle(TableStyle.tableGold)
-            Text("\(seatShort(bidder)) $\(amount / 1000)k")
-                .font(TableTypography.display(resolved.isTablet ? .headline : (resolved.isPhoneLandscape ? .caption2 : .caption), weight: .bold))
-                .foregroundStyle(.white)
-                .lineLimit(1).minimumScaleFactor(0.75)
-        }
-        .padding(.horizontal, resolved.isTablet ? 14 : (resolved.isPhoneLandscape ? 7 : 9))
-        .padding(.vertical, resolved.isTablet ? 7 : (resolved.isPhoneLandscape ? 3 : 4))
-        .background(Capsule().fill(TableStyle.tableGold.opacity(0.18)))
-        .overlay(Capsule().stroke(TableStyle.tableGold.opacity(0.58), lineWidth: 1))
+        BidBadge(bidder: bidder, amount: amount, seatShort: seatShort,
+                 layout: resolvedLayout(layout))
     }
 
     // MARK: Board (opponent seats + center trick)
@@ -300,6 +288,10 @@ extension GameBody {
                            layout: GameBodyLayout? = nil) -> some View {
         let resolved = resolvedLayout(layout)
         let metrics = soloBoardMetrics(layout: resolved)
+        // Outside trick play the center is empty, so tuck the seat chips inward
+        // to stop the top/bottom chips overflowing the board frame (and the bid
+        // strip above it). Trick play pushes them back out to clear the cards.
+        let seatsPulledIn = table.phase != .trickPlay
         return ZStack {
             ZStack {
                 CenterTrickView(
@@ -325,22 +317,41 @@ extension GameBody {
 
             // All four seats are marked, relative to the local player: bottom
             // (you), left, top (partner), right — mirroring the tabletop board.
-            seatChip(relativeSeat(2, from: table.me), table, layout: resolved)
-                .offset(seatChipOffset(direction: 2, layout: resolved))
-            seatChip(table.me, table, layout: resolved)
-                .offset(seatChipOffset(direction: 0, layout: resolved))
-            seatChip(relativeSeat(1, from: table.me), table, layout: resolved)
-                .offset(seatChipOffset(direction: 1, layout: resolved))
-            seatChip(relativeSeat(3, from: table.me), table, layout: resolved)
-                .offset(seatChipOffset(direction: 3, layout: resolved))
+            seatChip(relativeSeat(2, from: table.me), table, direction: 2, layout: resolved)
+                .offset(seatChipOffset(direction: 2, layout: resolved, pulledIn: seatsPulledIn))
+            seatChip(table.me, table, direction: 0, layout: resolved)
+                .offset(seatChipOffset(direction: 0, layout: resolved, pulledIn: seatsPulledIn))
+            seatChip(relativeSeat(1, from: table.me), table, direction: 1, layout: resolved)
+                .offset(seatChipOffset(direction: 1, layout: resolved, pulledIn: seatsPulledIn))
+            seatChip(relativeSeat(3, from: table.me), table, direction: 3, layout: resolved)
+                .offset(seatChipOffset(direction: 3, layout: resolved, pulledIn: seatsPulledIn))
         }
         .frame(maxWidth: .infinity)
         .frame(height: soloBoardHeight(layout: resolved))
+        .animation(.spring(response: 0.36, dampingFraction: 0.86), value: seatsPulledIn)
     }
 
-    func seatChipOffset(direction: Int, layout: GameBodyLayout? = nil) -> CGSize {
+    /// Where a seat chip sits relative to the board center. The seats normally
+    /// sit far enough out to clear the played cards, but that pushes the top and
+    /// bottom chips past the board frame — and in the tight portrait layout the
+    /// overflow collides with the bid-history strip above when the bidding panel
+    /// pushes everything up. There are no center cards outside trick play, so
+    /// `pulledIn` tucks the chips back inside the frame during bidding and the
+    /// pre-trick phases, which removes the overlap without costing any height.
+    func seatChipOffset(direction: Int, layout: GameBodyLayout? = nil, pulledIn: Bool = false) -> CGSize {
         let resolved = resolvedLayout(layout)
-        let distance = soloBoardSeatDistance(layout: resolved)
+        let full = soloBoardSeatDistance(layout: resolved)
+        // Only the top/bottom chips overflow the bid strip / footer, so only they
+        // get tucked in — and just to the edge of the center circle, no further,
+        // or they'd sit on top of it. The side chips keep full distance, which
+        // already clears the circle (the width cap keeps them on-screen).
+        let isVertical = direction == 0 || direction == 2
+        let distance: CGFloat = {
+            guard pulledIn, isVertical else { return full }
+            let circleRadius = soloBoardMetrics(layout: resolved).circle / 2
+            let chipHalf: CGFloat = resolved.isTablet ? 34 : (resolved.isPhoneLandscape ? 22 : 28)
+            return min(full, circleRadius + chipHalf + 8)
+        }()
         switch direction {
         case 0: return CGSize(width: 0, height: distance)
         case 1: return CGSize(width: -distance, height: 0)
@@ -513,10 +524,33 @@ extension GameBody {
         }
     }
 
+    /// Largest a seat chip may grow, or nil to hug its content. Only the
+    /// left/right seats risk running off the screen edge — they sit `distance`
+    /// out from the board center, so a long name pushes the chip past the edge.
+    /// Cap those to the gap between that point and the edge. The top/bottom
+    /// seats sit on the vertical center line with the full width to use, so they
+    /// hug their content; a `.frame(maxWidth:)` there only stretched them wide.
+    func seatChipMaxWidth(direction: Int, layout: GameBodyLayout) -> CGFloat? {
+        guard direction == 1 || direction == 3 else { return nil }
+        switch layout.mode {
+        case .phonePortrait:
+            let gap = layout.viewport.width / 2 - soloBoardSeatDistance(layout: layout) - 4
+            return max(64, gap * 2)
+        case .tablet:
+            let gap = layout.viewport.width / 2 - soloBoardSeatDistance(layout: layout) - 8
+            return max(120, gap * 2)
+        case .phoneLandscape:
+            // The board sits in its own column with room to spare horizontally.
+            return 132
+        }
+    }
+
     @ViewBuilder
-    func seatChip(_ seat: PlayerID, _ table: PlayerView, layout: GameBodyLayout? = nil) -> some View {
+    func seatChip(_ seat: PlayerID, _ table: PlayerView, direction: Int, layout: GameBodyLayout? = nil) -> some View {
         let resolved = resolvedLayout(layout)
-        let chip = seatChipContent(seat, table, layout: resolved)
+        let chip = seatChipContent(seat, table,
+                                   maxWidth: seatChipMaxWidth(direction: direction, layout: resolved),
+                                   layout: resolved)
         if settings.showFullTrickHistory {
             Button {
                 toggleTrickHistorySeat(seat)
@@ -530,9 +564,12 @@ extension GameBody {
         }
     }
 
-    func seatChipContent(_ seat: PlayerID, _ table: PlayerView, layout: GameBodyLayout? = nil) -> some View {
+    func seatChipContent(_ seat: PlayerID, _ table: PlayerView, maxWidth: CGFloat? = nil, layout: GameBodyLayout? = nil) -> some View {
         let resolved = resolvedLayout(layout)
-        let toAct = table.toAct == seat && isLivePhase(table.phase)
+        // The highlight follows `displayedActiveSeat`, which trails `table.toAct`
+        // by a beat during bidding (see GameBody.syncActiveSeat).
+        let activeSeat = displayedActiveSeat ?? table.toAct
+        let toAct = activeSeat == seat && isLivePhase(table.phase)
         let selected = settings.showFullTrickHistory && selectedTrickHistorySeat == seat
         let tint = TableStyle.teamTint(Seats.team(of: seat))
         return VStack(spacing: resolved.isTablet ? 4 : 2) {
@@ -547,12 +584,16 @@ extension GameBody {
                 }
                 Text(seatName(seat))
                     .font(TableTypography.display(resolved.isTablet ? .title3 : (resolved.isPhoneLandscape ? .caption : .subheadline), weight: .bold))
-                    .foregroundStyle(.white).lineLimit(1)
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.5)
+                    .truncationMode(.tail)
             }
             seatSubtitle(seat, table, layout: resolved)
         }
         .padding(.horizontal, resolved.isTablet ? 20 : (resolved.isPhoneLandscape ? 9 : 12))
         .padding(.vertical, resolved.isTablet ? 10 : (resolved.isPhoneLandscape ? 4 : 6))
+        .frame(maxWidth: maxWidth)
         .background {
             Capsule()
                 .fill(.ultraThinMaterial)
@@ -618,10 +659,12 @@ extension GameBody {
                 Text("Passed")
                     .font(TableTypography.display(resolved.isTablet ? .callout : .caption2))
                     .foregroundStyle(.white.opacity(0.55))
+                    .lineLimit(1).minimumScaleFactor(0.6)
             } else if let last = table.bidHistory.last(where: { $0.player == seat }) {
                 Text(bidHistoryLabel(last.action))
                     .font(TableTypography.money(resolved.isTablet ? .callout : .caption2))
                     .foregroundStyle(.white)
+                    .lineLimit(1).minimumScaleFactor(0.6)
             } else {
                 Text("…")
                     .font(TableTypography.display(resolved.isTablet ? .callout : .caption2))
@@ -638,6 +681,7 @@ extension GameBody {
                 Text("\(tricks) trick\(tricks == 1 ? "" : "s")")
                     .font(TableTypography.display(resolved.isTablet ? .callout : .caption2))
                     .foregroundStyle(.white.opacity(0.85))
+                    .lineLimit(1).minimumScaleFactor(0.6)
             }
         }
     }
@@ -815,4 +859,65 @@ extension GameBody {
         TableFeltBackground()
     }
 
+}
+
+// MARK: - High-bid badge
+
+/// The "👑 SEAT $amount" high-bid badge. Splits the amount from the bidder so a
+/// new high bid reads in two beats — the amount rolls up first (numeric content
+/// transition), then the crown + seat label settle onto the new high bidder a
+/// fraction later — instead of both swapping at once, which was hard to follow.
+private struct BidBadge: View {
+    let bidder: PlayerID
+    let amount: Int
+    let seatShort: (PlayerID) -> String
+    let layout: GameBodyLayout
+
+    /// The bidder the label currently shows. Trails `bidder` by a beat.
+    @State private var shownBidder: PlayerID
+
+    init(bidder: PlayerID, amount: Int,
+         seatShort: @escaping (PlayerID) -> String,
+         layout: GameBodyLayout) {
+        self.bidder = bidder
+        self.amount = amount
+        self.seatShort = seatShort
+        self.layout = layout
+        _shownBidder = State(initialValue: bidder)
+    }
+
+    private var textFont: Font {
+        TableTypography.display(layout.isTablet ? .headline : (layout.isPhoneLandscape ? .caption2 : .caption), weight: .bold)
+    }
+
+    var body: some View {
+        HStack(spacing: layout.isTablet ? 7 : 4) {
+            Image(systemName: "crown.fill")
+                .font(layout.isTablet ? .subheadline : .caption2)
+                .foregroundStyle(TableStyle.tableGold)
+            Text(seatShort(shownBidder))
+                .font(textFont)
+                .foregroundStyle(.white)
+                .contentTransition(.opacity)
+                .lineLimit(1)
+            Text("$\(amount / 1000)k")
+                .font(textFont)
+                .foregroundStyle(.white)
+                .contentTransition(.numericText())
+                .lineLimit(1).minimumScaleFactor(0.75)
+        }
+        .padding(.horizontal, layout.isTablet ? 14 : (layout.isPhoneLandscape ? 7 : 9))
+        .padding(.vertical, layout.isTablet ? 7 : (layout.isPhoneLandscape ? 3 : 4))
+        .background(Capsule().fill(TableStyle.tableGold.opacity(0.18)))
+        .overlay(Capsule().stroke(TableStyle.tableGold.opacity(0.58), lineWidth: 1))
+        .animation(.easeOut(duration: 0.3), value: amount)
+        .onChange(of: bidder) { _, newBidder in
+            // Let the new amount land first, then move the crown to its bidder.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.26) {
+                withAnimation(.spring(response: 0.34, dampingFraction: 0.82)) {
+                    shownBidder = newBidder
+                }
+            }
+        }
+    }
 }

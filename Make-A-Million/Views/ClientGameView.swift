@@ -123,6 +123,7 @@ struct ClientGameView: View {
             // A client only owns its own display — difficulty and the table
             // rules live on the host device, so those sections are hidden.
             SettingsView(settings: .shared,
+                         displayLocked: true,
                          scope: .clientDisplay) {
                 showingSettings = false
             }
@@ -183,7 +184,7 @@ struct ClientGameView: View {
             submit: { move in session.submit(move) },
             dealAnother: nil,
             onCaptureLastView: { lastView = $0 })
-        .onAppear { setOrientation(.portrait) }
+        .onAppear { setOrientation(.allButUpsideDown) }
     }
 
     private var clientSeatNames: [String] {
@@ -541,7 +542,9 @@ struct ClientGameView: View {
     // MARK: - Orientation
 
     private func setOrientationForMode() {
-        setOrientation(session.isTabletopMode == true ? .landscape : .portrait)
+        // A tabletop client is the shared board (landscape only); a regular
+        // phone client may rotate freely, matching solo play.
+        setOrientation(session.isTabletopMode == true ? .landscape : .allButUpsideDown)
     }
 
     private func setOrientation(_ mask: UIInterfaceOrientationMask) {

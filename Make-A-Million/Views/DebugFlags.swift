@@ -351,6 +351,10 @@ struct SettingsView: View {
     /// True while a hand is in progress: rule controls are disabled, display
     /// controls remain live. The home-screen entry passes `false`.
     var rulesLocked: Bool = false
+    /// True in a networked game: the card-display toggles are frozen so the
+    /// table stays consistent for everyone for the duration of the match.
+    /// Solo play leaves them live.
+    var displayLocked: Bool = false
     var scope: Scope = .full
     /// Seed of the current hand, shown in the developer section when known.
     var dealSeed: UInt64? = nil
@@ -419,8 +423,13 @@ struct SettingsView: View {
         } header: {
             Text("Card display")
         } footer: {
-            Text("These change only what your table shows — they reveal no hidden information to the bots, and apply to the current hand immediately. Revealing hands after the hand shows cards that stay hidden in honest play.")
+            if displayLocked {
+                Text("Card-display options are locked during a multiplayer game so every player's table stays consistent. They're editable again in solo play.")
+            } else {
+                Text("These change only what your table shows — they reveal no hidden information to the bots, and apply to the current hand immediately. Revealing hands after the hand shows cards that stay hidden in honest play.")
+            }
         }
+        .disabled(displayLocked)
     }
 
     // MARK: Audiovisual

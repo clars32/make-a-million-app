@@ -281,6 +281,11 @@ struct GameBody: View {
     @State var showingDealAnimation: Bool = false
     @State var selectedTrickHistorySeat: PlayerID? = nil
     @State var boardHeaderCenterHeight: CGFloat = 0
+    /// The seat the turn-highlight is drawn on. Tracks `table.toAct`, but during
+    /// bidding it trails by a beat so a player's bid amount lands before the
+    /// highlight hops to the next seat (the round is easier to follow that way).
+    @State var displayedActiveSeat: PlayerID? = nil
+    @State private var activeSeatToken: Int = 0
 
     var teamAName: String {
         guard seatNames.count == 4 else { return "Team A" }
@@ -347,8 +352,12 @@ struct GameBody: View {
                 .onChange(of: dealAnimationToken(for: tableView)) { _, token in
                     startDealAnimationIfNeeded(token)
                 }
+                .onChange(of: tableView?.toAct) { _, _ in
+                    syncActiveSeat()
+                }
                 .onAppear {
                     startDealAnimationIfNeeded(dealAnimationToken(for: tableView))
+                    displayedActiveSeat = tableView?.toAct
                 }
             }
         }
@@ -360,6 +369,26 @@ struct GameBody: View {
             Text("Waiting for the table…")
                 .font(TableTypography.display(.callout))
                 .foregroundStyle(.white.opacity(0.8))
+        }
+    }
+
+    /// Move the turn-highlight to the seat now on the clock. During bidding we
+    /// hold a beat first, so the seat that just bid stays lit long enough for
+    /// the eye to register its amount before the highlight advances.
+    private func syncActiveSeat() {
+        let target = tableView?.toAct
+        let bidding = tableView?.phase == .bidding
+        activeSeatToken &+= 1
+        let token = activeSeatToken
+        if bidding && displayedActiveSeat != nil {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                guard token == activeSeatToken else { return }
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.82)) {
+                    displayedActiveSeat = target
+                }
+            }
+        } else {
+            displayedActiveSeat = target
         }
     }
 

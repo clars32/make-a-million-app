@@ -22,6 +22,7 @@ struct OnlineHostLobbyView: View {
     let onExit: () -> Void
 
     @ObservedObject private var gameCenter = GameCenterManager.shared
+    @ObservedObject private var settings = GameSettings.shared
     @StateObject private var host = GameCenterHost()
     @StateObject private var gameSession: GameSession
     @StateObject private var netSession: NetSession
@@ -87,14 +88,22 @@ struct OnlineHostLobbyView: View {
     }
 
     private var lobbyContent: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        // Header and Start button stay pinned; the table details scroll so the
+        // full lobby (invite + seats + bot difficulty) fits any screen.
+        VStack(spacing: 14) {
             header
-            statusPanel
-            if gameCenter.authState == .authenticated {
-                invitePanel
-                seatList
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    statusPanel
+                    if gameCenter.authState == .authenticated {
+                        invitePanel
+                        seatList
+                        BotDifficultyPicker(settings: settings)
+                    }
+                }
+                .padding(.bottom, 4)
             }
-            Spacer()
+            .scrollIndicators(.hidden)
             if gameCenter.authState == .authenticated {
                 startButton
             }

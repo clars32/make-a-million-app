@@ -61,6 +61,11 @@ enum Changelog {
     /// history to user-facing changes.
     static let releases: [ReleaseNote] = [
         ReleaseNote(
+            seq: 14, version: "0.11.2",
+            date: "Jun 29, 2026",
+            title: "Multiplayer upgrades & table polish",
+            summary: "Multiplayer now plays in landscape and lets the host pick bot difficulty, a crown marks who's winning each trick, and a gentle buzz signals when it's your turn — plus clearer end-of-hand score bars and a batch of table layout fixes."),
+        ReleaseNote(
             seq: 13, version: "0.11.1",
             date: "Jun 29, 2026",
             title: "Sharper AI bidding",

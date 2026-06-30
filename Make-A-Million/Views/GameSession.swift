@@ -131,6 +131,11 @@ final class GameSession: ObservableObject {
     /// frames by elapsed time rather than only when the next is buffered.
     private var lastPublishAt: ContinuousClock.Instant? = nil
 
+    /// Seat labels for the hand log. Solo leaves this nil (the fixed
+    /// "South (You · human)" / "West (AI)" layout is correct). The host wrapper
+    /// sets it from the live multiplayer roster so logged hands read truthfully.
+    var netSeatLabels: [String]? = nil
+
     init() {
         human = HumanAgent(name: "You")
         human.coordinator = self
@@ -561,7 +566,8 @@ final class GameSession: ObservableObject {
         // reveals hidden hands, so it's for tuning only. Rendered from the
         // final state (no engine plumbing, nothing leaks mid-hand).
         if GameSettings.shared.logHandsToFile, final.phase == .handComplete {
-            let labels = ["South (You · human)", "West (AI)", "North (AI)", "East (AI)"]
+            let labels = netSeatLabels
+                ?? ["South (You · human)", "West (AI)", "North (AI)", "East (AI)"]
             let log = HandLog.render(final, handIndex: Int(handIndex), seatLabels: labels,
                                      decisions: AIDecisionTrace.shared.snapshot())
             HandLog.append(log)

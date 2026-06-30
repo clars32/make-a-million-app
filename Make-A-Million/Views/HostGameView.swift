@@ -90,11 +90,22 @@ struct HostGameView: View {
             // display toggles stay live.
             SettingsView(settings: .shared,
                          rulesLocked: netSession.phase.isMidHand,
+                         displayLocked: true,
                          dealSeed: netSession.currentHandSeed) {
                 showingSettings = false
             }
         }
-        .onAppear { BackgroundMusicPlayer.shared.setGameActive(true) }
+        .onAppear {
+            BackgroundMusicPlayer.shared.setGameActive(true)
+            #if canImport(UIKit)
+            // The board is the same landscape-aware layout solo uses, so let
+            // the host rotate freely too. The lobby relocks portrait on exit.
+            OrientationLock.shared.lock(.allButUpsideDown)
+            #endif
+        }
+        #if canImport(UIKit)
+        .onDisappear { OrientationLock.shared.lock(.portrait) }
+        #endif
     }
 
     private func pausedOverlay(reason: PauseReason) -> some View {

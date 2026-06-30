@@ -82,6 +82,15 @@ struct CenterTrickView: View {
     private var plays: [PlayedCard] { currentTrick?.plays ?? [] }
     private var lastTrick: CompletedTrickInfo? { completedTricks.last }
 
+    /// The seat whose card is currently leading the in-progress trick — the one
+    /// that would take it if play stopped now. Drives the small crown marker so
+    /// you can read who's ahead without re-evaluating four cards by eye. Nil
+    /// when no card is down or trump isn't named yet.
+    private var currentWinner: PlayerID? {
+        guard let trick = currentTrick, !trick.plays.isEmpty, let trump else { return nil }
+        return GameState.trickWinner(trick, trump: trump)
+    }
+
     var body: some View {
         let idle = plays.isEmpty && sweep == nil
         return ZStack {
@@ -159,19 +168,39 @@ struct CenterTrickView: View {
     @ViewBuilder
     private func trickCard(_ play: PlayedCard) -> some View {
         if let ns = cardNS, play.player == viewer {
-            cardFace(play.card)
+            cardFace(play.card, winning: play.player == currentWinner)
                 .offset(centerOffset(for: play.player))
                 .matchedGeometryEffect(id: cardKey(play.card), in: ns)
         } else {
-            cardFace(play.card)
+            cardFace(play.card, winning: play.player == currentWinner)
                 .offset(centerOffset(for: play.player))
                 .transition(flyIn(for: play.player))
         }
     }
 
-    private func cardFace(_ card: Card) -> some View {
+    private func cardFace(_ card: Card, winning: Bool = false) -> some View {
         CardFace(card: card, width: metrics.cardW, height: metrics.cardH)
             .shadow(color: .black.opacity(0.24), radius: 7, y: 5)
+            .overlay(alignment: .topTrailing) {
+                if winning { winnerCrown }
+            }
+    }
+
+    /// Crown peeking off the top-trailing corner of the card that's currently
+    /// taking the trick. Corner placement keeps it clear of the center "Led"
+    /// dot, and the gold matches the high-bidder crown elsewhere on the table.
+    private var winnerCrown: some View {
+        let size = metrics.cardW * 0.30
+        return Image(systemName: "crown.fill")
+            .font(.system(size: size * 0.62, weight: .bold))
+            .foregroundStyle(TableStyle.tableGold)
+            .frame(width: size, height: size)
+            .background(Circle().fill(.black.opacity(0.6)))
+            .overlay(Circle().stroke(TableStyle.tableGold.opacity(0.9), lineWidth: 1.5))
+            .shadow(color: .black.opacity(0.4), radius: 3, y: 1)
+            .offset(x: size * 0.38, y: -size * 0.38)
+            .transition(.scale.combined(with: .opacity))
+            .accessibilityLabel("Currently winning the trick")
     }
 
     /// Animate the four just-played cards toward the winner, then clear.

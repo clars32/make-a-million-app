@@ -37,7 +37,7 @@ struct HandCompleteScorecard: View {
     var body: some View {
         GeometryReader { proxy in
             ScrollView {
-                scorecardContent
+                scorecardContent(in: proxy.size)
                     .frame(maxWidth: .infinity)
                     .frame(minHeight: proxy.size.height, alignment: .center)
             }
@@ -48,20 +48,43 @@ struct HandCompleteScorecard: View {
         .onAppear(perform: playEntrance)
     }
 
-    private var scorecardContent: some View {
-        VStack(spacing: isTabletLayout ? 18 : 13) {
+    /// Landscape with room to spare gets a two-column body so the recap fits
+    /// the short height without a long scroll: the hero spans the top, the
+    /// scoreboard + auction sit on the left, and the (tall) hand reveal moves
+    /// to the right. Portrait keeps the single stacked column.
+    private func scorecardContent(in size: CGSize) -> some View {
+        let wide = size.width > size.height && size.width >= 640
+        let maxW: CGFloat = wide
+            ? min(size.width - 40, isTabletLayout ? 900 : 720)
+            : panelWidth
+
+        return VStack(spacing: isTabletLayout ? 18 : 13) {
             heroSection
-            scoreboardSection
-            if !snapshot.bidHistory.isEmpty {
-                bidHistoryPanel
-            }
-            if showsDebugReveal {
-                HandRevealPanel(reveal: snapshot.debugReveal)
+            if wide && showsDebugReveal {
+                HStack(alignment: .top, spacing: isTabletLayout ? 18 : 14) {
+                    VStack(spacing: isTabletLayout ? 18 : 13) {
+                        scoreboardSection
+                        if !snapshot.bidHistory.isEmpty {
+                            bidHistoryPanel
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .top)
+                    HandRevealPanel(reveal: snapshot.debugReveal)
+                        .frame(maxWidth: .infinity, alignment: .top)
+                }
+            } else {
+                scoreboardSection
+                if !snapshot.bidHistory.isEmpty {
+                    bidHistoryPanel
+                }
+                if showsDebugReveal {
+                    HandRevealPanel(reveal: snapshot.debugReveal)
+                }
             }
             actionButton
         }
         .padding(isTabletLayout ? 24 : 16)
-        .frame(maxWidth: panelWidth)
+        .frame(maxWidth: maxW)
         .tablePanel(cornerRadius: isTabletLayout ? 24 : 18, shadowOpacity: 0.32)
         .padding(.vertical, isTabletLayout ? 18 : 10)
         .padding(.horizontal, isTabletLayout ? 18 : 10)
@@ -262,18 +285,36 @@ struct HandCompleteScorecard: View {
                 }
             }
 
+            // Progress toward $1M, with this hand's movement called out: the
+            // solid team-colour fill is the score carried INTO the hand, and
+            // the bright cap is what was won (green) or lost (amber) — with a
+            // tick marking where the team stood before the hand.
             GeometryReader { proxy in
+                let w = proxy.size.width
+                let lo = min(previousProgress, finalProgress)
+                let hi = max(previousProgress, finalProgress)
+                let gained = finalProgress >= previousProgress
+                let deltaTint = gained ? TableStyle.cardPlayable : TableStyle.teamAmber
                 ZStack(alignment: .leading) {
                     Capsule().fill(.white.opacity(0.14))
                     Capsule()
-                        .fill(tint.opacity(0.26))
-                        .frame(width: proxy.size.width * previousProgress)
-                    Capsule()
                         .fill(tint)
-                        .frame(width: proxy.size.width * finalProgress)
+                        .frame(width: max(0, w * lo))
+                    if hi - lo > 0.0008 {
+                        Capsule()
+                            .fill(deltaTint)
+                            .frame(width: w * (hi - lo))
+                            .offset(x: w * lo)
+                            .shadow(color: deltaTint.opacity(0.55), radius: 3)
+                        Capsule()
+                            .fill(.white.opacity(0.9))
+                            .frame(width: 2)
+                            .offset(x: w * previousProgress - 1)
+                    }
                 }
             }
-            .frame(height: isTabletLayout ? 8 : 6)
+            .frame(height: isTabletLayout ? 10 : 8)
+            .animation(.easeOut(duration: 0.5), value: finalProgress)
         }
         .padding(.vertical, isTabletLayout ? 4 : 2)
     }

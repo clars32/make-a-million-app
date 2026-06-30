@@ -85,6 +85,7 @@ private struct HostLobbyCore: View {
     @StateObject private var multipeer: MultipeerHost
     @StateObject private var gameSession = GameSession()
     @StateObject private var netSession: NetSession
+    @ObservedObject private var settings = GameSettings.shared
 
     @State private var didStartHand: Bool = false
     @State private var dealSeed: UInt64 = .random(in: .min ... .max)
@@ -182,13 +183,21 @@ private struct HostLobbyCore: View {
     }
 
     private var lobbyContent: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        // Header and the Start button stay pinned; the table details scroll so
+        // the whole lobby (seat list + bot difficulty) fits any screen size.
+        VStack(spacing: 14) {
             header
-            modeSummary
-            advertisingStatus
-            seatPreview
-            seatList
-            Spacer()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    modeSummary
+                    advertisingStatus
+                    seatPreview
+                    seatList
+                    BotDifficultyPicker(settings: settings)
+                }
+                .padding(.bottom, 4)
+            }
+            .scrollIndicators(.hidden)
             startButton
         }
         .padding()

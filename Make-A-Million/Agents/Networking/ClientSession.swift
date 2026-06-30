@@ -408,6 +408,7 @@ final class ClientSession: ObservableObject {
                     publishFrame(view)
                     pendingRequestID = id
                     pending = view
+                    Haptics.yourTurn()
                     holdPresentation = true
                     // Stop draining — wait for submit() to release.
                     draining = false
