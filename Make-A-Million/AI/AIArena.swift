@@ -414,6 +414,127 @@ enum AIArena {
             buckets: buckets)
     }
 
+    // MARK: - Partner-conditioned bid calibration (A1: auction-aware scalar)
+    //
+    // The scalar bidder's `partnerSupport` is a flat unconditional average —
+    // the valuation does not move whether the partner bid, passed, or hasn't
+    // acted, even though it is ~$90k of a typical $250k estimate. At the table
+    // a partner's pass/bid is PUBLIC evidence about exactly that component.
+    // This instrument measures how much it is worth: the same opponent-free
+    // forced-declarer playout as `runBidCalibration`, with each hand bucketed
+    // by the PARTNER's own 13-card valuation band — "<floor" is what a real
+    // pass reveals (an MC partner passes when its ceiling can't reach the
+    // cheapest bid), "≥floor" what a bid reveals. The per-band residual
+    // (realized − estimate) is the dollar offset an auction-aware scalar
+    // should apply. A parallel bucketing by the strongest OPPONENT valuation
+    // reads the same question for opponent passes ("they passed to me — bid
+    // more?") and bids ("they're contesting — expect less").
+
+    nonisolated struct PartnerCalibrationResult {
+        nonisolated struct Band {
+            let label: String
+            var n = 0
+            var sumEst = 0.0
+            var sumReal = 0.0
+            var biddable = 0        // est ≥ floor
+            var biddableMade = 0    // …and realized ≥ own (increment-rounded) est
+            var avgEst: Double { n > 0 ? sumEst / Double(n) : 0 }
+            var avgReal: Double { n > 0 ? sumReal / Double(n) : 0 }
+            var residual: Double { avgReal - avgEst }
+            var makeAtEstimate: Double {
+                biddable > 0 ? Double(biddableMade) / Double(biddable) : 0
+            }
+        }
+        let hands: Int
+        let partnerBands: [Band]     // partner valuation: <floor / floor–225k / ≥225k
+        let opponentBands: [Band]    // max opponent valuation: same banding
+
+        var summary: String {
+            func table(_ title: String, _ bands: [Band]) -> String {
+                var t = "\n\(title):"
+                for b in bands {
+                    t += "\n  \(b.label.padding(toLength: 14, withPad: " ", startingAt: 0)) "
+                    t += "n=\(b.n)  est=\(money(b.avgEst))  real=\(money(b.avgReal))  "
+                    t += "residual=\(signedMoney(b.residual))  "
+                    t += "make-at-est=\(pct(b.makeAtEstimate))"
+                }
+                return t
+            }
+            return "AIArena partner-conditioned calibration — \(hands) forced-declarer hands"
+                + table("BY PARTNER VALUATION (what a partner pass/bid reveals)", partnerBands)
+                + table("BY MAX OPPONENT VALUATION (what opponent passes reveal)", opponentBands)
+                + "\nREAD: per-band residual = the offset an auction-aware scalar should "
+                + "apply (passed ⇒ '<floor' row; bid ⇒ '≥floor' rows)."
+        }
+        private func pct(_ d: Double) -> String { String(format: "%.0f%%", d * 100) }
+        private func money(_ d: Double) -> String { String(format: "$%.0fk", d / 1000) }
+        private func signedMoney(_ d: Double) -> String {
+            (d >= 0 ? "+" : "-") + String(format: "$%.0fk", abs(d) / 1000)
+        }
+    }
+
+    static func runPartnerConditionedCalibration(
+        deals: Int,
+        difficulty: MonteCarloAgent.Difficulty = .expert,
+        baseSeed: UInt64 = 1) async -> PartnerCalibrationResult {
+
+        let floor = Bidding.openingMinimum
+        let labels = ["<floor", "floor–225k", "≥225k"]
+        var partnerBands = labels.map { PartnerCalibrationResult.Band(label: $0) }
+        var opponentBands = labels.map { PartnerCalibrationResult.Band(label: $0) }
+        func bandIndex(_ v: Int) -> Int { v < floor ? 0 : (v < 225_000 ? 1 : 2) }
+        var hands = 0
+
+        for d in 0..<deals {
+            let seed = baseSeed &+ UInt64(d) &* 2_654_435_761
+            let deal = GameState.newHand(dealer: PlayerID(0), seed: seed,
+                                         misdealRule: .disabled)
+            // Every seat's 13-card valuation once per deal (same tables the
+            // profile bids with — the signal a same-strength table-mate emits).
+            var val: [PlayerID: Int] = [:]
+            for s in Seats.all {
+                let v = deal.view(for: s)
+                val[s] = HandEvaluator.bestValuation(view: v, hand: v.myHand,
+                                                     tables: difficulty.evaluatorTables)
+                    .expectedGross
+            }
+            for seat in Seats.all {
+                let est = val[seat]!
+                let agents: [PlayerAgent] = Seats.all.map {
+                    MonteCarloAgent(name: "MC\($0.raw)", difficulty: difficulty,
+                                    seed: seed &+ UInt64($0.raw) &* 97 &+ 7)
+                }
+                guard let final = await playOutAsDeclarer(
+                    deal: deal, declarer: seat, contract: floor, agents: agents),
+                      let realized = final.debugReveal()?.bidTeamGross
+                else { continue }
+
+                hands += 1
+                let partner = Seats.partner(of: seat)
+                let oppMax = Seats.all
+                    .filter { Seats.team(of: $0) != Seats.team(of: seat) }
+                    .map { val[$0]! }.max() ?? 0
+                let ownContract = (est / Bidding.bidIncrement) * Bidding.bidIncrement
+
+                for (idx, bands) in [(bandIndex(val[partner]!), 0),
+                                     (bandIndex(oppMax), 1)] {
+                    var band = bands == 0 ? partnerBands[idx] : opponentBands[idx]
+                    band.n += 1
+                    band.sumEst += Double(est)
+                    band.sumReal += Double(realized)
+                    if est >= floor {
+                        band.biddable += 1
+                        if realized >= ownContract { band.biddableMade += 1 }
+                    }
+                    if bands == 0 { partnerBands[idx] = band } else { opponentBands[idx] = band }
+                }
+            }
+        }
+        return PartnerCalibrationResult(hands: hands,
+                                        partnerBands: partnerBands,
+                                        opponentBands: opponentBands)
+    }
+
     // MARK: - Set-risk haircut sweep (Item 1)
     //
     // `runBidCalibration` showed the scalar evaluator is MEAN-calibrated but

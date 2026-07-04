@@ -87,11 +87,17 @@ extension MonteCarloAgent {
         func sampleWeightedWorld() -> (state: GameState, weight: Double)? {
             guard let sample = sampledWorld() else { return nil }
             let world = sample.world
-            let weight = difficulty.research.playHistoryWeighting > 0
-                ? sample.determinizer.playHistoryWeight(
+            var weight = 1.0
+            if difficulty.research.playHistoryWeighting > 0 {
+                weight *= sample.determinizer.playHistoryWeight(
+                    world, strength: difficulty.research.playHistoryWeighting)
+            }
+            if difficulty.auctionWindowWeighting > 0 {
+                weight *= sample.determinizer.auctionWindowWeight(
                     world,
-                    strength: difficulty.research.playHistoryWeighting)
-                : 1.0
+                    strength: difficulty.auctionWindowWeighting,
+                    tables: difficulty.evaluatorTables)
+            }
             return (world.state, weight)
         }
 
@@ -184,6 +190,14 @@ extension MonteCarloAgent {
             else { return false }
             let winner = GameState.trickWinner(trick, trump: trump)
             guard Seats.team(of: winner) == Seats.team(of: view.me) else { return false }
+            // A provably-void opponent holding the loose Bear doesn't change
+            // the WINNER (canBeOverturned can't see it) but zeroes the pot —
+            // banking max money into that trick feeds the Bear. Only bites on
+            // near-ties (sub-$20k mean gaps); when the threat dominates, the
+            // rollout means already separate the candidates. No-op when I am
+            // last to play (nobody left to Bear).
+            if inference.opponentCanBearTrick(led: trick.ledColor(trump: trump),
+                                              currentTrick: trick) { return false }
             return trick.plays.count == Seats.count - 1
                 || !canBeOverturned(trick: trick, onTable: trick.plays,
                                     trump: trump, inference: inference,
@@ -566,6 +580,9 @@ extension MonteCarloAgent {
     /// money let the ruffer bank $70k. nil when no such low-money void exists.
     func forceRuffLead(plays: [Card], trump: CardColor,
                        inference: TableInference) -> Card? {
+        // No trump left at the table → nothing to force out; the "ruff" lead
+        // degenerates to a plain surrender and the safe exit handles that.
+        guard inference.trumpStillOutInOpponentsAndPartner > 0 else { return nil }
         let myTeam = Seats.team(of: inference.me)
         func oppVoid(_ color: CardColor) -> Bool {
             Seats.all.contains {

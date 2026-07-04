@@ -43,6 +43,16 @@ extension MonteCarloAgent {
         // Hand value as if I become declarer with best trump.
         let valuation = HandEvaluator.bestValuation(view: view, hand: view.myHand,
                                                     tables: difficulty.evaluatorTables)
+        // A1 (lever `bidPartnerRead`): the scalar valuation is auction-BLIND —
+        // `partnerSupport` is an unconditional ~$90k average, yet the auction
+        // has already said which side of average this table sits on (partner
+        // pass = weaker support, opponent bid = stronger defense). Re-center
+        // the mean by the measured per-signal residuals BEFORE the set-risk
+        // haircut (the haircut prices within-hand variance; this prices the
+        // public evidence). The rollout bidder ignores it — `bidRolloutLean`
+        // already reads the auction into its sampled deals.
+        let auctionOffset = (difficulty.bidPartnerRead && !difficulty.rolloutBidEval)
+            ? scalarAuctionOffset(view) : 0
         // Distribution-aware bidding (lever): the decision figure becomes the
         // make-probability quantile of rolled-out captured gross — "the contract
         // I make at least p of the time" — instead of the mean `expectedGross`,
@@ -54,7 +64,7 @@ extension MonteCarloAgent {
         // defender beats). The cut is always < the excess, so a biddable hand
         // stays biddable — it only lowers how far above the floor we'll go.
         let scalarGross: Int = {
-            let mean = valuation.expectedGross
+            let mean = valuation.expectedGross + auctionOffset
             guard difficulty.bidSetRiskHaircut > 0 else { return mean }
             let excess = max(0, mean - Bidding.openingMinimum)
             return mean - Int(difficulty.bidSetRiskHaircut * Double(excess))
@@ -196,6 +206,10 @@ extension MonteCarloAgent {
                 notes.append("set-risk haircut \(Int(difficulty.bidSetRiskHaircut * 100))% of excess: "
                              + "$\(valuation.expectedGross / 1000)k → $\(decisionGross / 1000)k")
             }
+            if auctionOffset != 0 {
+                notes.append("auction read: scalar \(auctionOffset > 0 ? "+" : "-")"
+                             + "$\(abs(auctionOffset) / 1000)k from partner/opponent signals")
+            }
             AIDecisionTrace.shared.record(.init(
                 seat: view.me, chosen: chosenText,
                 valuationGross: decisionGross,
@@ -203,6 +217,54 @@ extension MonteCarloAgent {
         }
 
         return move
+    }
+
+    // MARK: - Auction-aware scalar offsets (A1)
+
+    /// Per-signal dollar offsets for the scalar bidder, MEASURED by
+    /// `AIArena.runPartnerConditionedCalibration` (July 2 2026, 320 expert
+    /// forced-declarer hands, baseSeed 7 — per-band residual of realized team
+    /// gross vs the blind estimate):
+    ///   partner <floor −$30k (make-at-est 25%) / floor–225k −$20k (40%)
+    ///   / ≥225k +$38k (71%); max-opponent <225k +$37k (67%) / ≥225k +$2k (50%).
+    /// Mapping to the OBSERVABLE signals: a pass mostly lands in the weak
+    /// bands (−$25k mix, taken at full size — it is the anti-set direction,
+    /// the documented Item-1 pain); a bid only bounds the seat's valuation
+    /// from below, so the positive offsets are DAMPED (a low bid mixes the
+    /// −$20k and +$38k bands; positives also raise bids and therefore set
+    /// risk, and the partner/opponent bucketings share playouts, so summing
+    /// raw residuals would double-count the covariance). An opponent BID
+    /// needs no correction: the unconditional calibration is already
+    /// dominated by contested tables (+$2k ≈ 0).
+    static let partnerPassedOffset  = -25_000
+    static let partnerBidOffset     =  10_000
+    static let opponentPassedOffset =  12_000  // per seat; both passed ≈ +$24k
+    static let opponentBidOffset    =  0
+
+    /// The auction evidence available right now, priced in dollars. "Ever bid"
+    /// outranks a later fold (they showed real cards, then hit their ceiling);
+    /// a seat that never acted contributes 0 (the unconditional average the
+    /// evaluator already assumes).
+    func scalarAuctionOffset(_ view: PlayerView) -> Int {
+        var everBid: Set<PlayerID> = []
+        for rec in view.bidHistory {
+            if case .bid = rec.action { everBid.insert(rec.player) }
+        }
+        var offset = 0
+        let partner = Seats.partner(of: view.me)
+        if everBid.contains(partner) {
+            offset += Self.partnerBidOffset
+        } else if view.passed.contains(partner) {
+            offset += Self.partnerPassedOffset
+        }
+        for opp in Seats.all where Seats.team(of: opp) != Seats.team(of: view.me) {
+            if everBid.contains(opp) {
+                offset += Self.opponentBidOffset
+            } else if view.passed.contains(opp) {
+                offset += Self.opponentPassedOffset
+            }
+        }
+        return offset
     }
 
     /// Tighten the ceiling when our team is near the $1M finish line;
@@ -215,6 +277,17 @@ extension MonteCarloAgent {
         let theirs = Double(view.matchScore[1 - myTeam] ?? 0)
         // Conservative if we're close to winning.
         if mine >= 750_000 {
+            // CLOSING BID (B4, July 2026, lever `bidToClose`): when the
+            // decision figure itself covers what we still need, MAKING this
+            // contract ends the match — the shrink below would pass a
+            // match-winning contract to the opponents just when it matters
+            // most (the leader's conservatism is about avoiding late sets,
+            // but a make here means there is no "later"). Keep the normal
+            // ceiling; never inflate it, so a hand we wouldn't bid mid-match
+            // still passes.
+            if difficulty.bidToClose, base >= 1_000_000.0 - mine {
+                return base
+            }
             let progress = min(1.0, (mine - 750_000) / 250_000)
             let shrink = 0.30 * progress * difficulty.matchAwareness
             return base * (1.0 - shrink)
@@ -374,26 +447,58 @@ extension MonteCarloAgent {
 
     // MARK: - Widow discard (trump already known)
 
+    /// Candidate 3-card discards for the declarer's 16-card hand under `trump`:
+    /// engine-legal (`GameState.legalWidowDiscards` — the same generator the
+    /// discard phase runs), shortlisted for evaluation as the cheapest few by
+    /// `discardCost` PLUS the cheapest suit-EMPTYING combo per side color. The
+    /// second group is the fix for a real leak: a discard that voids a side
+    /// suit can rank "expensive" by raw rank (a singleton 7 loses the cost sort
+    /// to three 2-3-4s) yet win on the evaluator's void value — cost order
+    /// alone drops exactly the combos worth finding. Shared by `decideDiscard`
+    /// and the joint trump naming in `decideTrump`.
+    func discardCandidates(hand: [Card], trump: CardColor) -> [[Card]] {
+        let legal = GameState.legalWidowDiscards(from: hand, trump: trump)
+        guard !legal.isEmpty else { return [] }
+        let byCost = legal.map { ($0, discardCost($0)) }.sorted { $0.1 < $1.1 }
+        var out: [[Card]] = []
+        var seen: Set<Set<Card>> = []
+        func add(_ combo: [Card]) {
+            if seen.insert(Set(combo)).inserted { out.append(combo) }
+        }
+        for (combo, _) in byCost.prefix(max(8, difficulty.trickCandidates * 2)) {
+            add(combo)
+        }
+        // Suit-emptying candidates: for each non-trump color whose ENTIRE
+        // holding is small enough to throw (≤3 cards), the cheapest legal
+        // combo containing all of it. When money/specials of the color make
+        // emptying illegal, no legal combo contains the full set and the
+        // search finds nothing — correctly skipped.
+        for color in CardColor.allCases where color != trump {
+            let ofColor = Set(hand.filter { $0.effectiveColor(trump: trump) == color })
+            guard (1...3).contains(ofColor.count) else { continue }
+            if let cheapest = byCost.first(where: { ofColor.isSubset(of: Set($0.0)) })?.0 {
+                add(cheapest)
+            }
+        }
+        return out
+    }
+
     func decideDiscard(_ view: PlayerView, legal: [Move]) -> Move {
-        // Trump was named in the previous phase — score each legal discard
-        // against the known trump rather than searching jointly.
+        // Trump was named in the previous phase — score each candidate discard
+        // against the known trump. The candidate set is the shared shortlist
+        // (cheapest by cost + suit-emptying combos); moves are matched back to
+        // the engine's legal list by content so combo ordering can't drift.
         guard let trump = view.trump else { return legal[0] }
 
-        let discards = legal.compactMap { m -> (Move, [Card])? in
-            if let cs = m.discardCards { return (m, cs) }; return nil
+        var moveFor: [Set<Card>: Move] = [:]
+        for m in legal {
+            if let cs = m.discardCards { moveFor[Set(cs)] = m }
         }
-        guard !discards.isEmpty else { return legal[0] }
-
-        // Shortlist by ascending cost: the engine already enforces the
-        // protection ordering (specials, trump, money), so cheap = low-rank
-        // off-color trash, which is exactly the right thing to throw away.
-        let ranked = discards
-            .map { ($0.0, $0.1, discardCost($0.1)) }
-            .sorted { $0.2 < $1.2 }
-            .prefix(max(8, difficulty.trickCandidates * 2))
+        guard !moveFor.isEmpty else { return legal[0] }
 
         var best: (Move, Int) = (legal[0], Int.min)
-        for (move, cards, _) in ranked {
+        for cards in discardCandidates(hand: view.myHand, trump: trump) {
+            guard let move = moveFor[Set(cards)] else { continue }
             var hand = view.myHand
             for c in cards { if let i = hand.firstIndex(of: c) { hand.remove(at: i) } }
             let score = HandEvaluator.evaluate(view: view, hand: hand, assumingTrump: trump,
@@ -412,6 +517,41 @@ extension MonteCarloAgent {
     // MARK: - Naming trump
 
     func decideTrump(_ view: PlayerView, legal: [Move]) -> Move {
+        // JOINT trump + discard (lever `jointTrumpNaming`): the hand that
+        // PLAYS is the 13 kept after the discard, so each color is scored by
+        // the BEST 13-card keep it allows. The raw 16-card valuation both
+        // inflates trump length with cards about to be discarded and cannot
+        // see a void the discard would create — so it can name the wrong
+        // color when two are close. Discard legality is the engine's
+        // (`legalWidowDiscards`, via the shared shortlist); the real discard
+        // is chosen next phase by the same evaluator, so naming and
+        // discarding agree on the same argmax.
+        if difficulty.jointTrumpNaming {
+            var best: (move: Move, score: Int)? = nil
+            for m in legal {
+                guard case .nameTrump(let color) = m else { continue }
+                var colorBest = Int.min
+                for combo in discardCandidates(hand: view.myHand, trump: color) {
+                    var keep = view.myHand
+                    for c in combo {
+                        if let i = keep.firstIndex(of: c) { keep.remove(at: i) }
+                    }
+                    let s = HandEvaluator.evaluate(view: view, hand: keep,
+                                                   assumingTrump: color,
+                                                   tables: difficulty.evaluatorTables)
+                    if s > colorBest { colorBest = s }
+                }
+                if colorBest == Int.min {
+                    // Defensive (non-16-card hand): raw valuation.
+                    colorBest = HandEvaluator.evaluate(view: view, hand: view.myHand,
+                                                       assumingTrump: color,
+                                                       tables: difficulty.evaluatorTables)
+                }
+                if best == nil || colorBest > best!.score { best = (m, colorBest) }
+            }
+            if let best { return best.move }
+        }
+
         let valuation = HandEvaluator.bestValuation(view: view, hand: view.myHand,
                                                     tables: difficulty.evaluatorTables)
         // Find the .nameTrump move corresponding to bestTrump.

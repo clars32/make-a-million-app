@@ -38,12 +38,14 @@
 //       A redeal is triggered by ANY seat being money-poor, so a strong hand
 //       of ours isn't surrendered just because another seat is short.
 //
-//   Widow discard + trump (heuristic, this file)
-//     • Joint optimisation: for each shortlisted discard, try all 4
-//       trump colors; pick the (discard, trump) pair with the highest
-//       HandEvaluator score for the resulting 13-card hand.
-//     • Shortlist drops the lowest non-money, non-special cards first
-//       (the engine forbids needless money/special discards anyway).
+//   Widow discard + trump (heuristic, +Bidding file)
+//     • Joint optimisation at NAMING time: each trump color is scored by
+//       the best 13-card hand it can keep (max over the shared discard
+//       shortlist); the discard phase then re-picks that keep for the
+//       named trump with the same evaluator, so the two phases agree.
+//     • Shortlist = cheapest non-money/non-special combos by cost, plus
+//       the cheapest suit-emptying combo per side color (a void is worth
+//       more than the rank sort can see).
 //
 //   Trick play (heuristic shortlist + MCTS, this file)
 //     • Heuristic shortlist from TableInference encodes:

@@ -456,6 +456,12 @@ extension MonteCarloAgent {
                   let trick = view.currentTrick, !trick.plays.isEmpty else { return false }
             let winner = GameState.trickWinner(trick, trump: t)
             guard Seats.team(of: winner) == Seats.team(of: view.me) else { return false }
+            // Same Bear guard as the Adaptive tie-break: a provably-void
+            // opponent with the loose Bear zeroes the pot without changing
+            // the winner — never bank max money into that. Counting-level
+            // read, so novice/casual (who can't see it) stay unchanged.
+            if inference.opponentCanBearTrick(led: trick.ledColor(trump: t),
+                                              currentTrick: trick) { return false }
             return trick.plays.count == Seats.count - 1
                 || !canBeOverturned(trick: trick, onTable: trick.plays,
                                     trump: t, inference: inference, view: view)
@@ -504,11 +510,25 @@ extension MonteCarloAgent {
     /// Bounded PIMC confined to the fork's co-principled candidate set — never
     /// the full legal move set. `capabilities.forkSamples` worlds, the greedy
     /// PlayoutPolicy tail, scored by team net (Traditional uses no match-win
-    /// blend / exact endgame). Ties fall back to the principled key.
+    /// blend). Ties fall back to the principled key.
+    ///
+    /// EXACT ENDGAME AT THE ROOT (B3, July 2026): when the fork decision
+    /// itself falls inside the profile's `exactEndgameTricks` window (my hand
+    /// holds ≤ that many cards), every (world × candidate) is solved by
+    /// EndgameSolver instead of the greedy tail — "counts the last tricks
+    /// exactly", the expert blurb's literal promise, and the same ROOT-only
+    /// form that was promoted on Hard/Extreme (worlds are pinned by then).
+    /// Deliberately NOT the mid-hand tail handoff (`rolloutExactTricks`),
+    /// which measured NEGATIVE — exact tails amplify the world error sampled
+    /// at unpinned mid-hand roots. Expert-only via its preset; other rungs
+    /// keep gate 0.
     func resolveForkBySearch(view: PlayerView, cards: [Card]) -> Card {
         let myTeam = Seats.team(of: view.me)
         let baseline = view.matchScore
         let worlds = max(1, difficulty.capabilities.forkSamples)
+        let exactRootActive = difficulty.exactEndgameTricks > 0
+            && view.myHand.count <= difficulty.exactEndgameTricks
+        let exactGate = exactRootActive ? view.myHand.count : 0
         var totals = [Card: Double]()
         var counts = [Card: Int]()
         for _ in 0..<worlds {
@@ -516,7 +536,8 @@ extension MonteCarloAgent {
             for c in cards {
                 guard let after = try? state.applying(.play(c), by: view.me) else { continue }
                 totals[c, default: 0] += evaluateWorld(after, myTeam: myTeam,
-                                                       baseline: baseline, exactGate: 0)
+                                                       baseline: baseline,
+                                                       exactGate: exactGate)
                 counts[c, default: 0] += 1
             }
         }

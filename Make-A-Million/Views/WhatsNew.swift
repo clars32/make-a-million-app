@@ -61,6 +61,11 @@ enum Changelog {
     /// history to user-facing changes.
     static let releases: [ReleaseNote] = [
         ReleaseNote(
+            seq: 15, version: "0.12.0",
+            date: "Jul 4, 2026",
+            title: "Smarter bidding, sharper endgames",
+            summary: "Skilled and Expert bots now read the auction — a partner's pass or an opponent's bid changes how they value their hand — and a bot near $1M bids to close out the match instead of sitting back. Bots also pick trump with the discard in mind, count the final tricks exactly at Expert, and avoid feeding money to tricks the Bear can zero."),
+        ReleaseNote(
             seq: 14, version: "0.11.2",
             date: "Jun 29, 2026",
             title: "Multiplayer upgrades & table polish",

@@ -237,6 +237,70 @@ extension MonteCarloAgent {
         /// A/B-able (turn it off on one side).
         var calibratedValuation: Bool = true
 
+        /// AUCTION STRENGTH WINDOWS (A2, July 2026): soft importance weight
+        /// per sampled trick-play world from BID-consistency. Each hidden
+        /// non-declarer seat's bid-time hand is reconstructible (sampled
+        /// remainder + its public plays); the auction bounds its strength as
+        /// a WINDOW (bid to $Y ⇒ ceiling ≳ Y; passed a raise to $X ⇒ ceiling
+        /// ≲ X — one pass per seat, passes are permanent). Worlds far outside
+        /// a window are down-weighted (floor 0.25), never rejected. The named
+        /// "world inference" successor to the parked hard filters — the
+        /// rationality model is the population's LITERAL bid policy (decideBid
+        /// bids ceiling-vs-raise on bestValuation), not a play heuristic, so
+        /// it dodges the donation filter's model-mismatch trap. Complementary
+        /// to `bidLeanStrength` (a per-seat, per-card scalar on the DEAL): the
+        /// window checks the sampled hand as a WHOLE — a passer can hold one
+        /// strong card; it can't hold a biddable HAND.
+        ///
+        /// MEASURED — NOT YET PROMOTED (July 2 2026). The baseSeed-1 family
+        /// read 65% at N=60 and 62% at N=100 (set-rate −10pp, identical bid
+        /// share/contracts) — but the IDENTICAL-PROFILE noise control on the
+        /// same family read **62% with the same set-rate gap**, so the
+        /// "confirm" sits exactly on its own null. THE FAMILY NULL IS NOT
+        /// 50% — a single-family win-rate read cannot validate this lever
+        /// (and the near-identical telemetry says its decisions rarely
+        /// diverge from unweighted play at strength 1.0). Re-validation needs
+        /// a FRESH seed family with its own paired noise control
+        /// (`testSelfPlayAuctionWindows777` + control). If it validates:
+        /// promote to Normal first (bidLeanStrength 1.0 — Hard/Extreme's 1.6
+        /// risks the `declarerTrumpBias` prior-stacking failure), then
+        /// re-probe the parked exact-endgame gates ≥3 / `rolloutExactTricks`.
+        /// 0 = off (no tier sets it; the Traditional ladder and the IS-MCTS
+        /// path don't consume world weights).
+        var auctionWindowWeighting: Double = 0.0
+
+        /// AUCTION-AWARE SCALAR BIDDING (A1, July 2026): re-center the scalar
+        /// (mean) valuation by the public auction evidence before the set-risk
+        /// haircut — partner passed ⇒ the ~$90k `partnerSupport` average is
+        /// too generous for THIS hand; partner/opponent bids ⇒ the reverse.
+        /// Offsets are the measured per-band residuals from
+        /// `AIArena.runPartnerConditionedCalibration` (see
+        /// `scalarAuctionOffset`). Scalar path only — the rollout bidder
+        /// already reads the auction via `bidRolloutLean`. "Reads the auction"
+        /// is a nameable skilled+ human skill, so novice/casual stay blind
+        /// (legible ladder weakness, like their scalar over-bidding).
+        var bidPartnerRead: Bool = false
+
+        /// CLOSING BID (July 2026): near the finish line the match-aware
+        /// ceiling SHRINKS (avoid handing the game back via a late set) — but
+        /// when the bid decision figure already covers what the team still
+        /// needs to reach $1M, a made contract ENDS the match, so the shrink
+        /// only passes the match-winning contract to the opponents. With this
+        /// on, the shrink is skipped in exactly that case (the ceiling is
+        /// never inflated — a hand we wouldn't bid mid-match still passes).
+        /// Self-gating like `matchWinWeight`: inert until a hand can close.
+        var bidToClose: Bool = true
+
+        /// JOINT trump naming (July 2026): score each trump color by the BEST
+        /// 13-card hand it can KEEP (max over the shared discard shortlist)
+        /// instead of the raw 16-card valuation. The 16-card figure inflates
+        /// trump length with cards about to be discarded and cannot credit a
+        /// void the discard would create, so it can name the wrong color when
+        /// two are close — a pure correctness fix in the deduceWidowHoldings
+        /// class (both stacks share the setup phases). Kept as a field so it
+        /// stays A/B-able (turn it off on one side).
+        var jointTrumpNaming: Bool = true
+
         /// The HandEvaluator constant set this profile plays with.
         var evaluatorTables: HandEvaluator.Tables {
             calibratedValuation ? .calibrated : .original
@@ -672,8 +736,10 @@ extension MonteCarloAgent {
                                         bidLeanStrength: 0.0,
                                         calibratedValuation: false)
         /// `Skilled` — positional play and counting: preserve controllers, lead
-        /// the $40k on a virgin suit, pull trump as declarer, count cards, and
-        /// plan one move ahead at clear forks.
+        /// the $40k on a virgin suit, pull trump as declarer, count cards, plan
+        /// one move ahead at clear forks, and read the auction into the bid
+        /// (`bidPartnerRead` — partner/opponent passes and bids re-center the
+        /// scalar valuation).
         static let skilled = Difficulty(style: .traditional,
                                         capabilities: .init(principles: .positional,
                                                             inference: .counting,
@@ -684,10 +750,14 @@ extension MonteCarloAgent {
                                         bidSetRiskHaircut: 0.35,
                                         partnerRespect: 0.78,
                                         matchAwareness: 1.0, trickCandidates: 5,
-                                        bidLeanStrength: 1.0)
+                                        bidLeanStrength: 1.0,
+                                        bidPartnerRead: true)
         /// `Expert` — the complete strong-human game: bear/Bull threats, void
         /// creation, establishment ducks, full count-exhaustion card-counting,
-        /// and bounded look-ahead at every genuine fork.
+        /// bounded look-ahead at every genuine fork, auction-read bidding
+        /// (`bidPartnerRead`), and the last two tricks of every fork-searched
+        /// world counted EXACTLY (root-only `exactEndgameTricks`, the promoted
+        /// Hard/Extreme form — see `resolveForkBySearch`).
         static let expert  = Difficulty(style: .traditional,
                                         capabilities: .init(principles: .complete,
                                                             inference: .deep,
@@ -698,7 +768,9 @@ extension MonteCarloAgent {
                                         bidSetRiskHaircut: 0.35,
                                         partnerRespect: 0.68,
                                         matchAwareness: 1.0, trickCandidates: 6,
-                                        bidLeanStrength: 1.6)
+                                        bidLeanStrength: 1.6,
+                                        exactEndgameTricks: 2,
+                                        bidPartnerRead: true)
 
         /// `Adaptive` — the off-ladder expert side-door. Today's strongest
         /// validated search stack (the ex-`extreme` settings): full-width MCTS

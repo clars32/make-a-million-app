@@ -570,6 +570,20 @@ final class AIArenaTests: XCTestCase {
         }
     }
 
+    /// DIAGNOSIS (A1, July 2026): is the auction-BLIND scalar leaving money on
+    /// the table? `partnerSupport` is a flat ~$90k average, but a partner's
+    /// pass/bid is public evidence about exactly that component (and opponent
+    /// passes about the defense). This conditions the forced-declarer playout's
+    /// realized gross on the partner's / strongest opponent's own valuation
+    /// band. The per-band residual (realized − estimate) is the dollar offset
+    /// an auction-aware scalar should apply; a spread ≳$20k across bands means
+    /// the blind scalar mis-prices real auctions on both sides.
+    func testPartnerConditionedBidCalibration() async {
+        let r = await AIArena.runPartnerConditionedCalibration(
+            deals: 80, difficulty: .expert, baseSeed: 7)
+        print(r.summary)
+    }
+
     /// Item-1 confirmation A/B: the set-risk haircut (challenger = expert with
     /// the shipped 0.35 haircut) vs the same profile with the haircut OFF. Bid
     /// aggression is win-rate-neutral (documented), so the read is the SET-RATE:
@@ -592,6 +606,131 @@ final class AIArenaTests: XCTestCase {
         let s = await AIArena.runBidHaircutSweep(deals: 100,
                                                  difficulty: .expert, baseSeed: 7)
         print(s)
+    }
+
+    /// A1 confirmation A/B: auction-aware scalar bidding (challenger = expert
+    /// with the shipped `bidPartnerRead`) vs the same profile with the lever
+    /// OFF. Offsets from `runPartnerConditionedCalibration` (July 2026).
+    /// Like the haircut A/B, bid aggression is win-rate-neutral in symmetric
+    /// self-play — the reads that matter are SET-RATE (the −$25k partner-pass
+    /// shave should cut sets) and bid share (the positive offsets should keep
+    /// it from collapsing). ≥100 matches per the roadmap.
+    func testSelfPlayPartnerRead() async {
+        var blind = MonteCarloAgent.Difficulty.expert
+        blind.bidPartnerRead = false
+        let r = await AIArena.runSelfPlay(matches: 100, challenger: .expert,
+                                          champion: blind, baseSeed: 1)
+        print("AUCTION-AWARE SCALAR (expert bidPartnerRead on vs off):\n" + r.summary)
+    }
+
+    /// B3 A/B: the expert fork search counts the last two tricks exactly
+    /// (root-only exact endgame, the promoted Hard/Extreme form) vs the greedy
+    /// tail. Expected neutral-to-positive win-rate with structural immunity to
+    /// greedy-tail endgame misevaluations; judge alongside the Bear diagnostic
+    /// (the forced last-trick zeroings are exactly this window).
+    func testSelfPlayExpertExactEndgame() async {
+        var greedy = MonteCarloAgent.Difficulty.expert
+        greedy.exactEndgameTricks = 0
+        let r = await AIArena.runSelfPlay(matches: 100, challenger: .expert,
+                                          champion: greedy, baseSeed: 1)
+        print("EXPERT EXACT ENDGAME (gate 2 vs 0):\n" + r.summary)
+    }
+
+    /// A3 lever A/B: joint trump naming (score each color by its best 13-card
+    /// KEEP) vs the raw 16-card valuation. A correctness-class change, so the
+    /// expected read is neutral-to-positive win-rate with no set-rate harm;
+    /// the mechanism is only live on hands where the discard flips which color
+    /// values best, so a large N=60 swing either way would be surprising.
+    func testSelfPlayJointTrumpNaming() async {
+        var old = MonteCarloAgent.Difficulty.normal
+        old.jointTrumpNaming = false
+        let r = await AIArena.runSelfPlay(matches: 60, challenger: .normal,
+                                          champion: old, baseSeed: 1)
+        print("JOINT TRUMP NAMING (on vs off):\n" + r.summary)
+    }
+
+    /// B4 conditional probe (the matchWinWeight instrument pattern): the
+    /// CLOSING-BID exemption only fires with a big lead, so seed the challenger
+    /// ahead (875k/625k) where the leader's ceiling shrink is live. Read: the
+    /// challenger (exemption ON) should close matches it can bid shut instead
+    /// of passing into the opponents' contract — win-rate up or neutral with
+    /// leader set-rate not ballooning.
+    func testSelfPlayBidToCloseAhead() async {
+        var off = MonteCarloAgent.Difficulty.normal
+        off.bidToClose = false
+        let r = await AIArena.runSelfPlay(matches: 60, challenger: .normal,
+                                          champion: off, baseSeed: 1,
+                                          chalStart: 875_000, champStart: 625_000)
+        print("BID-TO-CLOSE ahead-start (on vs off):\n" + r.summary)
+    }
+
+    /// A2 probe: auction strength-window world weighting. CAUTION (July 2
+    /// 2026): the baseSeed-1 family read 65% at N=60 / 62% at N=100 — but the
+    /// identical-profile noise control on the SAME family also read 62% with
+    /// the same set-rate gap, so those reads are the family null, not the
+    /// lever. Judge this lever only against a paired same-family control.
+    func testSelfPlayAuctionWindows() async {
+        var probe = MonteCarloAgent.Difficulty.normal
+        probe.auctionWindowWeighting = 1.0
+        let r = await AIArena.runSelfPlay(matches: 60, challenger: probe,
+                                          champion: .normal, baseSeed: 1)
+        print("AUCTION WINDOWS (1.0 vs off):\n" + r.summary)
+    }
+
+    /// A2 re-validation on a FRESH seed family (777), N=100 — paired with the
+    /// noise control below, which defines this family's null.
+    func testSelfPlayAuctionWindows777() async {
+        var probe = MonteCarloAgent.Difficulty.normal
+        probe.auctionWindowWeighting = 1.0
+        let r = await AIArena.runSelfPlay(matches: 100, challenger: probe,
+                                          champion: .normal, baseSeed: 777)
+        print("AUCTION WINDOWS 777 (1.0 vs off, N=100):\n" + r.summary)
+    }
+
+    /// Identical-profile noise control for the 777 family — the null the A2
+    /// read above is judged against. (The baseSeed-1 family null measured 62%
+    /// challenger at N=100 — never judge a single-family read vs nominal 50%.)
+    func testSelfPlayNoiseControl777() async {
+        let r = await AIArena.runSelfPlay(matches: 100, challenger: .normal,
+                                          champion: .normal, baseSeed: 777)
+        print("NOISE CONTROL 777 (.normal vs .normal, N=100):\n" + r.summary)
+    }
+
+    /// A2 on the EXTREME profile before promoting it there: Extreme runs
+    /// bidLeanStrength 1.6 (the validated context was Normal's 1.0), and
+    /// stacking strength-concentration priors is exactly how
+    /// `declarerTrumpBias` measured negative. Positive-or-neutral ⇒ promote
+    /// to Hard/Extreme; negative ⇒ keep them 0 and document the interaction.
+    func testSelfPlayAuctionWindowsExtreme() async {
+        var probe = MonteCarloAgent.Difficulty.extreme
+        probe.auctionWindowWeighting = 1.0
+        let r = await AIArena.runSelfPlay(matches: 60, challenger: probe,
+                                          champion: .extreme, baseSeed: 1)
+        print("AUCTION WINDOWS EXTREME (1.0 vs off):\n" + r.summary)
+    }
+
+    /// Seat/seed-noise reference for the N=100 / baseSeed 1 family: identical
+    /// `.normal` profiles. Whatever this reads IS the null for the confirm
+    /// runs above (the bidEntryMargin work measured such a control at 57% for
+    /// one N=60 family — never assume the null is a clean 50%).
+    func testSelfPlayNormalNoiseControl100() async {
+        let r = await AIArena.runSelfPlay(matches: 100, challenger: .normal,
+                                          champion: .normal, baseSeed: 1)
+        print("NOISE CONTROL (.normal vs .normal, N=100):\n" + r.summary)
+    }
+
+    /// Strict paired control for `testSelfPlayBidToCloseAhead`: the SAME
+    /// ahead-start seeding with the lever OFF on both sides. The ahead team's
+    /// win rate here is the true baseline the 93% lever-on read is judged
+    /// against (history: matchWinWeight measured ~84-89% for this
+    /// configuration on older code).
+    func testSelfPlayBidToCloseAheadControl() async {
+        var off = MonteCarloAgent.Difficulty.normal
+        off.bidToClose = false
+        let r = await AIArena.runSelfPlay(matches: 60, challenger: off,
+                                          champion: off, baseSeed: 1,
+                                          chalStart: 875_000, champStart: 625_000)
+        print("BID-TO-CLOSE ahead-start CONTROL (off vs off):\n" + r.summary)
     }
 
     /// Distillation instrument: mines positions where PlayoutPolicy's move

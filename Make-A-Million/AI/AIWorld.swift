@@ -474,6 +474,96 @@ struct Determinizer {
         return exp(min(hi, max(lo, scaled)))
     }
 
+    // MARK: Auction strength windows (A2)
+
+    /// The bid-frame widow EV the bidders added to their playing-hand
+    /// valuation at auction time (HandEvaluator.scoreWidowEV, calibrated
+    /// branch). The window comparisons below reconstruct each hidden seat's
+    /// BID-TIME decision figure, so the same constant must ride along.
+    private static let bidFrameWidowEV = 26_000
+
+    /// Soft importance weight for a sampled world from AUCTION consistency:
+    /// each hidden seat's bid-time hand is reconstructible (current sampled
+    /// remainder + its public plays), and the auction bounds its strength as a
+    /// WINDOW — a seat that bid to $Y has a valuation ceiling of at least ~$Y;
+    /// a seat that passed a raise to $X (a pass is PERMANENT, so each seat
+    /// passes at most once) has a ceiling below ~$X. Worlds whose sampled
+    /// hands sit far outside their seat's window get down-weighted, never
+    /// deleted (a human at the table breaks any exact policy model — the
+    /// inference-side double-dummy lesson). Unlike the failed donation filter,
+    /// the rationality model here is the population's LITERAL bid policy
+    /// (`decideBid` bids ceiling-vs-cheapest-raise on `bestValuation`), so in
+    /// self-play the windows are close to exact; the soft scale absorbs
+    /// aggression/match adjustments and human deviation.
+    ///
+    /// Evidence deliberately excluded:
+    ///   • the DECLARER (post-widow, its bid-time 13 are not reconstructible);
+    ///   • a pass while the seat's own PARTNER held the bid (partnerRespect
+    ///     defers on strong hands too — nearly uninformative);
+    ///   • an opening bid AT the minimum that was never raised (may have been
+    ///     the forced opener).
+    /// One-sided penalties only, so the weight is ≤ 1 and floored at 0.25.
+    func auctionWindowWeight(_ world: AIWorld,
+                             strength: Double,
+                             tables: HandEvaluator.Tables) -> Double {
+        guard strength > 0, !view.bidHistory.isEmpty else { return 1.0 }
+
+        // One walk of the auction: each seat's highest bid, and the cheapest
+        // raise it declined (with the partner-stander exemption).
+        var maxBid: [PlayerID: Int] = [:]
+        var declinedRaise: [PlayerID: Int] = [:]
+        var standing: Int? = nil
+        var standingBidder: PlayerID? = nil
+        for rec in view.bidHistory {
+            switch rec.action {
+            case .bid(let amt):
+                maxBid[rec.player] = max(maxBid[rec.player] ?? 0, amt)
+                standing = amt
+                standingBidder = rec.player
+            case .pass:
+                let partnerHeld = standingBidder.map {
+                    $0 != rec.player && Seats.team(of: $0) == Seats.team(of: rec.player)
+                } ?? false
+                if !partnerHeld {
+                    declinedRaise[rec.player] =
+                        standing.map { $0 + Bidding.raiseIncrement } ?? Bidding.openingMinimum
+                }
+            }
+        }
+
+        // Public plays per seat, to rebuild bid-time hands.
+        var playedBy: [PlayerID: [Card]] = [:]
+        for t in view.completedTricks {
+            for pc in t.plays { playedBy[pc.player, default: []].append(pc.card) }
+        }
+        if let cur = view.currentTrick {
+            for pc in cur.plays { playedBy[pc.player, default: []].append(pc.card) }
+        }
+
+        let scale = 60_000.0
+        var logW = 0.0
+        for seat in Seats.all where seat != view.me && seat != view.highBidder {
+            let bidEvidence = (maxBid[seat] ?? 0) > Bidding.openingMinimum
+                ? maxBid[seat] : nil
+            let passEvidence = declinedRaise[seat]
+            guard bidEvidence != nil || passEvidence != nil else { continue }
+
+            let bidHand = (world.state.hands[seat] ?? []) + (playedBy[seat] ?? [])
+            guard bidHand.count == 13 else { continue }        // desync → no evidence
+            let v = HandEvaluator.bestValuation(view: view, hand: bidHand,
+                                                tables: tables).expectedGross
+                  + Self.bidFrameWidowEV
+
+            if let mb = bidEvidence, v < mb {                  // too weak for its bid
+                logW += Double(v - mb) / scale
+            }
+            if let dr = passEvidence, v > dr {                 // too strong for its pass
+                logW += Double(dr - v) / scale
+            }
+        }
+        return exp(max(log(0.25), strength * logW))
+    }
+
     private func recentHistoryForWeighting() -> (leader: PlayerID, plays: [PlayedCard])? {
         var tricks: [(leader: PlayerID, plays: [PlayedCard])] =
             view.completedTricks.map { ($0.leader, $0.plays) }

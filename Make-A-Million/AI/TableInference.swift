@@ -290,7 +290,8 @@ struct TableInference {
     /// or the widow). The bankable swing if this color is led — used by the
     /// money-aware safe exit to avoid bleeding a low lead into live money.
     func outstandingMoney(in color: CardColor) -> Int {
-        (stillOut[color] ?? []).reduce(0) { $0 + $1.moneyValue }
+        guard level >= .counting else { return 0 }   // counting deduction
+        return (stillOut[color] ?? []).reduce(0) { $0 + $1.moneyValue }
     }
 
     /// True if my card is the highest of its color anyone might still play.
